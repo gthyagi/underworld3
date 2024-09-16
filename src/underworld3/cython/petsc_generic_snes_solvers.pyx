@@ -2689,33 +2689,66 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
         with self.mesh.access(self.Unknowns.p, self.Unknowns.u):
             # print(f"p: {self.Unknowns.p.name}, v: {self.Unknowns.u.name}")
 
-            for name,var in self.fields.items():
-                # print(f"{uw.mpi.rank}: Copy field {name} / {var.name} to user variables", flush=True)
+            # for name,var in self.fields.items():
+            #     # print(f"{uw.mpi.rank}: Copy field {name} / {var.name} to user variables", flush=True)
 
+            #     sgvec = gvec.getSubVector(self._subdict[name][0])  # Get global subvec off solution gvec.
+
+            #     sdm   = self._subdict[name][1]                     # Get subdm corresponding to field.
+            #     lvec = sdm.getLocalVec()                           # Get a local vector to push data into.
+            #     sdm.globalToLocal(sgvec,lvec)                      # Do global to local into lvec
+            #     sdm.localToGlobal(lvec, sgvec)
+            #     gvec.restoreSubVector(self._subdict[name][0], sgvec)
+
+            #     # Put in boundaries values.
+            #     # Note that `DMPlexSNESComputeBoundaryFEM()` seems to need to use an lvec
+            #     # derived from the sub-dm (as opposed to the var.vec local vector), else
+            #     # failures can occur.
+
+            #     clvec = lvec
+            #     csdm = sdm
+
+            #     # print(f"{uw.mpi.rank}: Copy bcs for {name} to user variables", flush=True)
+            #     ierr = DMPlexSNESComputeBoundaryFEM(csdm.dm, <void*>clvec.vec, NULL); CHKERRQ(ierr)
+
+            #     # Now copy into the user vec.
+            #     var.vec.array[:] = lvec.array[:]
+
+            #     sdm.restoreLocalVec(lvec)
+            #     # print(f"{uw.mpi.rank}: Copy field {name} / {var.name} ... done", flush=True)
+            
+
+            for name, var in self.fields.items():
+                print(f"Processing field {name}", flush=True)
                 sgvec = gvec.getSubVector(self._subdict[name][0])  # Get global subvec off solution gvec.
-
-                sdm   = self._subdict[name][1]                     # Get subdm corresponding to field.
-                lvec = sdm.getLocalVec()                           # Get a local vector to push data into.
-                sdm.globalToLocal(sgvec,lvec)                      # Do global to local into lvec
+                print(f"Obtained subvector for {name}", flush=True)
+                sdm = self._subdict[name][1]  # Get subdm corresponding to field.
+                lvec = sdm.getLocalVec()  # Get a local vector to push data into.
+                print(f"Local and sub-dm vectors obtained for {name}", flush=True)
+                
+                print(f"Field - sgvec size: {sgvec.size}, lvec size: {lvec.size}", flush=True)
+                sdm.globalToLocal(sgvec, lvec)
+                print(f"Field - sgvec size: {sgvec.size}, lvec size: {lvec.size}", flush=True)
                 sdm.localToGlobal(lvec, sgvec)
-                gvec.restoreSubVector(self._subdict[name][0], sgvec)
+                print(f"Field - sgvec size: {sgvec.size}, lvec size: {lvec.size}", flush=True)
 
-                # Put in boundaries values.
-                # Note that `DMPlexSNESComputeBoundaryFEM()` seems to need to use an lvec
-                # derived from the sub-dm (as opposed to the var.vec local vector), else
-                # failures can occur.
+
+                gvec.restoreSubVector(self._subdict[name][0], sgvec)
 
                 clvec = lvec
                 csdm = sdm
 
-                # print(f"{uw.mpi.rank}: Copy bcs for {name} to user variables", flush=True)
-                ierr = DMPlexSNESComputeBoundaryFEM(csdm.dm, <void*>clvec.vec, NULL); CHKERRQ(ierr)
 
+                print(f"Inserting boundary conditions for {name}", flush=True)
+                ierr = DMPlexSNESComputeBoundaryFEM(csdm.dm, <void*>clvec.vec, NULL)
+                if ierr:
+                    print(f"Error inserting boundary conditions for {name}: {ierr}", flush=True)
+                
                 # Now copy into the user vec.
                 var.vec.array[:] = lvec.array[:]
-
                 sdm.restoreLocalVec(lvec)
-                # print(f"{uw.mpi.rank}: Copy field {name} / {var.name} ... done", flush=True)
+                print(f"Field {name} processing completed.", flush=True)
+
 
 
         self.dm.restoreGlobalVec(gvec)
