@@ -511,60 +511,77 @@ class Mesh(Stateful, uw_object):
         ## Information on the mesh DM
         self.dm.view()
 
-    def view_parallel(self):
+    
+    def print_label_info_parallel(self):
         """
-        returns the break down of boundary labels from each processor
+        Returns the breakdown of boundary labels from each processor
         """
-
         import numpy as np
 
-        if uw.mpi.rank == 0:
-            print(f"\n")
-            print(f"Mesh # {self.instance}: {self.name}\n")
+        ## Collect Boundary information on each processor
+        local_boundary_data = {}
 
-            if len(self.vars) > 0:
-                print(f"| Variable Name       | component | degree |     type        |")
-                print(f"| ---------------------------------------------------------- |")
-                for vname in self.vars.keys():
-                    v = self.vars[vname]
-                    print(
-                        f"| {v.clean_name:<20}|{v.num_components:^10} |{v.degree:^7} | {v.vtype.name:^15} |"
-                    )
+        # Get the number of processors
+        num_procs = uw.mpi.size
 
-                print(f"| ---------------------------------------------------------- |")
-                print("\n", flush=True)
-            else:
-                print(f"No variables are defined on the mesh\n", flush=True)
-
-        ## Boundary information on each proc
-
-        if uw.mpi.rank == 0:
-            if len(self.boundaries) > 0:
-                print(f"| Boundary Name            | ID    | Size | Proc ID      |")
-                print(f"| ------------------------------------------------------ |")
-            else:
-                print(f"No boundary labels are defined on the mesh\n")
-
-        ### goes through each processor and gets the label size
         with uw.mpi.call_pattern(pattern="sequential"):
             for bd in self.boundaries:
                 l = self.dm.getLabel(bd.name)
                 if l:
-                    i = l.getStratumSize(bd.value)
+                    size = l.getStratumSize(bd.value)
+                    local_boundary_data[bd.name] = (uw.mpi.rank, size)
                 else:
-                    i = 0
-                print(
-                    f"| {bd.name:<20}     | {bd.value:<5} | {i:<8} | {uw.mpi.rank:<8} |"
-                )
+                    pass
 
         uw.mpi.barrier()
 
+        # Gather all local boundary data to rank 0
+        gathered_boundary_data = uw.mpi.comm.gather(local_boundary_data, root=0)
+        
         if uw.mpi.rank == 0:
-            print(f"| ------------------------------------------------------ |")
-            print("\n", flush=True)
+            if len(self.boundaries) > 0:
+                # Processing non zero label data
+                print(f"| Boundary Name            | Proc IDs (with number of label points)   | Total Label Points |")
+                print(f"| ------------------------------------------------------------ |")
+                all_proc_label_info = []
+                for bd in self.boundaries:
+                    proc_label_info = [f"{proc_data[bd.name][0]}({proc_data[bd.name][1]})" 
+                                       for proc_data in gathered_boundary_data 
+                                       if bd.name in proc_data and proc_data[bd.name][1] != 0]
 
-        ## Information on the mesh DM
-        # self.dm.view()
+                    total_label_points = sum(proc_data[bd.name][1] 
+                                             for proc_data in gathered_boundary_data 
+                                             if bd.name in proc_data and proc_data[bd.name][1] != 0)
+
+                    all_proc_label_info += proc_label_info
+
+                    # Format the proc info into string
+                    proc_str = ", ".join(proc_label_info)
+
+                    print(f"| {bd.name:<20}     | {proc_str:<40} | {total_label_points:<12} |")
+                print(f"| ------------------------------------------------------------ |")
+
+                # Processing zero label data
+                print(f"| Boundary Name            | Proc IDs (with zero label points)  ")
+                print(f"| ------------------------------------------------------------ |")
+                all_proc_zero_label_info = []
+                for bd in self.boundaries:
+                    proc_zero_label_info = [f"{proc_data[bd.name][0]}({proc_data[bd.name][1]})" 
+                                            for proc_data in gathered_boundary_data 
+                                            if bd.name in proc_data and proc_data[bd.name][1] == 0]
+                            
+                    # Format the proc info into string
+                    proc_str = ", ".join(proc_zero_label_info)
+
+                    all_proc_zero_label_info += proc_zero_label_info
+
+                    print(f"| {bd.name:<20}     | {proc_str:<40} |")
+                print(f"| ------------------------------------------------------------ |")
+            else:
+                print(f"No boundary labels are defined on the mesh\n")
+
+            # return all_proc_label_info, all_proc_zero_label_info # this info can be used to stop the job and it is only available in proc=0
+
 
     # This only works for local - we can't access global information'
     # and so this is not a suitable function for use during advection
