@@ -10,17 +10,17 @@ import os
 import numpy
 import petsc4py
 
-if os.environ.get("CC") is None:
-    import warnings
+# if os.environ.get("CC") is None:
+#     import warnings
 
-    warnings.warn(
-        "CC environment variable not set. Using mpi4py's compiler configuration"
-    )
-    # Get CC from mpi4py
-    import mpi4py
+#     warnings.warn(
+#         "CC environment variable not set. Using mpi4py's compiler configuration"
+#     )
+#     # Get CC from mpi4py
+#     import mpi4py
 
-    conf = mpi4py.get_config()
-    os.environ["CC"] = conf["mpicc"]
+#     conf = mpi4py.get_config()
+#     os.environ["CC"] = conf["mpicc"]
 
 # PETSc version check - 3.16 or higher
 from petsc4py import PETSc
