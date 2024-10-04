@@ -887,13 +887,14 @@ class SNES_Scalar(SolverBaseClass):
 
         cdef DM dm = self.dm
         self.mesh.update_lvec()
-        cdef Vec cmesh_lvec = self.mesh.lvec
+        # cdef Vec cmesh_lvec = self.mesh.lvec # tg
 
         # cmesh_lvec = vn2.copy()
         # PETSc == 3.16 introduced an explicit interface
         # for setting the aux-vector which we'll use when available.
 
-        ierr = DMSetAuxiliaryVec_UW(dm.dm, NULL, 0, 0, cmesh_lvec.vec); CHKERRQ(ierr)
+        # ierr = DMSetAuxiliaryVec_UW(dm.dm, NULL, 0, 0, cmesh_lvec.vec); CHKERRQ(ierr) # tg
+        self.dm.setAuxiliaryVec(self.mesh.lvec, None)
 
         # solve
         self.snes.solve(None, gvec)
@@ -2678,13 +2679,18 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
             self.snes.setFromOptions()
             self.snes.solve(None, gvec)
 
-        cdef Vec clvec
+        # cdef Vec clvec
         cdef DM csdm
 
         if verbose and uw.mpi.rank == 0:
                 print(f"SNES post-solve - bcs", flush=True)
 
         # Copy solution back into user facing variables
+
+        cdef DM dm = self.dm
+        cdef Vec clvec
+        self.dm.globalToLocal(gvec, clvec)
+        ierr = DMPlexSNESComputeBoundaryFEM(dm.dm, <void*>clvec.vec, NULL); CHKERRQ(ierr)
 
         with self.mesh.access(self.Unknowns.p, self.Unknowns.u):
             # print(f"p: {self.Unknowns.p.name}, v: {self.Unknowns.u.name}")
