@@ -484,8 +484,7 @@ def plot_vector(mesh, vector, vector_name='', cmap='', clim='', vmag='', vfreq='
         pvmesh.point_data[scalar_name] = scalar_fn_to_pv_points(pvmesh, 
                                                                 sympy.sqrt(vector.sym.dot(vector.sym)))
     else:
-        pvmesh.point_data[scalar_name] = scalar_fn_to_pv_points(pvmesh, 
-                                                                sympy.sqrt(scalar.sym.dot(scalar.sym)))
+        pvmesh.point_data[scalar_name] = scalar_fn_to_pv_points(pvmesh, scalar.sym)
     
     print(pvmesh.point_data[scalar_name].min(), pvmesh.point_data[scalar_name].max())
     
