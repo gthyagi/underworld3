@@ -13,6 +13,8 @@ import underworld3.timing as timing
 from underworld3.utilities._api_tools import uw_object
 from underworld3.utilities._api_tools import class_or_instance_method
 
+import os
+
 include "petsc_extras.pxi"
 
 class SolverBaseClass(uw_object):
@@ -2693,6 +2695,8 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
             self.snes.setFromOptions()
             self.snes.solve(None, gvec)
 
+        uw.timing.start()
+
         cdef DM dm = self.dm
         cdef Vec clvec = self.dm.getLocalVec()
         self.dm.globalToLocal(gvec, clvec)
@@ -2764,6 +2768,9 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
 
         self.dm.restoreGlobalVec(clvec)
         self.dm.restoreGlobalVec(gvec)
+
+        uw.timing.stop()
+        uw.timing.print_table(group_by='line_routine', output_file=f"time_solver_loop_cpu_{uw.mpi.size}.txt",  display_fraction=1.00)
 
         converged = self.snes.getConvergedReason()
         iterations = self.snes.getIterationNumber()
