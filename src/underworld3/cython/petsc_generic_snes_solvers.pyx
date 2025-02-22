@@ -2329,6 +2329,29 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
 
         self.dm_hierarchy = mesh.clone_dm_hierarchy()
         self.dm = self.dm_hierarchy[-1]
+        
+
+        cdef DM selfdm = self.dm
+        cdef DMLabel label_int = selfdm.getLabel("Internal")
+        
+
+        # Remove edges from label. DMPlexOrientLabel requires only vertices
+        iset = label_int.getStratumIS(5)
+        if iset is not None:
+            pts = iset.getIndices()
+            for p in pts:
+                # remove vertices from label
+                if selfdm.getPointDepth(p) > 0:
+                    label_int.clearValue(p, 5)
+
+        print(label_int.view())
+
+        # orient normal consistently.
+        ierr = DMPlexOrientLabel(selfdm.dm, label_int.dmlabel); CHKERRQ(ierr) 
+        print(ierr)
+
+        self.dm = selfdm
+
 
         if self.dm.getNumFields() == 0:
 
