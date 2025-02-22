@@ -79,3 +79,6 @@ cdef extern from "petsc.h" nogil:
 
     # Not wrapped at this point
     PetscErrorCode VecConcatenate(PetscInt nx, const PetscVec X[], PetscVec *, PetscIS *)
+
+    PetscErrorCode DMPlexOrientLabel(PetscDM dm, PetscDMLabel label)
+    # PetscErrorCode DMPlexLabelComplete(DM dm, DMLabel label)
