@@ -63,8 +63,6 @@ cdef extern from "petsc.h" nogil:
     PetscErrorCode PetscDSAddBdJacobian( PetscDS, PetscInt, PetscInt, PetscDSBdJacobianFn, PetscDSBdJacobianFn, PetscDSBdJacobianFn, PetscDSBdJacobianFn)
     PetscErrorCode PetscDSAddBdJacobianPreconditioner( PetscDS, PetscInt, PetscInt, PetscDSBdJacobianFn, PetscDSBdJacobianFn, PetscDSBdJacobianFn, PetscDSBdJacobianFn)
     PetscErrorCode PetscDSAddBdResidual( PetscDS, PetscInt, PetscDSBdResidualFn, PetscDSBdResidualFn )
-
-    PetscErrorCode DMPlexCreateSubmesh(PetscDM, PetscDMLabel label, PetscInt value, PetscBool markedFaces, PetscDM *subdm)
     PetscErrorCode DMGetLabel(PetscDM dm, const char name[], PetscDMLabel *label)
 
     # These do not appear to be in the 3.17.2 release
@@ -80,5 +78,20 @@ cdef extern from "petsc.h" nogil:
     # Not wrapped at this point
     PetscErrorCode VecConcatenate(PetscInt nx, const PetscVec X[], PetscVec *, PetscIS *)
 
+    # call related to internal boundary normal orientation
+    PetscErrorCode DMPlexCreateSubmesh(PetscDM dm, PetscDMLabel label, PetscInt value, PetscBool markedFaces, PetscDM *subdm)
     PetscErrorCode DMPlexOrientLabel(PetscDM dm, PetscDMLabel label)
-    # PetscErrorCode DMPlexLabelComplete(DM dm, DMLabel label)
+    PetscErrorCode DMPlexLabelComplete(PetscDM dm, PetscDMLabel label)
+    PetscErrorCode DMPlexOrient(PetscDM dm)
+
+
+
+
+
+
+
+
+
+
+
+
