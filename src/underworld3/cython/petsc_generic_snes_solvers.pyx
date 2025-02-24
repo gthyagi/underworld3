@@ -2329,28 +2329,48 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
 
         self.dm_hierarchy = mesh.clone_dm_hierarchy()
         self.dm = self.dm_hierarchy[-1]
-        
 
-        cdef DM selfdm = self.dm
-        cdef DMLabel label_int = selfdm.getLabel("Internal")
-        
 
-        # Remove edges from label. DMPlexOrientLabel requires only vertices
+        #------------------------------------------------------------------------------------------
+        # Orient normals using either DMPlexOrientLabel or a submesh
+
+        # Get the C-level DM pointer from the Python object.
+        cdef DM self_dm = self.dm  
+        cdef PetscDM subdm
+        cdef DMLabel label_int = self_dm.getLabel("Internal")  # Get the label "Internal"
+
+        # Choose method: 
+        #   1: Orient normals on the original mesh using DMPlexOrientLabel
+        #   2: Create a submesh then orient normals on it
+        METHOD = 2
+
+        # Adjust the label: for each edge (depth == 1) in stratum 5, set the label on its vertices
         iset = label_int.getStratumIS(5)
         if iset is not None:
-            pts = iset.getIndices()
-            for p in pts:
-                # remove vertices from label
-                if selfdm.getPointDepth(p) > 0:
-                    label_int.clearValue(p, 5)
+            for p in iset.getIndices():
+                if self_dm.getPointDepth(p) == 1:
+                    for v in self_dm.getCone(p):
+                        if label_int.getValue(v) == -1:
+                            label_int.setValue(v, 5)
+                    label_int.clearValue(p, 5)  # Remove label from the edge
 
         print(label_int.view())
 
-        # orient normal consistently.
-        ierr = DMPlexOrientLabel(selfdm.dm, label_int.dmlabel); CHKERRQ(ierr) 
-        print(ierr)
+        if METHOD == 1:
+            # Orient normals on the original mesh using PETSc's routine.
+            ierr = DMPlexOrientLabel(self_dm.dm, label_int.dmlabel); CHKERRQ(ierr)
+            print(ierr)
+        elif METHOD == 2:
+            # Create a submesh and then orient it.
+            ierr = DMPlexCreateSubmesh(self_dm.dm, label_int.dmlabel, 5, PETSC_FALSE, &subdm); CHKERRQ(ierr)
+            print(ierr)
 
-        self.dm = selfdm
+            ierr = DMPlexOrient(subdm); CHKERRQ(ierr)
+            print(ierr)
+
+        # Update the self dm with dm that has consistent normal orientation 
+        self.dm = self_dm
+        #------------------------------------------------------------------------------------------
 
 
         if self.dm.getNumFields() == 0:
