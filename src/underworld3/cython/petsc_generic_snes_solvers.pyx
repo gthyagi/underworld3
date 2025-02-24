@@ -2342,7 +2342,7 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
         # Choose method: 
         #   1: Orient normals on the original mesh using DMPlexOrientLabel
         #   2: Create a submesh then orient normals on it
-        METHOD = 2
+        METHOD = 1
 
         # Adjust the label: for each edge (depth == 1) in stratum 5, set the label on its vertices
         iset = label_int.getStratumIS(5)
@@ -2352,7 +2352,7 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
                     for v in self_dm.getCone(p):
                         if label_int.getValue(v) == -1:
                             label_int.setValue(v, 5)
-                    label_int.clearValue(p, 5)  # Remove label from the edge
+                    label_int.clearValue(p, 5)  # Remove edge from the label
 
         print(label_int.view())
 
