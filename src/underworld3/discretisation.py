@@ -203,16 +203,13 @@ class Mesh(Stateful, uw_object):
                     % (plex_or_meshfile, ext[1:])
                 )
 
-        print('orienting normals')
-        
+        #---------------------------------------------------------------
+        print('orienting mesh normals')
+
         # orient internal bd normals 
         test = petsc_discretisation.orient_internal_bd_normals(self.dm)
         # print(test.view())
-
-
-
-
-
+        #---------------------------------------------------------------
 
         ## Patch up the boundaries to include the additional
         ## definitions that we do / might need. Note: the
