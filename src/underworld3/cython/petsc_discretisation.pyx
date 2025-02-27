@@ -249,7 +249,6 @@ def orient_internal_bd_normals(mesh_dm):
     This function updates self.dm so that it has a consistent normal orientation.
     """
     cdef DM mdm = mesh_dm
-    # cdef PetscDM subdm
     cdef DMLabel label_int = mdm.getLabel("Internal")  # Get the label "Internal"
 
     # Choose method:
@@ -257,37 +256,34 @@ def orient_internal_bd_normals(mesh_dm):
     #   2: Create a submesh then orient normals on it
     METHOD = 1
 
-    # pStart,pEnd = mesh_dm.getChart()
-    # for i in range(pStart,pEnd):
-    #     print("point =", i, "\tcone =", mesh_dm.getCone(i))
+    # Adjust the label: for each edge (depth == 1) in stratum 5, set the label on its vertices
+    iset = label_int.getStratumIS(5)
 
-    # # Adjust the label: for each edge (depth == 1) in stratum 5, set the label on its vertices
-    # iset = label_int.getStratumIS(5)
-    # if iset is not None:
-    #     for p in iset.getIndices():
-    #         if mdm.getPointDepth(p) == 1:
-    #             for v in mdm.getCone(p):
-    #                 if label_int.getValue(v) == -1:
-    #                     # label_int.setValue(v, 5)
-    #                     pass
-    #             label_int.clearValue(p, 5)  # Remove edge from the label
+    print('Rank: ', uw.mpi.rank, 'Size: ', iset.getSize())
+    if iset is not None:
+        for p in iset.getIndices():
+            if mdm.getPointDepth(p) == 1:
+                for v in mdm.getCone(p):
+                    if label_int.getValue(v) == -1:
+                        label_int.setValue(v, 5)
+                label_int.clearValue(p, 5)  # Remove edge from the label
 
     print(label_int.view())
 
     if METHOD == 1:
         # Orient normals on the original mesh using PETSc's routine.
-        ierr = DMPlexOrientLabel(mdm.dm, label_int.dmlabel); CHKERRQ(ierr)
-        print(ierr)
+        if iset.getSize() >=0:
+                CHKERRQ(DMPlexOrientLabel(mdm.dm, label_int.dmlabel))
+        else:
+                pass
+
     # elif METHOD == 2:
+    # cdef PetscDM subdm
     #     # Create a submesh and then orient normals on it.
     #     ierr = DMPlexCreateSubmesh(mdm.dm, label_int.dmlabel, 5, PETSC_FALSE, &subdm); CHKERRQ(ierr)
     #     print(ierr)
     #     ierr = DMPlexOrient(subdm); CHKERRQ(ierr)
     #     print(ierr)
-
-    mpStart,mpEnd = mdm.getChart()
-    for i in range(mpStart,mpEnd):
-        print("point =", i, "\tcone =", mdm.getCone(i))
 
     return mdm
 
