@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1">
-<meta name="generator" content="pdoc3 0.11.5">
+<meta name="generator" content="pdoc3 0.11.6">
 <title>underworld3.discretisation API documentation</title>
 <meta name="description" content="">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/sanitize.min.css" integrity="sha512-y1dtMcuvtTMJc1yPgEqF0ZjQbhnc/bFhyvIyVNb9Zk5mIGtqVaAB1Ttl28su8AvFMOY0EwRbAe+HCLqj6W7/KA==" crossorigin>
@@ -391,14 +391,15 @@ Over-ride the varname with a symbolic form for printing etc (latex). Should be a
 <span>Expand source code</span>
 </summary>
 <pre><code class="python">def extend_enum(inherited):
-   def wrapper(final):
-     joined = {}
-     inherited.append(final)
-     for i in inherited:
-        for j in i:
-           joined[j.name] = j.value
-     return Enum(final.__name__, joined)
-   return wrapper</code></pre>
+    def wrapper(final):
+        joined = {}
+        inherited.append(final)
+        for i in inherited:
+            for j in i:
+                joined[j.name] = j.value
+        return Enum(final.__name__, joined)
+
+    return wrapper</code></pre>
 </details>
 <div class="desc"></div>
 </dd>
@@ -593,6 +594,7 @@ True: index into the local coordinate array</p>
                     useRegions=useRegions,
                     useMultipleTags=useMultipleTags,
                 )
+
             elif ext.lower() == &#34;.h5&#34;:
                 if verbose and uw.mpi.rank == 0:
                     print(
@@ -602,6 +604,34 @@ True: index into the local coordinate array</p>
                 self.sf0, self.dm = _from_plexh5(
                     plex_or_meshfile, PETSc.COMM_WORLD, return_sf=True
                 )
+
+                ## We can check if there is boundary metadata in the h5 file and we
+                ## should use it if it is present.
+
+                import h5py, json
+
+                f = h5py.File(plex_or_meshfile, &#34;r&#34;)
+
+                # boundaries_dict = {i.name: i.value for i in cs_mesh.boundaries}
+                # string_repr = json.dumps(boundaries_dict)
+
+                try:
+                    json_str = f[&#34;metadata&#34;].attrs[&#34;boundaries&#34;]
+                    bdr_dict = json.loads(json_str)
+                    boundaries = Enum(&#34;Boundaries&#34;, bdr_dict)
+                except KeyError:
+                    pass
+
+                try:
+                    json_str = f[&#34;metadata&#34;].attrs[&#34;coordinate_system_type&#34;]
+                    coord_type_dict = json.loads(json_str)
+                    coordinate_system_type = uw.discretisation.CoordinateSystemType(
+                        coord_type_dict[&#34;value&#34;]
+                    )
+                except KeyError:
+                    pass
+
+                f.close()
 
             else:
                 raise RuntimeError(
@@ -615,23 +645,24 @@ True: index into the local coordinate array</p>
         ## the new ones.
 
         if boundaries is None:
+
             class replacement_boundaries(Enum):
                 Null_Boundary = 666
                 All_Boundaries = 1001
+
             boundaries = replacement_boundaries
         else:
+
             @extend_enum([boundaries])
             class replacement_boundaries(Enum):
                 Null_Boundary = 666
                 All_Boundaries = 1001
-            boundaries = replacement_boundaries
 
+            boundaries = replacement_boundaries
 
         self.filename = filename
         self.boundaries = boundaries
         self.boundary_normals = boundary_normals
-
-
 
         # options.delValue(&#34;dm_plex_gmsh_mark_vertices&#34;)
         # options.delValue(&#34;dm_plex_gmsh_multiple_tags&#34;)
@@ -648,7 +679,9 @@ True: index into the local coordinate array</p>
         self.dm.createLabel(&#34;Null_Boundary&#34;)
         all_edges_label = self.dm.getLabel(&#34;Null_Boundary&#34;)
         if all_edges_label and all_edges_IS_dm:
-           all_edges_label.setStratumIS(boundaries.Null_Boundary.value, all_edges_IS_dm)
+            all_edges_label.setStratumIS(
+                boundaries.Null_Boundary.value, all_edges_IS_dm
+            )
 
         ## --- UW_Boundaries label
         if self.boundaries is not None:
@@ -669,8 +702,6 @@ True: index into the local coordinate array</p>
                     # Load this up on the stacked BC label
                     if label_is:
                         stacked_bc_label.setStratumIS(b.value, label_is)
-
-
 
             uw.mpi.barrier()
 
@@ -749,6 +780,9 @@ True: index into the local coordinate array</p>
 
         # Set sympy constructs. First a generic, symbolic, Cartesian coordinate system
         # A unique set of vectors / names for each mesh instance
+        #
+
+        self.CoordinateSystemType = coordinate_system_type
 
         from sympy.vector import CoordSys3D
 
@@ -1156,7 +1190,6 @@ True: index into the local coordinate array</p>
                     subvec = a_global.getSubVector(subiset)
                     subdm.localToGlobal(lvec, subvec, addv=False)
                     a_global.restoreSubVector(subiset, subvec)
-
 
             for iset in isets:
                 iset.destroy()
@@ -1588,9 +1621,38 @@ True: index into the local coordinate array</p>
             # viewer.setTimestep(index)
 
         viewer(self.dm)
-
-        # Not sure if the files are correctly written if we do not explicitly destroy the viewer
         viewer.destroy()
+
+        uw.mpi.barrier()
+
+        ## Add boundary metadata to the file
+
+        import h5py, json
+        import time
+
+        # time.sleep(1)
+
+        # Sequential (no distributed information needs to be saved)
+
+        if uw.mpi.rank == 0:
+
+            f = h5py.File(filename, &#34;a&#34;)
+            g = f.create_group(&#34;metadata&#34;)
+
+            boundaries_dict = {i.name: i.value for i in self.boundaries}
+            string_repr = json.dumps(boundaries_dict)
+            g.attrs[&#34;boundaries&#34;] = string_repr
+
+            coordinates_type_dict = {
+                &#34;name&#34;: self.CoordinateSystemType.name,
+                &#34;value&#34;: self.CoordinateSystemType.value,
+            }
+            string_repr = json.dumps(coordinates_type_dict)
+            g.attrs[&#34;coordinate_system_type&#34;] = string_repr
+
+            f.close()
+
+        uw.mpi.barrier()
 
     def vtk(self, filename: str):
         &#34;&#34;&#34;
@@ -2961,7 +3023,6 @@ def update_lvec(self):
                 subdm.localToGlobal(lvec, subvec, addv=False)
                 a_global.restoreSubVector(subiset, subvec)
 
-
         for iset in isets:
             iset.destroy()
         for dm in dms:
@@ -3191,9 +3252,38 @@ def write(self, filename: str, index: Optional[int] = None):
         # viewer.setTimestep(index)
 
     viewer(self.dm)
+    viewer.destroy()
 
-    # Not sure if the files are correctly written if we do not explicitly destroy the viewer
-    viewer.destroy()</code></pre>
+    uw.mpi.barrier()
+
+    ## Add boundary metadata to the file
+
+    import h5py, json
+    import time
+
+    # time.sleep(1)
+
+    # Sequential (no distributed information needs to be saved)
+
+    if uw.mpi.rank == 0:
+
+        f = h5py.File(filename, &#34;a&#34;)
+        g = f.create_group(&#34;metadata&#34;)
+
+        boundaries_dict = {i.name: i.value for i in self.boundaries}
+        string_repr = json.dumps(boundaries_dict)
+        g.attrs[&#34;boundaries&#34;] = string_repr
+
+        coordinates_type_dict = {
+            &#34;name&#34;: self.CoordinateSystemType.name,
+            &#34;value&#34;: self.CoordinateSystemType.value,
+        }
+        string_repr = json.dumps(coordinates_type_dict)
+        g.attrs[&#34;coordinate_system_type&#34;] = string_repr
+
+        f.close()
+
+    uw.mpi.barrier()</code></pre>
 </details>
 <div class="desc"><p>Save mesh data to the specified hdf5 file.</p>
 <h2 id="parameters">Parameters</h2>
@@ -3436,7 +3526,7 @@ Vertex values (on the mesh points) are stored for all variables regardless of th
 </nav>
 </main>
 <footer id="footer">
-<p>Generated by <a href="https://pdoc3.github.io/pdoc" title="pdoc: Python API documentation generator"><cite>pdoc</cite> 0.11.5</a>.</p>
+<p>Generated by <a href="https://pdoc3.github.io/pdoc" title="pdoc: Python API documentation generator"><cite>pdoc</cite> 0.11.6</a>.</p>
 </footer>
 </body>
 </html>
