@@ -225,8 +225,7 @@ el.replaceWith(d);
         description=&#34;derivative of expression provided&#34;,
     ):
 
-        self.symbol = self._unique_name
-        self._sym = None
+        self.symbol = self._given_name
         self.diff_variable = None
 
         self._sym = expr  # Accept anything, sympify is overly opinionated if we try to `sympify`
@@ -370,7 +369,7 @@ def value(self):
 </dd>
 <dt id="underworld3.function.expressions.UWexpression"><code class="flex name class">
 <span>class <span class="ident">UWexpression</span></span>
-<span>(</span><span>name, sym=None, description='No description provided', value=None)</span>
+<span>(</span><span>name, sym=None, description='No description provided', value=None, **kwargs)</span>
 </code></dt>
 <dd>
 <details class="source">
@@ -396,28 +395,52 @@ def value(self):
     &#34;&#34;&#34;
 
     _expr_count = 0
+    _expr_names = []
 
     def __new__(
         cls,
         name,
         *args,
+        _unique_name_generation=False,
         **kwargs,
     ):
 
+        import warnings
+
         instance_no = UWexpression._expr_count
 
-        invisible = rf&#34;\hspace{{ {instance_no/100}pt }}&#34;
-        unique_name = f&#34;{{ {name} {invisible} }}&#34;
+        if name in UWexpression._expr_names and _unique_name_generation == False:
+            warnings.warn(
+                message=f&#34;EXPRESSIONS {name}: Each expression should have a unique name - new expression was not generated&#34;,
+            )
+            return None
+
+        if name in UWexpression._expr_names and _unique_name_generation == True:
+
+            invisible = rf&#34;\hspace{{ {instance_no/100}pt }}&#34;
+            unique_name = f&#34;{{ {name} {invisible} }}&#34;
+
+        else:
+            unique_name = name
+
+        UWexpression._expr_names.append(unique_name)
+
         obj = Symbol.__new__(cls, unique_name)
         obj._instance_no = instance_no
         obj._unique_name = unique_name
+        obj._given_name = name
 
         UWexpression._expr_count += 1
 
         return obj
 
     def __init__(
-        self, name, sym=None, description=&#34;No description provided&#34;, value=None
+        self,
+        name,
+        sym=None,
+        description=&#34;No description provided&#34;,
+        value=None,
+        **kwargs,
     ):
         if value is not None and sym is None:
             import warnings
@@ -432,7 +455,7 @@ def value(self):
                 &#34;Both &#39;sym&#39; and &#39;value&#39; attributes are provided, please use one&#34;
             )
 
-        self.symbol = self._unique_name
+        self.symbol = self._given_name
         self.sym = sym  # Accept anything, sympify is opinionated
         self.description = description
 
@@ -446,9 +469,14 @@ def value(self):
         if not isinstance(other, UWexpression):
             raise ValueError
         else:
-            self.symbol = other.symbol
+            # Note: sympy symbols are uniquely defined by name and so
+            # the uw expressions based on symbols cannot be renamed: only the
+            # value can be changed. As a result, copy is just an assignment to
+            # self.sym and should be deprecated.
+
+            # self.symbol = other.symbol # Can&#39;t change this
             self._sym = other._sym
-            self.description = other.description
+            # self.description = other.description # Shouldn&#39;t change this
 
         return
 
@@ -532,6 +560,14 @@ def value(self):
         from IPython.display import Latex, Markdown, display
 
         display(Markdown(&#34;$&#34; + self.symbol + &#34;$&#34;))
+
+    def __repr__(self):
+        # print(&#34;Customised !&#34;)
+        return str(self.symbol)
+
+    def _repr_latex_(self):
+        # print(&#34;Customised !&#34;)
+        return rf&#34;$\\displaystyle {str(self.symbol)}$&#34;
 
     def _object_viewer(self, description=True, level=1):
         from IPython.display import Latex, Markdown, display
@@ -717,9 +753,14 @@ def value(self):
     if not isinstance(other, UWexpression):
         raise ValueError
     else:
-        self.symbol = other.symbol
+        # Note: sympy symbols are uniquely defined by name and so
+        # the uw expressions based on symbols cannot be renamed: only the
+        # value can be changed. As a result, copy is just an assignment to
+        # self.sym and should be deprecated.
+
+        # self.symbol = other.symbol # Can&#39;t change this
         self._sym = other._sym
-        self.description = other.description
+        # self.description = other.description # Shouldn&#39;t change this
 
     return</code></pre>
 </details>

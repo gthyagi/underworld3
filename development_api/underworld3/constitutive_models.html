@@ -46,6 +46,18 @@ el.replaceWith(d);
 <section>
 <h2 class="section-title" id="header-functions">Functions</h2>
 <dl>
+<dt id="underworld3.constitutive_models.expression"><code class="name flex">
+<span>def <span class="ident">expression</span></span>(<span>*x, **X)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">expression = lambda *x, **X: public_expression(*x, _unique_name_generation=True, **X)</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
 <dt id="underworld3.constitutive_models.validate_parameters"><code class="name flex">
 <span>def <span class="ident">validate_parameters</span></span>(<span>symbol, input, default=None, allow_number=True, allow_expression=True)</span>
 </code></dt>
@@ -982,7 +994,7 @@ is that these all have compatible flux terms.</p></div>
 
         super().__init__(unknowns)
 
-        # self._viscosity = uw.function.expression(
+        # self._viscosity = expression(
         #     R&#34;{\eta_0}&#34;,
         #     1,
         #     &#34; Apparent viscosity&#34;,
@@ -1647,7 +1659,7 @@ def grad_u(self):
                     2 * self.Parameters.dt_elastic * self.Parameters.shear_modulus
                 )
 
-        strainrate_inv_II = uw.function.expression(
+        strainrate_inv_II = expression(
             R&#34;{\dot\varepsilon_{II}&#39;}&#34;,
             sympy.sqrt((Edot**2).trace() / 2),
             &#34;Strain rate 2nd Invariant including elastic strain rate term&#34;,
@@ -2250,13 +2262,13 @@ def stress_star(self):
 
         super().__init__(unknowns)
 
-        self._strainrate_inv_II = uw.function.expression(
+        self._strainrate_inv_II = expression(
             r&#34;\dot\varepsilon_{II}&#34;,
             sympy.sqrt((self.grad_u**2).trace() / 2),
             &#34;Strain rate 2nd Invariant&#34;,
         )
 
-        self._plastic_eff_viscosity = uw.function.expression(
+        self._plastic_eff_viscosity = expression(
             R&#34;{\eta_\textrm{eff,p}}&#34;,
             1,
             &#34;Effective viscosity (plastic)&#34;,
@@ -2576,7 +2588,7 @@ Apply the constitutive model using:</p>
 
         super().__init__(unknowns)
 
-        # self._viscosity = uw.function.expression(
+        # self._viscosity = expression(
         #     R&#34;{\eta_0}&#34;,
         #     1,
         #     &#34; Apparent viscosity&#34;,
@@ -2785,6 +2797,7 @@ in the form of an uw.expression</p></div>
 </li>
 <li><h3><a href="#header-functions">Functions</a></h3>
 <ul class="">
+<li><code><a title="underworld3.constitutive_models.expression" href="#underworld3.constitutive_models.expression">expression</a></code></li>
 <li><code><a title="underworld3.constitutive_models.validate_parameters" href="#underworld3.constitutive_models.validate_parameters">validate_parameters</a></code></li>
 </ul>
 </li>
