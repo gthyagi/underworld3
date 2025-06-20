@@ -1558,10 +1558,10 @@ True: index into the local coordinate array</p>
             mesh_file = filename + &#34;.mesh.0.h5&#34;
             path = Path(mesh_file)
             if not path.is_file():
-                self.save(mesh_file)
+                self.write(mesh_file)
 
         else:
-            self.save(filename + f&#34;.mesh.{index:05}.h5&#34;)
+            self.write(filename + f&#34;.mesh.{index:05}.h5&#34;)
 
         # Checkpoint file
 
@@ -1800,7 +1800,6 @@ True: index into the local coordinate array</p>
 
         self._indexCoords = PIC_coords.copy()
         self._index = uw.kdtree.KDTree(self._indexCoords)
-        self._index.build_index()
         self._indexMap = numpy.array(PIC_cellid, dtype=numpy.int64)
 
         tempSwarm.restoreField(&#34;DMSwarmPIC_coor&#34;)
@@ -1816,7 +1815,7 @@ True: index into the local coordinate array</p>
         This method uses a kd-tree algorithm to find the closest
         cells to the provided coords. For a regular mesh, this should
         be exactly the owning cell, but if the mesh is deformed, this
-        is not guaranteed. Note, the nearest point does may not be all
+        is not guaranteed. Note, the nearest point may not be all
         that close by - use get_closest_local_cells to filter out points
         that are (probably) not within any local cell.
 
@@ -1834,20 +1833,18 @@ True: index into the local coordinate array</p>
             coordinates. This will be a 1-dimensional array of
             shape (n_coords).
         &#34;&#34;&#34;
+        import numpy as np
 
         self._build_kd_tree_index()
 
         if len(coords) &gt; 0:
-            closest_points, dist, found = self._index.find_closest_point(coords)
+            #closest_points, dist, found = self._index.find_closest_point(coords)
+            dist, closest_points = self._index.query(coords, k=1)
+            if np.any(closest_points &gt; self._index.n):
+                raise RuntimeError(&#34;An error was encountered attempting to find the closest cells to the provided coordinates.&#34;) 
         else:
             ### returns an empty array if no coords are on a proc
             closest_points, dist, found = False, False, numpy.array([None])
-
-        if found.any() != None:
-            if not numpy.allclose(found, True):
-                raise RuntimeError(
-                    &#34;An error was encountered attempting to find the closest cells to the provided coordinates.&#34;
-                )
 
         return self._indexMap[closest_points]
 
@@ -1875,22 +1872,25 @@ True: index into the local coordinate array</p>
 
 
         &#34;&#34;&#34;
+        import numpy as np
 
         # Create index if required
         self._build_kd_tree_index()
 
         if len(coords) &gt; 0:
-            closest_points, dist, found = self._index.find_closest_point(coords)
+            dist, closest_points = self._index.query(coords, k=1)
+            if np.any(closest_points &gt; self._index.n):
+                raise RuntimeError(&#34;An error was encountered attempting to find the closest cells to the provided coordinates.&#34;) 
         else:
             return -1
 
         # This is tuned a little bit so that points on a single CPU are never lost
 
         cells = self._indexMap[closest_points]
-        invalid = (
-            dist &gt; 0.1 * self._radii[cells] ** 2  # 2.5 * self._search_lengths[cells]
-        )  # 0.25 * self._radii[cells] ** 2
-        cells[invalid] = -1
+        #invalid = (
+        #    dist &gt; 0.1 * self._radii[cells] ** 2  # 2.5 * self._search_lengths[cells]
+        #)  # 0.25 * self._radii[cells] ** 2
+        #cells[invalid] = -1
 
         return cells
 
@@ -1917,7 +1917,8 @@ True: index into the local coordinate array</p>
             cell_points = self.dm.getTransitiveClosure(cell)[0][-cell_num_points:]
             cell_coords = self.data[cell_points - pStart]
 
-            _, distsq, _ = centroids_kd_tree.find_closest_point(cell_coords)
+            #_, distsq, _ = centroids_kd_tree.find_closest_point(cell_coords)
+            distsq, _ = centroids_kd_tree.query(cell_coords, k=1)
 
             cell_length[cell] = np.sqrt(distsq.max())
             cell_r[cell] = np.sqrt(distsq.mean())
@@ -2548,7 +2549,7 @@ def get_closest_cells(self, coords: numpy.ndarray) -&gt; numpy.ndarray:
     This method uses a kd-tree algorithm to find the closest
     cells to the provided coords. For a regular mesh, this should
     be exactly the owning cell, but if the mesh is deformed, this
-    is not guaranteed. Note, the nearest point does may not be all
+    is not guaranteed. Note, the nearest point may not be all
     that close by - use get_closest_local_cells to filter out points
     that are (probably) not within any local cell.
 
@@ -2566,27 +2567,25 @@ def get_closest_cells(self, coords: numpy.ndarray) -&gt; numpy.ndarray:
         coordinates. This will be a 1-dimensional array of
         shape (n_coords).
     &#34;&#34;&#34;
+    import numpy as np
 
     self._build_kd_tree_index()
 
     if len(coords) &gt; 0:
-        closest_points, dist, found = self._index.find_closest_point(coords)
+        #closest_points, dist, found = self._index.find_closest_point(coords)
+        dist, closest_points = self._index.query(coords, k=1)
+        if np.any(closest_points &gt; self._index.n):
+            raise RuntimeError(&#34;An error was encountered attempting to find the closest cells to the provided coordinates.&#34;) 
     else:
         ### returns an empty array if no coords are on a proc
         closest_points, dist, found = False, False, numpy.array([None])
-
-    if found.any() != None:
-        if not numpy.allclose(found, True):
-            raise RuntimeError(
-                &#34;An error was encountered attempting to find the closest cells to the provided coordinates.&#34;
-            )
 
     return self._indexMap[closest_points]</code></pre>
 </details>
 <div class="desc"><p>This method uses a kd-tree algorithm to find the closest
 cells to the provided coords. For a regular mesh, this should
 be exactly the owning cell, but if the mesh is deformed, this
-is not guaranteed. Note, the nearest point does may not be all
+is not guaranteed. Note, the nearest point may not be all
 that close by - use get_closest_local_cells to filter out points
 that are (probably) not within any local cell.</p>
 <h2 id="parameters">Parameters:</h2>
@@ -2632,22 +2631,25 @@ shape (n_coords).</p></div>
 
 
     &#34;&#34;&#34;
+    import numpy as np
 
     # Create index if required
     self._build_kd_tree_index()
 
     if len(coords) &gt; 0:
-        closest_points, dist, found = self._index.find_closest_point(coords)
+        dist, closest_points = self._index.query(coords, k=1)
+        if np.any(closest_points &gt; self._index.n):
+            raise RuntimeError(&#34;An error was encountered attempting to find the closest cells to the provided coordinates.&#34;) 
     else:
         return -1
 
     # This is tuned a little bit so that points on a single CPU are never lost
 
     cells = self._indexMap[closest_points]
-    invalid = (
-        dist &gt; 0.1 * self._radii[cells] ** 2  # 2.5 * self._search_lengths[cells]
-    )  # 0.25 * self._radii[cells] ** 2
-    cells[invalid] = -1
+    #invalid = (
+    #    dist &gt; 0.1 * self._radii[cells] ** 2  # 2.5 * self._search_lengths[cells]
+    #)  # 0.25 * self._radii[cells] ** 2
+    #cells[invalid] = -1
 
     return cells</code></pre>
 </details>
@@ -3326,10 +3328,10 @@ def write_checkpoint(
         mesh_file = filename + &#34;.mesh.0.h5&#34;
         path = Path(mesh_file)
         if not path.is_file():
-            self.save(mesh_file)
+            self.write(mesh_file)
 
     else:
-        self.save(filename + f&#34;.mesh.{index:05}.h5&#34;)
+        self.write(filename + f&#34;.mesh.{index:05}.h5&#34;)
 
     # Checkpoint file
 
