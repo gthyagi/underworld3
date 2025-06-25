@@ -31,28 +31,22 @@ unstructured_quad_box_irregular_3D = uw.meshing.UnstructuredSimplexBox(
 # -
 
 def check_xdmf_vertex_fields_exist_in_h5(xdmf_filename, tmp_path=""):
-    """
-    Checks that all vertex field datasets referenced in the XDMF file
-    exist in their corresponding HDF5 files in tmp_path.
-    Prints a summary for each check.
-    """
-    # 1. Extract ENTITY->h5 mapping and XDMF content
+    errors = []
     with open(xdmf_filename, 'r') as f:
         content = f.read()
     doctype_match = re.search(r'<!DOCTYPE\s+Xdmf.*?\[(.*?)\]>', content, re.DOTALL)
     if not doctype_match:
-        print("No DOCTYPE entity block found.")
-        return
+        raise AssertionError("No DOCTYPE entity block found in XDMF file.")
     entity_block = doctype_match.group(1)
     entities = dict(re.findall(r'<!ENTITY\s+(\w+)\s+"([^"]+\.h5)"\s*>', entity_block))
-
-    # 2. Extract (&Entity;/vertex_fields/field_name) references
     refs = re.findall(r'&(\w+);:(/vertex_fields/[A-Za-z0-9_]+)', content)
     print("Checking vertex field dataset references in XDMF:")
     for entity_name, dataset_path in refs:
         h5_file = entities.get(entity_name)
         if not h5_file:
-            print(f"[ENTITY NOT FOUND] {entity_name}: {dataset_path}")
+            err = f"[ENTITY NOT FOUND] {entity_name}: {dataset_path}"
+            print(err)
+            errors.append(err)
             continue
         h5_full_path = os.path.join(tmp_path, h5_file)
         try:
@@ -61,9 +55,15 @@ def check_xdmf_vertex_fields_exist_in_h5(xdmf_filename, tmp_path=""):
                 if h5_path in f:
                     print(f"[OK] {h5_file}: {dataset_path} found")
                 else:
-                    print(f"[MISSING] {h5_file}: {dataset_path} not found")
+                    err = f"[MISSING] {h5_file}: {dataset_path} not found"
+                    print(err)
+                    errors.append(err)
         except OSError as e:
-            print(f"[ERROR] Cannot open {h5_file}: {e}")
+            err = f"[ERROR] Cannot open {h5_file}: {e}"
+            print(err)
+            errors.append(err)
+    if errors:
+        raise AssertionError("Missing or inaccessible vertex fields:\n" + "\n".join(errors))
 
 
 def remove_test_mesh_files(directory='.'):
