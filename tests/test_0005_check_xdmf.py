@@ -115,8 +115,6 @@ def test_stokes_boxmesh(mesh, tmp_path):
     stokes.petsc_options["snes_type"] = "newtonls"
     stokes.petsc_options["ksp_type"] = "fgmres"
 
-    stokes.petsc_options["snes_type"] = "newtonls"
-    stokes.petsc_options["ksp_type"] = "fgmres"
     stokes.petsc_options["ksp_monitor"] = None
     stokes.petsc_options["snes_monitor"] = None
     stokes.tolerance = 1.0e-3
