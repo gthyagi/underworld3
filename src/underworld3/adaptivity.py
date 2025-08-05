@@ -227,22 +227,27 @@ def mesh2mesh_swarm(mesh0, mesh1, swarm0, swarmVarList, proxy=True, verbose=Fals
     # First we add the found points (there are n_found of those)
 
     found_coords = s_coords0[found]
-    adds = n_found + 1
 
+    # FIXME: will create wrapper function
+    if swarm1.dm.getSize() < 0: # empty (negative in serial and parallel)
+        adds = n_found + 1
+    else:
+        adds = n_found
+    
     swarm1.dm.addNPoints(adds)
 
     ## Update cells etc, but don't migrate as
     ## we don't want to distrupt the data layout
 
-    cellid = swarm1.dm.getField("DMSwarm_cellid")
+    #cellid = swarm1.dm.getField("DMSwarm_cellid")
     coords = swarm1.dm.getField("DMSwarmPIC_coor").reshape((-1, swarm1.dim))
 
     coords[...] = found_coords[...]
-    if n_found > 0:
-        cellid[:] = mesh1.get_closest_cells(coords)  ## found points
+    # if n_found > 0:
+    #     cellid[:] = mesh1.get_closest_cells(coords)  ## found points
 
     swarm1.dm.restoreField("DMSwarmPIC_coor")
-    swarm1.dm.restoreField("DMSwarm_cellid")
+    #swarm1.dm.restoreField("DMSwarm_cellid")
 
     # Add in the data fields for the found points
 
@@ -278,19 +283,27 @@ def mesh2mesh_swarm(mesh0, mesh1, swarm0, swarmVarList, proxy=True, verbose=Fals
     n_not_found1 = not_found1.shape[0]
 
     if n_found1 > 0:
-        psize = swarm1.dm.getLocalSize()        
-        adds = n_found1     # swarm is not blank, so only need to use N for addNPoints
+        psize = swarm1.dm.getLocalSize()
+        
+        if psize < 0:
+            psize = 0
+
+        if swarm1.dm.getSize() < 0: # empty (negative in serial and parallel)
+            adds = n_found1 + 1
+        else:
+            adds = n_found1        
+        #adds = n_found1     # swarm is not blank, so only need to use N for addNPoints
 
         swarm1.dm.addNPoints(adds)
 
-        cellid = swarm1.dm.getField("DMSwarm_cellid")
+        #cellid = swarm1.dm.getField("DMSwarm_cellid")
         coords = swarm1.dm.getField("DMSwarmPIC_coor").reshape((-1, swarm1.dim))
 
-        coords[psize + 1 :, :] = global_unallocated_coords[found1, :]
+        coords[psize:, :] = global_unallocated_coords[found1, :]
 
-        cellid[psize + 1 :] = cell[found1]  ## gathered points
+        #cellid[psize:] = cell[found1]  ## gathered points
 
-        swarm1.dm.restoreField("DMSwarm_cellid")
+        #swarm1.dm.restoreField("DMSwarm_cellid")
         swarm1.dm.restoreField("DMSwarmPIC_coor")
 
     # print(
@@ -309,7 +322,7 @@ def mesh2mesh_swarm(mesh0, mesh1, swarm0, swarmVarList, proxy=True, verbose=Fals
         fieldData = varField.reshape(-1, varCpts)
 
         if n_found1 > 0:
-            fieldData[psize + 1 :, :] = global_unallocated_data[
+            fieldData[psize:, :] = global_unallocated_data[
                 found1, offset : offset + varCpts
             ]
 
@@ -324,7 +337,8 @@ def mesh2mesh_swarm(mesh0, mesh1, swarm0, swarmVarList, proxy=True, verbose=Fals
     #     f"{uw.mpi.rank}-1: Swarm Size (Local) {swarm0.dm.getLocalSize()}; (Global) {swarm1.dm.getSize()}"
     # )
     uw.mpi.barrier()
-    swarm1.dm.migrate(remove_sent_points=True)
+    #swarm1.dm.migrate(remove_sent_points=True) 
+    # FIXME: for some reason, calling migrate with all points in the correct ranks will cause the swarm to lose particles ... why?!!!!?  
 
     # print(
     #     f"{uw.mpi.rank}-2: Swarm Size (Local) {swarm0.dm.getLocalSize()}; (Global) {swarm1.dm.getSize()}"
