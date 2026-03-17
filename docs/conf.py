@@ -104,7 +104,7 @@ myst_substitutions = {
     "binder_badge": (
         f"[![Binder](https://mybinder.org/badge_logo.svg)]"
         f"(https://mybinder.org/v2/gh/underworldcode/uw3-binder-launcher/"
-        f"{_binder_ref}?labpath=underworld3%2Fdocs%2Fbeginner%2Ftutorials"
+        f"{_binder_ref}?labpath=docs%2Fbeginner%2Ftutorials"
         f"%2FNotebook_Index.ipynb)"
     ),
 }
