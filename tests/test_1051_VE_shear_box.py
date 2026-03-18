@@ -97,9 +97,9 @@ def _run_ve_shear(order, n_steps, dt_over_tr):
         stokes.solve(zero_init_guess=False, evalf=False)
         time += dt
 
-        # Read stress from psi_star[0] — the actual projected stress
+        # Read stress from solver.tau — the actual projected stress
         sigma_xy_val = uw.function.evaluate(
-            stokes.DFDt.psi_star[0].sym[0, 1], centre
+            stokes.tau.sym[0, 1], centre
         )
         sigma_xy = float(sigma_xy_val.flatten()[0])
 

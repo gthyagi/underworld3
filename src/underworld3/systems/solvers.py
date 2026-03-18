@@ -1247,18 +1247,20 @@ class SNES_VE_Stokes(SNES_Stokes):
         return self.constitutive_model.Parameters.dt_elastic
 
     @property
-    def stress_deviator_stored(self):
+    def tau(self):
         r"""Deviatoric stress from the most recent solve (stored in history).
 
-        Returns the actual projected stress from psi_star[0], which is
-        stored after each solve. Use this for post-processing,
-        visualization, and quantitative measurement.
+        For VE_Stokes, the stress is projected into ``psi_star[0]`` after
+        each solve. This override returns that variable directly — no
+        additional projection needed.
 
-        Note: the base ``stress_deviator`` property returns the constitutive
-        formula (needed for JIT compilation). For VE problems, always use
-        ``stress_deviator_stored`` to read the solved stress.
+        Returns
+        -------
+        MeshVariable
+            The stress history variable containing the actual deviatoric
+            stress from the most recent solve.
         """
-        return self.DFDt.psi_star[0].sym
+        return self.DFDt.psi_star[0]
 
     ## Solver needs to update the stress history terms as well as call the SNES solve:
 

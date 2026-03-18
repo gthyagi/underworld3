@@ -37,8 +37,8 @@ for step in range(10):
     solve_t = timer.time() - t0
     time_phys += dt
 
-    # Read stress directly from psi_star[0] (the projected actual stress)
-    val = uw.function.evaluate(ddt.psi_star[0].sym[0, 1], centre)
+    # Read stress from solver.tau (the projected actual stress)
+    val = uw.function.evaluate(stokes.tau.sym[0, 1], centre)
     sigma_xy = float(val.flatten()[0])
     ana = ETA * gamma_dot * (1.0 - np.exp(-time_phys * MU / ETA))
     print(f"step {step}  t={time_phys:.2f}  solve={solve_t:.1f}s  "

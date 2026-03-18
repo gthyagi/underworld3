@@ -38,7 +38,7 @@ for step in range(20):
     solve_t = timer.time() - t0
     time_phys += dt
 
-    val = uw.function.evaluate(ddt.psi_star[0].sym[0, 1], centre)
+    val = uw.function.evaluate(stokes.tau.sym[0, 1], centre)
     sigma_xy = float(val.flatten()[0])
     ana = ETA * gamma_dot * (1.0 - np.exp(-time_phys * MU / ETA))
     print(f"step {step:2d}  eff={eff}  t={time_phys:.2f}  solve={solve_t:.1f}s  "
