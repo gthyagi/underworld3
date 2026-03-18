@@ -971,12 +971,12 @@ class ViscoPlasticFlowModel(ViscousFlowModel):
         # Keep this as an sub-expression for clarity
 
         if inner_self.shear_viscosity_min.sym != -sympy.oo:
-            self._plastic_eff_viscosity._sym = sympy.simplify(
-                sympy.Max(effective_viscosity, inner_self.shear_viscosity_min)
+            self._plastic_eff_viscosity._sym = sympy.Max(
+                effective_viscosity, inner_self.shear_viscosity_min
             )
 
         else:
-            self._plastic_eff_viscosity._sym = sympy.simplify(effective_viscosity)
+            self._plastic_eff_viscosity._sym = effective_viscosity
 
         # Returns an expression that has a different description
         return self._plastic_eff_viscosity
@@ -1201,7 +1201,7 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
             # Note, 1st order only here but we should add higher order versions of this
 
             # 1st Order version (default)
-            if inner_self._owning_model.order != 2:
+            if inner_self._owning_model.effective_order != 2:
                 el_eff_visc = (
                     inner_self.shear_viscosity_0
                     * inner_self.shear_modulus
@@ -1252,6 +1252,19 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
         self._reset()
         return
 
+    @property
+    def effective_order(self):
+        """Effective order accounting for DDt history startup.
+
+        During the first few timesteps, the DDt may not have enough history
+        to support the requested order. This property returns the lower of
+        the requested order and the DDt's effective order (which ramps from
+        1 to self.order as history accumulates).
+        """
+        if self.Unknowns is not None and self.Unknowns.DFDt is not None:
+            return min(self._order, self.Unknowns.DFDt.effective_order)
+        return self._order
+
     # The following should have no setters
     @property
     def stress_star(self):
@@ -1287,7 +1300,7 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
         if self.Unknowns.DFDt is not None:
 
             if self.is_elastic:
-                if self.order != 2:
+                if self.effective_order != 2:
                     stress_star = self.Unknowns.DFDt.psi_star[0].sym
                     E += stress_star / (
                         2 * self.Parameters.dt_elastic * self.Parameters.shear_modulus
@@ -1468,8 +1481,6 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
         #     plastic_scale_factor = sympy.Max(1, self.plastic_overshoot())
         #     stress /= plastic_scale_factor
 
-        stress = sympy.simplify(stress)
-
         return stress
 
     def stress_projection(self):
@@ -1492,8 +1503,6 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
                     / (self.Parameters.dt_elastic * self.Parameters.shear_modulus)
                 )
 
-        stress = sympy.simplify(stress)
-
         return stress
 
     def stress(self):
@@ -1508,7 +1517,7 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
         if self.Unknowns.DFDt is not None:
 
             if self.is_elastic:
-                if self.order != 2:
+                if self.effective_order != 2:
                     stress_star = self.Unknowns.DFDt.psi_star[0].sym
                     stress += (
                         2
@@ -1533,8 +1542,6 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
                             / (4 * self.Parameters.dt_elastic * self.Parameters.shear_modulus)
                         )
                     )
-
-        stress = sympy.simplify(stress)
 
         return stress
 
