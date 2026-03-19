@@ -1420,6 +1420,10 @@ class SemiLagrangian(uw_object):
             # If we do `dt_for_calc * v_at_node_pts`, Pint handles it and loses UnitAwareArray units.
             mid_pt_coords = coords - v_at_node_pts * (0.5 * dt_for_calc)
 
+            # Clamp midpoint coordinates to the domain boundary
+            if self.mesh.return_coords_to_bounds is not None:
+                mid_pt_coords = self.mesh.return_coords_to_bounds(mid_pt_coords)
+
             v_mid_result = uw.function.global_evaluate(
                 self.V_fn,
                 mid_pt_coords,
@@ -1474,6 +1478,10 @@ class SemiLagrangian(uw_object):
 
             # Calculate upstream coordinates: current position - velocity * timestep
             end_pt_coords = coords - v_at_mid_pts * dt_for_calc
+
+            # Clamp upstream coordinates to the domain boundary
+            if self.mesh.return_coords_to_bounds is not None:
+                end_pt_coords = self.mesh.return_coords_to_bounds(end_pt_coords)
 
             # Extract scalar from (1,1) Matrix for scalar variables
             # MeshVariable.sym returns Matrix([[value]]) for scalars
