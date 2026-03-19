@@ -3403,8 +3403,13 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
                print(f"{uw.mpi.rank}: Building FE / quadrature for {self.name}", flush=True)
 
 
+            # Both degree AND dual-space options must be set before createDefault().
+            # The dual-space options control node placement on simplices: without them,
+            # PETSc may choose a different nodal basis than the solver's weak form expects.
+            # For P2 the defaults happen to be correct, but P3+ gets wrong node placement.
+
             options = PETSc.Options()
-            options.setValue("private_{}_u_petscspace_degree".format(self.petsc_options_prefix), u_degree) # for private variables
+            options.setValue("private_{}_u_petscspace_degree".format(self.petsc_options_prefix), u_degree)
             options.setValue("private_{}_u_petscdualspace_lagrange_continuity".format(self.petsc_options_prefix), self.u.continuous)
             options.setValue("private_{}_u_petscdualspace_lagrange_node_endpoints".format(self.petsc_options_prefix), False)
             self.petsc_fe_u = PETSc.FE().createDefault(mesh.dim, mesh.dim, mesh.isSimplex, mesh.qdegree, "private_{}_u_".format(self.petsc_options_prefix), PETSc.COMM_SELF)

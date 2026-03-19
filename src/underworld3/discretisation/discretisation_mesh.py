@@ -1096,8 +1096,13 @@ class Mesh(Stateful, uw_object):
         # later where we call the interpolation routines to project from the linear
         # mesh coordinates to other mesh coordinates.
 
+        # Dual-space options control node placement on simplices and must be set
+        # before createDefault(). Currently only P1 coordinate meshes are used,
+        # but these are needed for higher-order (curved) coordinate meshes.
         options = PETSc.Options()
         options.setValue(f"meshproj_{self.mesh_instances}_petscspace_degree", self.degree)
+        options.setValue(f"meshproj_{self.mesh_instances}_petscdualspace_lagrange_continuity", True)
+        options.setValue(f"meshproj_{self.mesh_instances}_petscdualspace_lagrange_node_endpoints", False)
 
         self.petsc_fe = PETSc.FE().createDefault(
             self.dim,
