@@ -3405,6 +3405,8 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
 
             options = PETSc.Options()
             options.setValue("private_{}_u_petscspace_degree".format(self.petsc_options_prefix), u_degree) # for private variables
+            options.setValue("private_{}_u_petscdualspace_lagrange_continuity".format(self.petsc_options_prefix), self.u.continuous)
+            options.setValue("private_{}_u_petscdualspace_lagrange_node_endpoints".format(self.petsc_options_prefix), False)
             self.petsc_fe_u = PETSc.FE().createDefault(mesh.dim, mesh.dim, mesh.isSimplex, mesh.qdegree, "private_{}_u_".format(self.petsc_options_prefix), PETSc.COMM_SELF)
             self.petsc_fe_u.setName("velocity")
             self.petsc_fe_u_id = self.dm.getNumFields()
