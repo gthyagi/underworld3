@@ -211,3 +211,104 @@ def test_stokes_constant_viscosity_expression():
     assert error < 1e-2, f"Stokes simple shear error {error:.3e} too large"
 
     del stokes
+
+
+def test_poisson_constant_in_essential_bc():
+    """Essential BC with UWexpression amplitude — change without recompile."""
+
+    mesh = uw.meshing.UnstructuredSimplexBox(cellSize=0.2)
+    x, y = mesh.X
+
+    u = uw.discretisation.MeshVariable("u_ebc", mesh, 1, degree=2)
+
+    A = uw.expression("A_bc", 1.0)
+
+    poisson = uw.systems.Poisson(mesh, u_Field=u)
+    poisson.constitutive_model = uw.constitutive_models.DiffusionModel
+    poisson.constitutive_model.Parameters.diffusivity = 1
+    poisson.f = 0.0
+
+    # u = A*sin(pi*x) on top, u = 0 on bottom
+    poisson.add_dirichlet_bc(0.0, "Bottom")
+    poisson.add_dirichlet_bc(sympy.Matrix([A * sympy.sin(sympy.pi * x)]), "Top")
+    poisson.solve()
+
+    assert poisson.snes.getConvergedReason() > 0
+
+    # Check BC value at top
+    pts_top = np.array([[0.5, 1.0]])
+    u_top_1 = uw.function.evaluate(u.sym[0], pts_top, rbf=False).squeeze()
+    assert abs(u_top_1 - 1.0) < 1e-3, f"A=1 BC at top: {u_top_1:.4f} != 1.0"
+
+    # Change A, re-solve without recompilation
+    n_before = len(_ext_dict)
+    A.sym = 3.0
+    poisson.solve()
+    n_after = len(_ext_dict)
+
+    assert poisson.snes.getConvergedReason() > 0
+    assert n_after == n_before, (
+        f"Recompiled when changing BC constant: {n_before} → {n_after}"
+    )
+
+    u_top_2 = uw.function.evaluate(u.sym[0], pts_top, rbf=False).squeeze()
+    assert abs(u_top_2 - 3.0) < 1e-3, f"A=3 BC at top: {u_top_2:.4f} != 3.0"
+
+    del poisson
+
+
+def test_stokes_natural_bc_constant_no_recompile():
+    """Stokes natural BC with constant traction — change without recompile.
+
+    Also verifies the Null_Boundary bug fix: _build() must not re-add
+    Null_Boundary on every call, which would reset is_setup and force
+    recompilation.
+    """
+
+    mesh = uw.meshing.UnstructuredSimplexBox(cellSize=0.25)
+
+    v = uw.discretisation.MeshVariable("v_nbc", mesh, mesh.dim, degree=2)
+    p = uw.discretisation.MeshVariable("p_nbc", mesh, 1, degree=1, continuous=True)
+
+    tau = uw.expression("tau_nbc", 1.0)
+
+    stokes = uw.systems.Stokes(mesh, velocityField=v, pressureField=p)
+    stokes.constitutive_model = uw.constitutive_models.ViscousFlowModel
+    stokes.constitutive_model.Parameters.shear_viscosity_0 = 1.0
+    stokes.bodyforce = sympy.Matrix([0, 0])
+
+    stokes.add_dirichlet_bc((0.0, 0.0), "Bottom")
+    stokes.add_dirichlet_bc((sympy.oo, 0.0), "Left")
+    stokes.add_dirichlet_bc((sympy.oo, 0.0), "Right")
+    stokes.add_natural_bc((tau, 0.0), "Top")
+
+    stokes.solve()
+    assert stokes.snes.getConvergedReason() > 0
+
+    # tau should be in the constants manifest
+    const_names = [expr.name for _, expr in stokes.constants_manifest]
+    assert "tau_nbc" in const_names, (
+        f"tau_nbc not found in constants manifest: {const_names}"
+    )
+
+    # Null_Boundary should appear exactly once
+    null_count = sum(1 for bc in stokes.natural_bcs if bc.boundary == "Null_Boundary")
+    assert null_count == 1, f"Null_Boundary appears {null_count} times (expected 1)"
+
+    # Change traction and re-solve — no recompilation
+    n_before = len(_ext_dict)
+    tau.sym = 5.0
+    stokes.solve()
+    n_after = len(_ext_dict)
+
+    assert stokes.snes.getConvergedReason() > 0
+    assert n_after == n_before, (
+        f"Recompiled when changing natural BC constant: {n_before} → {n_after}. "
+        f"Null_Boundary count: {sum(1 for bc in stokes.natural_bcs if bc.boundary == 'Null_Boundary')}"
+    )
+
+    # Null_Boundary should still be exactly one
+    null_count_2 = sum(1 for bc in stokes.natural_bcs if bc.boundary == "Null_Boundary")
+    assert null_count_2 == 1, f"Null_Boundary duplicated to {null_count_2} after second solve"
+
+    del stokes
