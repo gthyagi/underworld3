@@ -1378,16 +1378,10 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
         if parameters.yield_stress == sympy.oo:
             return sympy.oo
 
-        Edot = self.Unknowns.E
-        if self.Unknowns.DFDt is not None:
-
-            ## First order ...
-            stress_star = self.Unknowns.DFDt.psi_star[0]
-
-            if self.is_elastic:
-                Edot += stress_star.sym / (
-                    2 * self.Parameters.dt_elastic * self.Parameters.shear_modulus
-                )
+        # Use the effective strain rate (including elastic history) for the
+        # yield criterion. This must use the same order-dependent BDF
+        # coefficients as the stress formula.
+        Edot = self.E_eff.sym
 
         strainrate_inv_II = expression(
             R"{\dot\varepsilon_{II}'}",
