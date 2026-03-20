@@ -37,6 +37,7 @@ class SolverBaseClass(uw_object):
         self.mesh = mesh
         self.mesh_dm_coordinate_hash = None
         self.compiled_extensions = None
+        self.constants_manifest = []
 
         self.Unknowns = self._Unknowns(self)
 
@@ -472,6 +473,48 @@ class SolverBaseClass(uw_object):
 
         return
 
+
+    def _set_constants_on_ds(self, ds):
+        """Pack current constant values and call PetscDSSetConstants.
+
+        Parameters
+        ----------
+        ds : PETSc DS object
+            The PetscDS to set constants on.
+        """
+        if not self.constants_manifest:
+            return
+
+        from underworld3.utilities._jitextension import _pack_constants
+        import numpy as np
+
+        values = _pack_constants(self.constants_manifest)
+
+        cdef DS cds = ds
+        cdef int n_constants = len(values)
+        cdef double[::1] vals_view = np.ascontiguousarray(values, dtype=np.float64)
+        CHKERRQ(PetscDSSetConstants(cds.ds, n_constants, <const PetscScalar*>&vals_view[0]))
+
+    def _update_constants(self):
+        """Re-pack current UWexpression values and call PetscDSSetConstants.
+
+        Called before each solve() to ensure constants are current without
+        requiring JIT recompilation.
+        """
+        if not self.constants_manifest or self.dm is None:
+            return
+
+        ds = self.dm.getDS()
+        self._set_constants_on_ds(ds)
+
+        # Also propagate to coarse DMs in multigrid hierarchy
+        if hasattr(self, 'dm_hierarchy') and self.dm_hierarchy:
+            for coarse_dm in self.dm_hierarchy[:-1]:
+                try:
+                    coarse_ds = coarse_dm.getDS()
+                    self._set_constants_on_ds(coarse_ds)
+                except Exception:
+                    pass
 
     # Deprecate in favour of properties for solver.F0, solver.F1
     @timing.routine_timer_decorator
@@ -1396,8 +1439,10 @@ class SNES_Scalar(SolverBaseClass):
         # f0  = sympy.Array(uw.function.fn_substitute_expressions(self.F0.sym)).reshape(1).as_immutable()
         # F1  = sympy.Array(uw.function.fn_substitute_expressions(self.F1.sym)).reshape(dim).as_immutable()
 
-        f0  = sympy.Array(uw.function.expressions._unwrap_for_compilation(self.F0.sym, keep_constants=False, return_self=False)).reshape(1).as_immutable()
-        F1  = sympy.Array(uw.function.expressions._unwrap_for_compilation(self.F1.sym, keep_constants=False, return_self=False)).reshape(dim).as_immutable()
+        # Don't unwrap here — let getext()'s two-phase unwrap handle it.
+        # This preserves constant UWexpressions as symbols for the constants[] mechanism.
+        f0  = sympy.Array(self.F0.sym).reshape(1).as_immutable()
+        F1  = sympy.Array(self.F1.sym).reshape(dim).as_immutable()
 
         self._u_f0 = f0
         self._u_F1 = F1
@@ -1492,7 +1537,7 @@ class SNES_Scalar(SolverBaseClass):
             print(f"Scalar SNES: Jacobians complete, now compile", flush=True)
 
         prim_field_list = [self.u]
-        self.compiled_extensions, self.ext_dict = getext(self.mesh,
+        _getext_result = getext(self.mesh,
                                        tuple(fns_residual),
                                        tuple(fns_jacobian),
                                        [x.fn for x in self.essential_bcs],
@@ -1501,6 +1546,9 @@ class SNES_Scalar(SolverBaseClass):
                                        primary_field_list=prim_field_list,
                                        verbose=verbose,
                                        debug=debug,)
+        self.compiled_extensions = _getext_result.ptrobj
+        self.ext_dict = _getext_result.fn_dicts
+        self.constants_manifest = _getext_result.constants_manifest
 
         return
 
@@ -1576,6 +1624,9 @@ class SNES_Scalar(SolverBaseClass):
                                 NULL,
                                 NULL,
                                 )
+
+        # Set constants on DS before copying to coarse levels
+        self._set_constants_on_ds(ds)
 
         # Rebuild this lot
 
@@ -1690,6 +1741,9 @@ class SNES_Scalar(SolverBaseClass):
         # for setting the aux-vector which we'll use when available.
 
         ierr = DMSetAuxiliaryVec_UW(dm.dm, NULL, 0, 0, cmesh_lvec.vec); CHKERRQ(ierr)
+
+        # Update constants (e.g. changed material params) before solve
+        self._update_constants()
 
         # solve
         self.snes.solve(None, gvec)
@@ -2133,8 +2187,10 @@ class SNES_Vector(SolverBaseClass):
         # f0  = sympy.Array(uw.function.fn_substitute_expressions(self.F0.sym)).reshape(dim).as_immutable()
         # F1  = sympy.Array(uw.function.fn_substitute_expressions(self.F1.sym)).reshape(dim,dim).as_immutable()
 
-        f0  = sympy.Array(uw.function.expressions._unwrap_for_compilation(self.F0.sym, keep_constants=False, return_self=False)).reshape(dim).as_immutable()
-        F1  = sympy.Array(uw.function.expressions._unwrap_for_compilation(self.F1.sym, keep_constants=False, return_self=False)).reshape(dim,dim).as_immutable()
+        # Don't unwrap here — let getext()'s two-phase unwrap handle it.
+        # This preserves constant UWexpressions as symbols for the constants[] mechanism.
+        f0  = sympy.Array(self.F0.sym).reshape(dim).as_immutable()
+        F1  = sympy.Array(self.F1.sym).reshape(dim,dim).as_immutable()
 
 
         self._u_f0 = f0
@@ -2230,7 +2286,7 @@ class SNES_Vector(SolverBaseClass):
         # note also that the order here is important.
 
         prim_field_list = [self.u,]
-        self.compiled_extensions, self.ext_dict = getext(self.mesh,
+        _getext_result = getext(self.mesh,
                                        tuple(fns_residual),
                                        tuple(fns_jacobian),
                                        [x.fn for x in self.essential_bcs],
@@ -2239,6 +2295,9 @@ class SNES_Vector(SolverBaseClass):
                                        primary_field_list=prim_field_list,
                                        verbose=verbose,
                                        debug=debug,)
+        self.compiled_extensions = _getext_result.ptrobj
+        self.ext_dict = _getext_result.fn_dicts
+        self.constants_manifest = _getext_result.constants_manifest
 
         cdef PtrContainer ext = self.compiled_extensions
 
@@ -2331,6 +2390,9 @@ class SNES_Vector(SolverBaseClass):
             for boundary in self.natural_bcs:
                 UW_PetscDSViewBdWF(ds.ds, boundary.PETScID)
 
+        # Set constants on DS before copying to coarse levels
+        self._set_constants_on_ds(ds)
+
         # Rebuild this lot
 
         for coarse_dm in self.dm_hierarchy:
@@ -2353,8 +2415,6 @@ class SNES_Vector(SolverBaseClass):
 
         self.is_setup = True
         self.constitutive_model._solver_is_setup = True
-
-
 
 
     @timing.routine_timer_decorator
@@ -2453,6 +2513,9 @@ class SNES_Vector(SolverBaseClass):
         # for setting the aux-vector which we'll use when available.
         cmesh_lvec = self.mesh.lvec
         ierr = DMSetAuxiliaryVec_UW(dm.dm, NULL, 0, 0, cmesh_lvec.vec); CHKERRQ(ierr)
+
+        # Update constants (e.g. changed material params) before solve
+        self._update_constants()
 
         # solve
         self.snes.solve(None,gvec)
@@ -3173,9 +3236,11 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
         ## and do these one by one as required by PETSc. However, at the moment, this
         ## is working .. so be careful !!
 
-        F0  = sympy.Array(uw.function.expressions._unwrap_for_compilation(self.F0.sym, keep_constants=False, return_self=False))
-        F1  = sympy.Array(uw.function.expressions._unwrap_for_compilation(self.F1.sym, keep_constants=False, return_self=False))
-        PF0  = sympy.Array(uw.function.expressions._unwrap_for_compilation(self.PF0.sym, keep_constants=False, return_self=False))
+        # Don't unwrap here — let getext()'s two-phase unwrap handle it.
+        # This preserves constant UWexpressions as symbols for the constants[] mechanism.
+        F0  = sympy.Array(self.F0.sym)
+        F1  = sympy.Array(self.F1.sym)
+        PF0  = sympy.Array(self.PF0.sym)
 
         # JIT compilation needs immutable, matrix input (not arrays)
         self._u_F0 = sympy.ImmutableDenseMatrix(F0)
@@ -3336,7 +3401,7 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
             print(f"Stokes: Jacobians complete, now compile", flush=True)
 
         prim_field_list = [self.u, self.p]
-        self.compiled_extensions, self.ext_dict = getext(self.mesh,
+        _getext_result = getext(self.mesh,
                                        tuple(fns_residual),
                                        tuple(fns_jacobian),
                                        [x.fn for x in self.essential_bcs],
@@ -3347,7 +3412,9 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
                                        debug=debug,
                                        debug_name=debug_name,
                                        cache=False)
-
+        self.compiled_extensions = _getext_result.ptrobj
+        self.ext_dict = _getext_result.fn_dicts
+        self.constants_manifest = _getext_result.constants_manifest
 
         self.is_setup = False
 
@@ -3647,6 +3714,8 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
         # self.dm.setUp()
         # self.dm.ds.setUp()
 
+        # Set constants on DS before copying to coarse levels
+        self._set_constants_on_ds(ds)
 
         # Rebuild this lot
 
@@ -3761,6 +3830,9 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
 
         self.mesh.update_lvec()
         self.dm.setAuxiliaryVec(self.mesh.lvec, None)
+
+        # Update constants (e.g. changed material params) before solve
+        self._update_constants()
 
         gvec = self.dm.getGlobalVec()
         gvec.setArray(0.0)
