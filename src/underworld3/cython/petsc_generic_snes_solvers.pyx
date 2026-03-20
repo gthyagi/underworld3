@@ -1784,7 +1784,8 @@ class SNES_Scalar(SolverBaseClass):
               _force_setup:    bool =False,
               verbose:         bool=False,
               debug:           bool=False,
-              debug_name:      str=None ):
+              debug_name:      str=None,
+              time=None, ):
         """
         Solve the system of equations.
 
@@ -1807,6 +1808,11 @@ class SNES_Scalar(SolverBaseClass):
             Enable debug output including intermediate residuals.
         debug_name : str, optional
             Name prefix for debug output files.
+        time : float or Quantity, optional
+            Physical time for this solve. Passed as ``petsc_t`` to all
+            pointwise functions. Expressions using ``mesh.t`` evaluate at
+            this time. Non-dimensionalised when scaling is active.
+            Default: None (petsc_t unchanged).
 
         Returns
         -------
@@ -1843,6 +1849,16 @@ class SNES_Scalar(SolverBaseClass):
             self.is_setup = False
 
         self._build(verbose, debug, debug_name)
+
+        # Set time on the DM so petsc_t is available in pointwise functions
+        cdef DM _time_dm
+        if time is not None:
+            if hasattr(time, 'magnitude') or hasattr(time, '_pint_qty'):
+                t_nd = float(uw.non_dimensionalise(time))
+            else:
+                t_nd = float(time)
+            _time_dm = self.dm
+            UW_DMSetTime(_time_dm.dm, t_nd)
 
         gvec = self.dm.getGlobalVec()
 
@@ -4153,7 +4169,8 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
               verbose=False,
               debug=False,
               debug_name=None,
-              _force_setup: bool =False, ):
+              _force_setup: bool =False,
+              time=None, ):
         """
         Solve the Stokes system for velocity and pressure.
 
@@ -4180,6 +4197,11 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
             Name prefix for debug output files.
         _force_setup : bool, default=False
             Force rebuild of the solver even if already set up.
+        time : float or Quantity, optional
+            Physical time for this solve. Passed as ``petsc_t`` to all
+            pointwise residual and Jacobian functions. Expressions using
+            ``mesh.t`` will evaluate at this time. Non-dimensionalised
+            automatically when scaling is active. Default: None (petsc_t=0).
 
         Returns
         -------
@@ -4220,6 +4242,17 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
             self.is_setup = False
 
         self._build(verbose, debug, debug_name)
+
+        # Set time on the DM so petsc_t is available in pointwise functions.
+        # Non-dimensionalise if the scaling system is active.
+        cdef DM _time_dm_stokes
+        if time is not None:
+            if hasattr(time, 'magnitude') or hasattr(time, '_pint_qty'):
+                t_nd = float(uw.non_dimensionalise(time))
+            else:
+                t_nd = float(time)
+            _time_dm_stokes = self.dm
+            UW_DMSetTime(_time_dm_stokes.dm, t_nd)
 
         # Keep a record of these set-up parameters
         tolerance = self.tolerance

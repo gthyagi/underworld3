@@ -129,6 +129,21 @@ PetscErrorCode UW_PetscDSViewBdWF(PetscDS ds, PetscInt bd)
     return 1;
 }
 
+// Set the time value on a DM. This is passed as `petsc_t` to all
+// pointwise residual and Jacobian functions during assembly.
+// PETSc stores this internally but petsc4py doesn't expose it.
+PetscErrorCode UW_DMSetTime(DM dm, PetscReal time)
+{
+    // DMSetOutputSequenceNumber stores (step, time) on the DM.
+    // The time component is what DMPlexComputeResidual_Internal
+    // passes as petsc_t to the pointwise functions.
+    PetscInt step;
+    PetscReal old_time;
+    PetscCall(DMGetOutputSequenceNumber(dm, &step, &old_time));
+    PetscCall(DMSetOutputSequenceNumber(dm, step, time));
+    return PETSC_SUCCESS;
+}
+
 PetscErrorCode UW_DMPlexSetSNESLocalFEM(DM dm, PetscBool flag, void *ctx)
 {
 

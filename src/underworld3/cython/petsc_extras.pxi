@@ -42,6 +42,7 @@ cdef extern from "petsc_compat.h":
     PetscErrorCode UW_PetscDSSetBdTerms   (PetscDS, PetscDMLabel, PetscInt, PetscInt, PetscInt, PetscInt, PetscInt, void*, void*, void*, void*, void*, void* )
     PetscErrorCode UW_PetscDSViewWF(PetscDS)     
     PetscErrorCode UW_PetscDSViewBdWF(PetscDS, PetscInt)
+    PetscErrorCode UW_DMSetTime( PetscDM, PetscReal )
     PetscErrorCode UW_DMPlexSetSNESLocalFEM( PetscDM, PetscBool, void *)
     PetscErrorCode UW_DMPlexComputeBdIntegral( PetscDM, PetscVec, PetscDMLabel, PetscInt, const PetscInt*, void*, PetscScalar*, void*)
 
