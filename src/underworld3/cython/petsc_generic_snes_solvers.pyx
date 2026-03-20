@@ -454,7 +454,7 @@ class SolverBaseClass(uw_object):
         # to let the rest of the machinery work.
 
         if len(self.natural_bcs) > 0:
-            if not "Null_Boundary" in self.natural_bcs:
+            if not any(bc.boundary == "Null_Boundary" for bc in self.natural_bcs):
                 bc = (0,)*self.Unknowns.u.shape[1]
                 self.add_natural_bc(bc, "Null_Boundary")
 
