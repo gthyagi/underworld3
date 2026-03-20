@@ -38,6 +38,11 @@ Dynamic remeshing and adaptive refinement strategies.
 
 **[→ Mesh Adaptation](mesh-adaptation.md)**
 
+### Porous Media Flow
+Darcy flow, Richards equation, and variably-saturated groundwater modelling.
+
+**[→ Porous Media Flow](porous-flow.md)**
+
 ### Troubleshooting
 Common issues, debugging strategies, and solutions.
 
@@ -72,6 +77,7 @@ complex-rheologies
 custom-meshes
 curved-boundary-conditions
 mesh-adaptation
+porous-flow
 troubleshooting
 api-patterns
 SWARM-INTEGRATION-STATISTICS
