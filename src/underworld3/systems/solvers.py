@@ -2698,6 +2698,7 @@ class SNES_NavierStokes(SNES_Stokes_SaddlePt):
         rho: Optional[float] = 0.0,
         restore_points_func: Callable = None,
         order: Optional[int] = 2,
+        flux_order: Optional[int] = None,
         p_continuous: Optional[bool] = False,
         verbose: Optional[bool] = False,
         DuDt: Union[SemiLagrangian_DDt, Lagrangian_DDt] = None,
@@ -2723,6 +2724,7 @@ class SNES_NavierStokes(SNES_Stokes_SaddlePt):
         self._first_solve = True
 
         self._order = order
+        self._flux_order = flux_order  # None means follow effective_order
         self._penalty = expression(R"{\uplambda}", 0, "Incompressibility Penalty")
 
         self.restore_points_to_domain_func = restore_points_func
@@ -3012,6 +3014,12 @@ class SNES_NavierStokes(SNES_Stokes_SaddlePt):
         # Update SemiLagrange Flux terms
         self.DuDt.update_pre_solve(timestep, verbose=verbose, evalf=_evalf)
         self.DFDt.update_pre_solve(timestep, verbose=verbose, evalf=_evalf)
+
+        # Override AM coefficients if flux_order is explicitly set
+        if self._flux_order is not None:
+            from underworld3.systems.ddt import _update_am_values
+            fo = min(self._flux_order, self.DFDt.effective_order)
+            _update_am_values(self.DFDt._am_coeffs, fo, 0.5)
 
         if uw.mpi.rank == 0 and verbose:
             print(f"NS solver - solve Stokes flow", flush=True)
