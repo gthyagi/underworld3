@@ -33,6 +33,197 @@ from collections import namedtuple
 _ext_dict = {}
 
 
+# ============================================================================
+# JIT Constants Support
+# ============================================================================
+#
+# UWexpressions that are "constant" (no spatial/field dependencies) are routed
+# through PETSc's constants[] array instead of being baked as C literals.
+# This allows parameter changes without JIT recompilation.
+# ============================================================================
+
+class _JITConstant(sympy.Symbol):
+    """Symbol subclass that renders as constants[i] in generated C code.
+
+    Used by the JIT compiler to route constant UWexpressions through
+    PETSc's PetscDSSetConstants() mechanism instead of baking values
+    as C literals.
+    """
+
+    def __new__(cls, index, name=None):
+        if name is None:
+            name = f"_jit_const_{index}"
+        obj = super().__new__(cls, name)
+        obj._const_index = index
+        obj._ccodestr = f"constants[{index}]"
+        return obj
+
+    def _ccode(self, printer):
+        return self._ccodestr
+
+
+def _extract_constants(all_fns, mesh):
+    """Extract constant UWexpressions from a list of pre-unwrap functions.
+
+    Scans all expressions for UWexpression atoms where is_constant_expr()
+    is True (no spatial/field dependencies). Assigns deterministic indices
+    sorted by expression name for MPI consistency.
+
+    Parameters
+    ----------
+    all_fns : tuple of sympy expressions
+        The raw (pre-unwrap) function list.
+    mesh : underworld3.discretisation.Mesh
+        The mesh (currently unused, reserved for future mesh.t support).
+
+    Returns
+    -------
+    list of (int, UWexpression)
+        Ordered mapping from constants[] index to UWexpression reference.
+    dict
+        Mapping from UWexpression to _JITConstant symbol for substitution.
+    """
+    from underworld3.function.expressions import (
+        is_constant_expr,
+        extract_expressions,
+        UWexpression,
+    )
+
+    constant_exprs = set()
+
+    for fn in all_fns:
+        if fn is None:
+            continue
+
+        # Handle Matrix expressions
+        if isinstance(fn, sympy.MatrixBase):
+            for elem in fn:
+                _collect_constant_atoms(elem, constant_exprs, is_constant_expr, UWexpression)
+        else:
+            _collect_constant_atoms(fn, constant_exprs, is_constant_expr, UWexpression)
+
+    if not constant_exprs:
+        return [], {}
+
+    # Sort by name for deterministic MPI-consistent ordering
+    sorted_constants = sorted(constant_exprs, key=lambda e: str(e))
+
+    manifest = []
+    subs_map = {}
+    for i, expr in enumerate(sorted_constants):
+        jit_const = _JITConstant(i, name=f"_jit_const_{str(expr)}")
+        manifest.append((i, expr))
+        subs_map[expr] = jit_const
+
+    return manifest, subs_map
+
+
+def _is_truly_constant(expr, UWexpression):
+    """Check if a UWexpression resolves to a pure constant (no spatial deps).
+
+    Unlike is_constant_expr(), this handles nested UWexpressions correctly
+    by fully unwrapping and checking if the result has any spatial/field
+    symbols (BaseScalar, UnderworldFunction, etc.).
+    """
+    try:
+        unwrapped = underworld3.function.expressions.unwrap_expression(
+            expr, mode='nondimensional'
+        )
+    except Exception:
+        return False
+
+    # If it unwraps to a plain number, it's constant
+    if isinstance(unwrapped, (int, float)):
+        return True
+    if isinstance(unwrapped, sympy.Number):
+        return True
+
+    if not hasattr(unwrapped, 'free_symbols'):
+        try:
+            float(unwrapped)
+            return True
+        except (TypeError, ValueError):
+            return False
+
+    # Check remaining free symbols — any spatial/field dependency makes it non-constant
+    from sympy.vector.scalar import BaseScalar
+    for sym in unwrapped.free_symbols:
+        if isinstance(sym, BaseScalar):
+            return False
+        if isinstance(sym, sympy.Function):
+            return False
+        # UnderworldFunction symbols have _ccodestr pointing to petsc arrays
+        if hasattr(sym, '_ccodestr') and not isinstance(sym, _JITConstant):
+            ccode = sym._ccodestr
+            if 'petsc_u' in ccode or 'petsc_a' in ccode or 'petsc_x' in ccode or 'petsc_n' in ccode:
+                return False
+        # Other UWexpressions that didn't fully unwrap — not constant
+        if isinstance(sym, UWexpression):
+            return False
+
+    return True
+
+
+def _collect_constant_atoms(expr, result_set, is_constant_expr, UWexpression):
+    """Recursively collect constant UWexpression atoms from an expression."""
+
+    if isinstance(expr, UWexpression):
+        if _is_truly_constant(expr, UWexpression):
+            result_set.add(expr)
+            return  # Don't recurse into constant expressions
+        # Non-constant UWexpression: check its inner sym for nested constants
+        if hasattr(expr, '_sym') and expr._sym is not None:
+            _collect_constant_atoms(expr._sym, result_set, is_constant_expr, UWexpression)
+        return
+
+    if not hasattr(expr, 'atoms'):
+        return
+
+    # Check all UWexpression atoms
+    for atom in expr.atoms(sympy.Symbol):
+        if isinstance(atom, UWexpression) and _is_truly_constant(atom, UWexpression):
+            result_set.add(atom)
+        elif isinstance(atom, UWexpression):
+            # Non-constant UWexpression: recurse into its sym
+            if hasattr(atom, '_sym') and atom._sym is not None:
+                _collect_constant_atoms(atom._sym, result_set, is_constant_expr, UWexpression)
+
+
+def _pack_constants(manifest):
+    """Pack current values from a constants manifest into a flat array.
+
+    Parameters
+    ----------
+    manifest : list of (int, UWexpression)
+        The constants manifest from _extract_constants().
+
+    Returns
+    -------
+    list of float
+        Current nondimensional values in index order.
+    """
+    import numpy as np
+
+    if not manifest:
+        return np.array([], dtype=np.float64)
+
+    values = np.zeros(len(manifest), dtype=np.float64)
+    for idx, uw_expr in manifest:
+        try:
+            values[idx] = float(
+                underworld3.function.expressions.unwrap_expression(
+                    uw_expr, mode='nondimensional'
+                )
+            )
+        except (TypeError, ValueError):
+            # Fallback: try .data property
+            try:
+                values[idx] = float(uw_expr.data)
+            except Exception:
+                values[idx] = 0.0
+    return values
+
+
 # Generates the C debugging string for the compiled function block
 def debugging_text(randstr, fn, fn_type, eqn_no):
     try:
@@ -78,6 +269,9 @@ def debugging_text_bd(randstr, fn, fn_type, eqn_no):
     return debug_str
 
 
+_GextResult = namedtuple("GextResult", ["ptrobj", "fn_dicts", "constants_manifest"])
+
+
 @timing.routine_timer_decorator
 def getext(
     mesh,
@@ -95,6 +289,13 @@ def getext(
     """
     Check if we've already created an equivalent extension
     and use if available.
+
+    Returns
+    -------
+    GextResult
+        Named tuple with fields (ptrobj, fn_dicts, constants_manifest).
+        constants_manifest is a list of (index, uw_expression_ref) tuples
+        for use with PetscDSSetConstants().
     """
     import time
 
@@ -108,14 +309,26 @@ def getext(
         + tuple(fns_bd_jacobian)
     )
 
-    ## Expand all functions to ensure that changes in constants are recognised
-    ## in the caching process.
+    # Extract constant UWexpressions that will go through constants[] array
+    constants_manifest, constants_subs_map = _extract_constants(raw_fns, mesh)
 
+    # Build structurally-expanded functions for cache hashing.
+    # Constants are replaced with placeholder symbols (value-independent),
+    # so changing a constant value won't cause a cache miss.
     expanded_fns = []
-
     for fn in raw_fns:
+        # Phase 1: Substitute constants with _JITConstant placeholders
+        if constants_subs_map and fn is not None:
+            try:
+                fn_structural = fn.xreplace(constants_subs_map) if hasattr(fn, 'xreplace') else fn
+            except Exception:
+                fn_structural = fn
+        else:
+            fn_structural = fn
+
+        # Phase 2: Unwrap remaining (non-constant) expressions
         expanded_fns.append(
-            underworld3.function.expressions.unwrap(fn, keep_constants=False, return_self=False)
+            underworld3.function.expressions.unwrap(fn_structural, keep_constants=False, return_self=False)
         )
 
     fns = tuple(expanded_fns)
@@ -124,12 +337,12 @@ def getext(
         print(f"Expanded functions for compilation:")
         for i, fn in enumerate(fns):
             print(f"{i}: {fn}")
+        if constants_manifest:
+            print(f"Constants manifest ({len(constants_manifest)} entries):")
+            for idx, expr in constants_manifest:
+                print(f"  constants[{idx}] = {expr} (current value: {expr.data})")
 
     import os
-
-    # if verbose and uw.mpi.rank == 0:
-    #     for i, fn in enumerate(fns):
-    #         print(f"JIT: [{i:3d}] -> {fn}", flush=True)
 
     if debug_name is not None:
         jitname = debug_name
@@ -140,7 +353,7 @@ def getext(
         # unique modules.
         jitname += "_" + str(len(_ext_dict.keys()))
 
-    else:  # Else name from fns hash
+    else:  # Else name from fns hash — uses structural form (constants as placeholders)
         jitname = abs(hash((mesh, fns, tuple(mesh.vars.keys()))))
 
     # Create the module if not in dictionary
@@ -154,6 +367,7 @@ def getext(
             fns_bd_residual,
             fns_bd_jacobian,
             primary_field_list,
+            constants_subs_map=constants_subs_map,
             verbose=verbose,
             debug=debug,
             debug_name=debug_name,
@@ -162,13 +376,8 @@ def getext(
         if verbose and underworld3.mpi.rank == 0:
             print(f"JIT compiled module cached ... {jitname} ", flush=True)
 
-    ## TODO: Return a dictionary to recover the function pointers from the compiled
-    ## functions. Note, keep these by category as the same sympy function has
-    ## different compiled form depending on the function signature
-
     module = _ext_dict[jitname]
     ptrobj = module.getptrobj()
-    # print(f"jit time {time.time()-time_s}", flush=True)
 
     i_res = {}
     for index, fn in enumerate(fns_residual):
@@ -197,7 +406,7 @@ def getext(
 
     extensions_functions_dicts = extn_fn_dict(i_res, i_jac, i_ebc, i_bd_res, i_bd_jac)
 
-    return ptrobj, extensions_functions_dicts
+    return _GextResult(ptrobj, extensions_functions_dicts, constants_manifest)
 
 
 @timing.routine_timer_decorator
@@ -210,6 +419,7 @@ def _createext(
     fns_bd_residual: List[sympy.Basic],
     fns_bd_jacobian: List[sympy.Basic],
     primary_field_list: List[underworld3.discretisation.MeshVariable],
+    constants_subs_map: Optional[dict] = None,
     verbose: Optional[bool] = False,
     debug: Optional[bool] = False,
     debug_name=None,
@@ -432,6 +642,16 @@ def _createext(
         # Save original for debugging
         fn_original = fn
 
+        # Two-phase unwrap:
+        # Phase 1: Substitute constant UWexpressions with _JITConstant symbols
+        #          These survive into C code as constants[i]
+        if constants_subs_map and fn is not None:
+            try:
+                fn = fn.xreplace(constants_subs_map) if hasattr(fn, 'xreplace') else fn
+            except Exception:
+                pass
+
+        # Phase 2: Unwrap remaining non-constant UWexpressions to numerical values
         fn = underworld3.function.expressions.unwrap(fn, keep_constants=False, return_self=False)
 
         if isinstance(fn, sympy.vector.Vector):

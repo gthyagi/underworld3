@@ -62,7 +62,7 @@ def test_getext_simple():
     bd_jac_fn = sympy.ImmutableDenseMatrix([sympy.sympify(1), sympy.sympify(2)])
 
     with uw.utilities.CaptureStdout(split=True) as captured_setup_solver:
-        compiled_extns, dictionaries = getext(
+        _getext_result = getext(
             mesh,
             [res_fn, res_fn],
             [jac_fn],
@@ -107,7 +107,7 @@ def test_getext_sympy_fns():
     )
 
     with uw.utilities.CaptureStdout(split=True) as captured_setup_solver:
-        compiled_extns, dictionaries = getext(
+        _getext_result = getext(
             mesh,
             [res_fn, res_fn],
             [jac_fn],
@@ -161,7 +161,7 @@ def test_getext_meshVar():
     )
 
     with uw.utilities.CaptureStdout(split=True) as captured_setup_solver:
-        compiled_extns, dictionaries = getext(
+        _getext_result = getext(
             mesh,
             [res_fn, res_fn],
             [jac_fn],
