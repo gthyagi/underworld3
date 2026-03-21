@@ -173,6 +173,43 @@ run_build() {
         exit 1
     }
 
+    # Verify Python source files were actually installed.
+    # pip's wheel cache can silently serve stale .py files even with
+    # --no-cache-dir (version 0.0.0 problem). Compare checksums of key
+    # source files against the installed copies and warn if they differ.
+    local site_packages=$($PIXI run -e "$env" python -c \
+        "import underworld3, pathlib; print(pathlib.Path(underworld3.__file__).parent)" 2>/dev/null)
+
+    if [ -n "$site_packages" ] && [ -d "$site_packages" ]; then
+        local stale_files=()
+        # Check .py files under src/underworld3/ against installed copies
+        while IFS= read -r src_file; do
+            local rel_path="${src_file#src/underworld3/}"
+            local inst_file="$site_packages/$rel_path"
+            if [ -f "$inst_file" ]; then
+                local src_hash=$(shasum -a 256 "$src_file" | cut -d' ' -f1)
+                local inst_hash=$(shasum -a 256 "$inst_file" | cut -d' ' -f1)
+                if [ "$src_hash" != "$inst_hash" ]; then
+                    stale_files+=("$rel_path")
+                fi
+            fi
+        done < <(find src/underworld3 -name '*.py' -not -path '*/__pycache__/*' 2>/dev/null)
+
+        if [ ${#stale_files[@]} -gt 0 ]; then
+            echo ""
+            echo -e "${YELLOW}${BOLD}WARNING: ${#stale_files[@]} source file(s) differ from installed copies:${NC}"
+            for f in "${stale_files[@]}"; do
+                echo -e "  ${YELLOW}STALE: $f${NC}"
+            done
+            echo ""
+            echo "  Fixing: copying source files to installed location..."
+            for f in "${stale_files[@]}"; do
+                cp "src/underworld3/$f" "$site_packages/$f"
+            done
+            echo -e "  ${GREEN}✓${NC} ${#stale_files[@]} file(s) updated"
+        fi
+    fi
+
     echo ""
     echo -e "${GREEN}${BOLD}Build complete!${NC}"
     echo ""
