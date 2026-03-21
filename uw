@@ -8,6 +8,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_FILE="$SCRIPT_DIR/.pixi-env"
 PETSC_CUSTOM="$SCRIPT_DIR/petsc-custom/petsc"
 
+# Ensure pixi resolves to THIS repo/worktree, not a parent env
+export PIXI_PROJECT_MANIFEST="$SCRIPT_DIR/pixi.toml"
+
 # Colors (if terminal supports it)
 if [ -t 1 ]; then
     GREEN='\033[0;32m'
