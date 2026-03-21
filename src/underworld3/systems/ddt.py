@@ -197,6 +197,112 @@ def _bdf_coefficients(order, dt_current, dt_history):
         ]
 
 
+# ============================================================================
+# BDF/AM Coefficient Expressions
+# ============================================================================
+#
+# These helpers create UWexpression coefficient objects and build fixed-structure
+# symbolic expressions for bdf() and adams_moulton_flux(). The coefficients are
+# routed through PETSc's constants[] array by the JIT compiler, so changing
+# effective_order or variable dt only requires PetscDSSetConstants() — no
+# recompilation.
+# ============================================================================
+
+from underworld3.function.expressions import UWexpression as _UWexpression
+
+
+def _create_coefficients(order, prefix, instance_id):
+    """Create UWexpression objects for BDF or AM coefficients.
+
+    Parameters
+    ----------
+    order : int
+        Maximum order (number of history terms). Creates order+1 coefficients.
+    prefix : str
+        LaTeX prefix for display (e.g. "c^{BDF}" or "a^{AM}").
+    instance_id : int
+        Unique ID to disambiguate coefficients from different DDt instances.
+
+    Returns
+    -------
+    list of UWexpression
+        Coefficient expressions initialised to 0.0.
+    """
+    coeffs = []
+    for i in range(order + 1):
+        c = _UWexpression(
+            rf"{prefix}_{{{i},{instance_id}}}",
+            sym=0.0,
+            description=f"{prefix} coefficient {i} (DDt instance {instance_id})",
+            _unique_name_generation=True,
+        )
+        coeffs.append(c)
+    return coeffs
+
+
+def _update_bdf_values(coeffs, effective_order, dt, dt_history):
+    """Update BDF coefficient UWexpression values for current state.
+
+    Sets active coefficients from _bdf_coefficients() and zeroes the rest.
+    """
+    values = _bdf_coefficients(effective_order, dt, dt_history)
+    for i, v in enumerate(values):
+        coeffs[i].sym = float(v)
+    for i in range(len(values), len(coeffs)):
+        coeffs[i].sym = 0.0
+
+
+def _update_am_values(coeffs, effective_order, theta=0.5):
+    """Update Adams-Moulton coefficient UWexpression values for current state.
+
+    AM coefficients for each order (constant-dt formulas):
+    - Order 0: [1]
+    - Order 1: [theta, 1-theta]
+    - Order 2: [5/12, 8/12, -1/12]
+    - Order 3: [9/24, 19/24, -5/24, 1/24]
+    """
+    if effective_order <= 0:
+        values = [1.0]
+    elif effective_order == 1:
+        values = [float(theta), 1.0 - float(theta)]
+    elif effective_order == 2:
+        values = [5.0 / 12, 8.0 / 12, -1.0 / 12]
+    elif effective_order >= 3:
+        values = [9.0 / 24, 19.0 / 24, -5.0 / 24, 1.0 / 24]
+
+    for i, v in enumerate(values):
+        coeffs[i].sym = v
+    for i in range(len(values), len(coeffs)):
+        coeffs[i].sym = 0.0
+
+
+def _build_weighted_sum(coeffs, psi_fn, psi_star_syms):
+    """Build a fixed-structure weighted sum: c0*psi + c1*psi_star[0] + ...
+
+    The symbolic structure includes all terms up to len(coeffs)-1.
+    Inactive terms have coefficient=0 and vanish numerically.
+
+    Parameters
+    ----------
+    coeffs : list of UWexpression
+        Coefficient expressions (length = order + 1).
+    psi_fn : sympy expression
+        Current-time field expression.
+    psi_star_syms : list of sympy expressions
+        History term symbolic expressions (psi_star[i].sym or psi_star[i]).
+
+    Returns
+    -------
+    sympy expression
+        The weighted sum.
+    """
+    result = coeffs[0] * psi_fn
+    for i in range(len(psi_star_syms)):
+        if i + 1 < len(coeffs):
+            result = result + coeffs[i + 1] * psi_star_syms[i]
+    return result
+
+
 class Symbolic(uw_object):
     r"""
     Symbolic history manager for time derivative approximations.
@@ -294,6 +400,14 @@ class Symbolic(uw_object):
 
         # Create the history list: each element is a Matrix of shape _shape.
         self.psi_star = [sympy.zeros(*self._shape) for _ in range(order)]
+
+        # BDF/AM coefficient UWexpressions — routed through PetscDS constants[]
+        self._bdf_coeffs = _create_coefficients(order, r"c^{\mathrm{BDF}}", self.instance_number)
+        self._am_coeffs = _create_coefficients(order, r"a^{\mathrm{AM}}", self.instance_number)
+        # Initialise to order-1 values
+        _update_bdf_values(self._bdf_coeffs, 1, None, [])
+        _update_am_values(self._am_coeffs, 1, self.theta)
+
         return
 
     @property
@@ -377,6 +491,10 @@ class Symbolic(uw_object):
         if not self._history_initialised:
             self.initialise_history()
 
+        # Update coefficient values for current effective_order and dt
+        _update_bdf_values(self._bdf_coeffs, self.effective_order, self._dt, self._dt_history)
+        _update_am_values(self._am_coeffs, self.effective_order, self.theta)
+
         return
 
     def update_post_solve(
@@ -407,74 +525,33 @@ class Symbolic(uw_object):
         return
 
     def bdf(self, order: Optional[int] = None):
-        r"""Compute the backward differentiation approximation of the time-derivative of ψ.
-        For order 1: bdf ≡ ψ - psi_star[0]
+        r"""Backward differentiation approximation of the time-derivative of ψ.
 
-        When ``order`` is not specified, uses ``effective_order`` which
-        ramps up from 1 during startup to avoid using higher-order BDF
-        coefficients before distinct history values are available.
-
-        For order > 1 with variable timesteps, the BDF coefficients are
-        adjusted using the ratio of consecutive timesteps (see
-        ``_bdf_coefficients``).
-        """
-        if order is None:
-            order = self.effective_order
-        else:
-            order = max(1, min(self.effective_order, order))
-
-        coeffs = _bdf_coefficients(order, self._dt, self._dt_history)
-
-        # Build BDF sum: c0 * psi + c1 * psi_star[0] + c2 * psi_star[1] + ...
-        with sympy.core.evaluate(False):
-            bdf0 = coeffs[0] * self.psi_fn
-            for i in range(1, len(coeffs)):
-                bdf0 = bdf0 + coeffs[i] * self.psi_star[i - 1]
-
-        return bdf0
-
-    def adams_moulton_flux(self, order: Optional[int] = None):
-        r"""Adams-Moulton flux approximation for implicit time integration.
-
-        When ``order`` is not specified, uses ``effective_order`` which
-        ramps up from 1 during startup.
+        Returns a fixed-structure symbolic expression using UWexpression
+        coefficients. The coefficient values are updated each step in
+        ``update_pre_solve`` — no JIT recompilation needed when the
+        order ramps up or the timestep changes.
 
         Parameters
         ----------
         order : int, optional
-            Order of the approximation (1-3). Defaults to ``effective_order``.
-
-        Returns
-        -------
-        sympy.Matrix
-            Weighted average of :math:`\psi` and history terms.
-
-        Notes
-        -----
-        The Adams-Moulton formulas for order 1-3 are:
-
-        - Order 1: :math:`\theta \psi + (1-\theta) \psi^*`
-        - Order 2: :math:`\frac{5\psi + 8\psi^* - \psi^{**}}{12}`
-        - Order 3: :math:`\frac{9\psi + 19\psi^* - 5\psi^{**} + \psi^{***}}{24}`
+            Ignored (kept for API compatibility). The effective order is
+            controlled by the coefficient values.
         """
-        if order is None:
-            order = self.effective_order
-        else:
-            order = max(1, min(self.effective_order, order))
+        return _build_weighted_sum(self._bdf_coeffs, self.psi_fn, self.psi_star)
 
-        with sympy.core.evaluate(False):
-            if order == 1:
-                am = self.theta * self.psi_fn + (1.0 - self.theta) * self.psi_star[0]
-            elif order == 2:
-                am = (5 * self.psi_fn + 8 * self.psi_star[0] - self.psi_star[1]) / 12
-            elif order == 3:
-                am = (
-                    9 * self.psi_fn
-                    + 19 * self.psi_star[0]
-                    - 5 * self.psi_star[1]
-                    + self.psi_star[2]
-                ) / 24
-        return am
+    def adams_moulton_flux(self, order: Optional[int] = None):
+        r"""Adams-Moulton flux approximation for implicit time integration.
+
+        Returns a fixed-structure symbolic expression using UWexpression
+        coefficients. Values are updated each step in ``update_pre_solve``.
+
+        Parameters
+        ----------
+        order : int, optional
+            Ignored (kept for API compatibility).
+        """
+        return _build_weighted_sum(self._am_coeffs, self.psi_fn, self.psi_star)
 
 
 class Eulerian(uw_object):
@@ -613,6 +690,13 @@ class Eulerian(uw_object):
                 )
             )
 
+        # BDF/AM coefficient UWexpressions — routed through PetscDS constants[]
+        self._bdf_coeffs = _create_coefficients(order, r"c^{\mathrm{BDF}}", self.instance_number)
+        self._am_coeffs = _create_coefficients(order, r"a^{\mathrm{AM}}", self.instance_number)
+        # Initialise to order-1 values
+        _update_bdf_values(self._bdf_coeffs, 1, None, [])
+        _update_am_values(self._am_coeffs, 1, self.theta)
+
         return
 
     @property
@@ -747,6 +831,10 @@ class Eulerian(uw_object):
         if not self._history_initialised:
             self.initialise_history()
 
+        # Update coefficient values for current effective_order and dt
+        _update_bdf_values(self._bdf_coeffs, self.effective_order, self._dt, self._dt_history)
+        _update_am_values(self._am_coeffs, self.effective_order, self.theta)
+
         if self.V_fn is not None and dt is not None:
             coords = self.psi_star[0].coords
             dim = self.mesh.dim
@@ -803,80 +891,30 @@ class Eulerian(uw_object):
         return
 
     def bdf(self, order=None):
-        r"""Backwards differentiation form for calculating DuDt.
+        r"""Backward differentiation approximation of the time-derivative of :math:`\psi`.
 
-        Note that you will need ``bdf`` / :math:`\delta t` in computing derivatives.
-
-        When ``order`` is not specified, uses ``effective_order`` which
-        ramps up from 1 during startup to avoid using higher-order BDF
-        coefficients before distinct history values are available.
-
-        For order > 1 with variable timesteps, the BDF coefficients are
-        adjusted using the ratio of consecutive timesteps (see
-        ``_bdf_coefficients``).
-        """
-
-        if order is None:
-            order = self.effective_order
-        else:
-            order = max(1, min(self.effective_order, order))
-
-        coeffs = _bdf_coefficients(order, self._dt, self._dt_history)
-
-        # Build BDF sum: c0 * psi + c1 * psi_star[0].sym + ...
-        with sympy.core.evaluate(False):
-            bdf0 = coeffs[0] * self.psi_fn
-            for i in range(1, len(coeffs)):
-                bdf0 = bdf0 + coeffs[i] * self.psi_star[i - 1].sym
-
-        return bdf0
-
-    def adams_moulton_flux(self, order=None):
-        r"""Adams-Moulton flux approximation for implicit time integration.
-
-        When ``order`` is not specified, uses ``effective_order`` which
-        ramps up from 1 during startup.
+        Returns a fixed-structure symbolic expression using UWexpression
+        coefficients. Values are updated each step in ``update_pre_solve``.
 
         Parameters
         ----------
         order : int, optional
-            Order of the approximation (0-3). Defaults to ``effective_order``.
-
-        Returns
-        -------
-        sympy.Basic
-            Weighted average of :math:`\psi` and history terms.
-
-        .. warning::
-            For order > 1, the coefficients assume uniform timestep spacing.
-            Variable Δt with order > 1 requires modified coefficients.
-            Use order=1 when timestep varies significantly.
+            Ignored (kept for API compatibility).
         """
-        if order is None:
-            order = self.effective_order
-        else:
-            order = max(0, min(self.effective_order, order))
+        return _build_weighted_sum(self._bdf_coeffs, self.psi_fn, [ps.sym for ps in self.psi_star])
 
-        with sympy.core.evaluate(False):
+    def adams_moulton_flux(self, order=None):
+        r"""Adams-Moulton flux approximation for implicit time integration.
 
-            if order == 0:
-                am = self.psi_fn
+        Returns a fixed-structure symbolic expression using UWexpression
+        coefficients. Values are updated each step in ``update_pre_solve``.
 
-            elif order == 1:
-                am = self.theta * self.psi_fn + (1.0 - self.theta) * self.psi_star[0].sym
-
-            elif order == 2:
-                am = (5 * self.psi_fn + 8 * self.psi_star[0].sym - self.psi_star[1].sym) / 12
-
-            elif order == 3:
-                am = (
-                    9 * self.psi_fn
-                    + 19 * self.psi_star[0].sym
-                    - 5 * self.psi_star[1].sym
-                    + self.psi_star[2].sym
-                ) / 24
-
-        return am
+        Parameters
+        ----------
+        order : int, optional
+            Ignored (kept for API compatibility).
+        """
+        return _build_weighted_sum(self._am_coeffs, self.psi_fn, [ps.sym for ps in self.psi_star])
 
 
 class SemiLagrangian(uw_object):
@@ -1027,6 +1065,13 @@ class SemiLagrangian(uw_object):
                     units=psi_units,  # Inherit units from psi_fn (or None if model has no units)
                 )
             )
+
+        # BDF/AM coefficient UWexpressions — routed through PetscDS constants[]
+        self._bdf_coeffs = _create_coefficients(order, r"c^{\mathrm{BDF}}", self.instance_number)
+        self._am_coeffs = _create_coefficients(order, r"a^{\mathrm{AM}}", self.instance_number)
+        # Initialise to order-1 values
+        _update_bdf_values(self._bdf_coeffs, 1, None, [])
+        _update_am_values(self._am_coeffs, 1, 0.5)
 
         # Working variable that has a potentially different discretisation from psi_star
         # We project from this to psi_star and we use this variable to define the
@@ -1199,8 +1244,14 @@ class SemiLagrangian(uw_object):
         current field values so that bdf() returns zero on the first step.
         """
 
+        self._dt = dt
+
         if not self._history_initialised:
             self.initialise_history()
+
+        # Update coefficient values for current effective_order and dt
+        _update_bdf_values(self._bdf_coeffs, self.effective_order, self._dt, self._dt_history)
+        _update_am_values(self._am_coeffs, self.effective_order, 0.5)
 
         ## Progress from the oldest part of the history
         # 1. Copy the stored values down the chain in preparation for the next timestep
@@ -1545,71 +1596,30 @@ class SemiLagrangian(uw_object):
         return
 
     def bdf(self, order=None):
-        r"""Backwards differentiation form for calculating DuDt.
+        r"""Backward differentiation approximation of the time-derivative of :math:`\psi`.
 
-        Note that you will need ``bdf`` / :math:`\delta t` in computing derivatives.
-
-        When ``order`` is not specified, uses ``effective_order`` which
-        ramps up from 1 during startup.  For order > 1 with variable
-        timesteps, coefficients are adjusted automatically.
-        """
-
-        if order is None:
-            order = self.effective_order
-        else:
-            order = max(1, min(self.effective_order, order))
-
-        coeffs = _bdf_coefficients(order, self._dt, self._dt_history)
-
-        # Build BDF sum: c0 * psi + c1 * psi_star[0].sym + ...
-        with sympy.core.evaluate(True):
-            bdf0 = coeffs[0] * self.psi_fn
-            for i in range(1, len(coeffs)):
-                bdf0 = bdf0 + coeffs[i] * self.psi_star[i - 1].sym
-
-        return bdf0
-
-    def adams_moulton_flux(self, order=None):
-        r"""Adams-Moulton flux approximation for implicit time integration.
-
-        When ``order`` is not specified, uses ``effective_order`` which
-        ramps up from 1 during startup.
+        Returns a fixed-structure symbolic expression using UWexpression
+        coefficients. Values are updated each step in ``update_pre_solve``.
 
         Parameters
         ----------
         order : int, optional
-            Order of the approximation (0-3). Defaults to ``effective_order``.
-
-        Returns
-        -------
-        sympy.Basic
-            Weighted average of :math:`\psi` and history terms.
+            Ignored (kept for API compatibility).
         """
-        if order is None:
-            order = self.effective_order
-        else:
-            order = max(0, min(self.effective_order, order))
+        return _build_weighted_sum(self._bdf_coeffs, self.psi_fn, [ps.sym for ps in self.psi_star])
 
-        with sympy.core.evaluate(True):
+    def adams_moulton_flux(self, order=None):
+        r"""Adams-Moulton flux approximation for implicit time integration.
 
-            if order == 0:
-                am = self.psi_fn
+        Returns a fixed-structure symbolic expression using UWexpression
+        coefficients. Values are updated each step in ``update_pre_solve``.
 
-            elif order == 1:
-                am = (self.psi_fn + self.psi_star[0].sym) / 2
-
-            elif order == 2:
-                am = (5 * self.psi_fn + 8 * self.psi_star[0].sym - self.psi_star[1].sym) / 12
-
-            elif order == 3:
-                am = (
-                    9 * self.psi_fn
-                    + 19 * self.psi_star[0].sym
-                    - 5 * self.psi_star[1].sym
-                    + self.psi_star[2].sym
-                ) / 24
-
-        return am
+        Parameters
+        ----------
+        order : int, optional
+            Ignored (kept for API compatibility).
+        """
+        return _build_weighted_sum(self._am_coeffs, self.psi_fn, [ps.sym for ps in self.psi_star])
 
 
 ## Consider Deprecating this one - it is the same as the Lagrangian_Swarm but
@@ -1734,6 +1744,13 @@ class Lagrangian(uw_object):
                 )
             )
 
+        # BDF/AM coefficient UWexpressions — routed through PetscDS constants[]
+        self._bdf_coeffs = _create_coefficients(order, r"c^{\mathrm{BDF}}", self.instance_number)
+        self._am_coeffs = _create_coefficients(order, r"a^{\mathrm{AM}}", self.instance_number)
+        # Initialise to order-1 values
+        _update_bdf_values(self._bdf_coeffs, 1, None, [])
+        _update_am_values(self._am_coeffs, 1, 0.5)
+
         dudt_swarm.populate(fill_param)
 
         return
@@ -1810,8 +1827,15 @@ class Lagrangian(uw_object):
         verbose: Optional[bool] = False,
     ):
         """Pre-solve: auto-initialise history on first call."""
+        self._dt = dt
+
         if not self._history_initialised:
             self.initialise_history()
+
+        # Update coefficient values for current effective_order and dt
+        _update_bdf_values(self._bdf_coeffs, self.effective_order, self._dt, self._dt_history)
+        _update_am_values(self._am_coeffs, self.effective_order, 0.5)
+
         return
 
     def update_post_solve(
@@ -1863,69 +1887,30 @@ class Lagrangian(uw_object):
             self._n_solves_completed += 1
 
     def bdf(self, order=None):
-        r"""Backwards differentiation form for calculating DuDt.
+        r"""Backward differentiation approximation of the time-derivative of :math:`\psi`.
 
-        Note that you will need ``bdf`` / :math:`\delta t` in computing derivatives.
-
-        When ``order`` is not specified, uses ``effective_order`` which
-        ramps up from 1 during startup.  For order > 1 with variable
-        timesteps, coefficients are adjusted automatically.
-        """
-
-        if order is None:
-            order = self.effective_order
-        else:
-            order = max(1, min(self.effective_order, order))
-
-        coeffs = _bdf_coefficients(order, self._dt, self._dt_history)
-
-        with sympy.core.evaluate(True):
-            bdf0 = coeffs[0] * self.psi_fn
-            for i in range(1, len(coeffs)):
-                bdf0 = bdf0 + coeffs[i] * self.psi_star[i - 1].sym
-
-        return bdf0
-
-    def adams_moulton_flux(self, order=None):
-        r"""Adams-Moulton flux approximation for implicit time integration.
-
-        When ``order`` is not specified, uses ``effective_order`` which
-        ramps up from 1 during startup.
+        Returns a fixed-structure symbolic expression using UWexpression
+        coefficients. Values are updated each step in ``update_pre_solve``.
 
         Parameters
         ----------
         order : int, optional
-            Order of the approximation (0-3). Defaults to ``effective_order``.
-
-        Returns
-        -------
-        sympy.Basic
-            Weighted average of :math:`\psi` and history terms.
+            Ignored (kept for API compatibility).
         """
-        if order is None:
-            order = self.effective_order
-        else:
-            order = max(1, min(self.effective_order, order))
+        return _build_weighted_sum(self._bdf_coeffs, self.psi_fn, [ps.sym for ps in self.psi_star])
 
-        with sympy.core.evaluate(True):
-            if order == 0:  # Special case - no history term
-                am = self.psi_fn
+    def adams_moulton_flux(self, order=None):
+        r"""Adams-Moulton flux approximation for implicit time integration.
 
-            elif order == 1:
-                am = (self.psi_fn + self.psi_star[0].sym) / 2
+        Returns a fixed-structure symbolic expression using UWexpression
+        coefficients. Values are updated each step in ``update_pre_solve``.
 
-            elif order == 2:
-                am = (5 * self.psi_fn + 8 * self.psi_star[0].sym - self.psi_star[1].sym) / 12
-
-            elif order == 3:
-                am = (
-                    9 * self.psi_fn
-                    + 19 * self.psi_star[0].sym
-                    - 5 * self.psi_star[1].sym
-                    + self.psi_star[2].sym
-                ) / 24
-
-        return am
+        Parameters
+        ----------
+        order : int, optional
+            Ignored (kept for API compatibility).
+        """
+        return _build_weighted_sum(self._am_coeffs, self.psi_fn, [ps.sym for ps in self.psi_star])
 
 
 class Lagrangian_Swarm(uw_object):
@@ -2055,6 +2040,13 @@ class Lagrangian_Swarm(uw_object):
                 )
             )
 
+        # BDF/AM coefficient UWexpressions — routed through PetscDS constants[]
+        self._bdf_coeffs = _create_coefficients(order, r"c^{\mathrm{BDF}}", self.instance_number)
+        self._am_coeffs = _create_coefficients(order, r"a^{\mathrm{AM}}", self.instance_number)
+        # Initialise to order-1 values
+        _update_bdf_values(self._bdf_coeffs, 1, None, [])
+        _update_am_values(self._am_coeffs, 1, 0.5)
+
         return
 
     def _object_viewer(self):
@@ -2129,8 +2121,15 @@ class Lagrangian_Swarm(uw_object):
         verbose: Optional[bool] = False,
     ):
         """Pre-solve: auto-initialise history on first call."""
+        self._dt = dt
+
         if not self._history_initialised:
             self.initialise_history()
+
+        # Update coefficient values for current effective_order and dt
+        _update_bdf_values(self._bdf_coeffs, self.effective_order, self._dt, self._dt_history)
+        _update_am_values(self._am_coeffs, self.effective_order, 0.5)
+
         return
 
     def update_post_solve(
@@ -2183,66 +2182,27 @@ class Lagrangian_Swarm(uw_object):
         return
 
     def bdf(self, order=None):
-        r"""Backwards differentiation form for calculating DuDt.
+        r"""Backward differentiation approximation of the time-derivative of :math:`\psi`.
 
-        Note that you will need ``bdf`` / :math:`\delta t` in computing derivatives.
-
-        When ``order`` is not specified, uses ``effective_order`` which
-        ramps up from 1 during startup.  For order > 1 with variable
-        timesteps, coefficients are adjusted automatically.
-        """
-
-        if order is None:
-            order = self.effective_order
-        else:
-            order = max(1, min(self.effective_order, order))
-
-        coeffs = _bdf_coefficients(order, self._dt, self._dt_history)
-
-        with sympy.core.evaluate(False):
-            bdf0 = coeffs[0] * self.psi_fn
-            for i in range(1, len(coeffs)):
-                bdf0 = bdf0 + coeffs[i] * self.psi_star[i - 1].sym
-
-            bdf0 /= self.step_averaging
-
-        # This is actually calculated over several steps so scaling is required
-        return bdf0
-
-    def adams_moulton_flux(self, order=None):
-        r"""Adams-Moulton flux approximation for implicit time integration.
-
-        When ``order`` is not specified, uses ``effective_order`` which
-        ramps up from 1 during startup.
+        Returns a fixed-structure symbolic expression using UWexpression
+        coefficients. Values are updated each step in ``update_pre_solve``.
 
         Parameters
         ----------
         order : int, optional
-            Order of the approximation (1-3). Defaults to ``effective_order``.
-
-        Returns
-        -------
-        sympy.Basic
-            Weighted average of :math:`\psi` and history terms.
+            Ignored (kept for API compatibility).
         """
-        if order is None:
-            order = self.effective_order
-        else:
-            order = max(1, min(self.effective_order, order))
+        return _build_weighted_sum(self._bdf_coeffs, self.psi_fn, [ps.sym for ps in self.psi_star])
 
-        with sympy.core.evaluate(False):
-            if order == 1:
-                am = (self.psi_fn + self.psi_star[0].sym) / 2
+    def adams_moulton_flux(self, order=None):
+        r"""Adams-Moulton flux approximation for implicit time integration.
 
-            elif order == 2:
-                am = (5 * self.psi_fn + 8 * self.psi_star[0].sym - self.psi_star[1].sym) / 12
+        Returns a fixed-structure symbolic expression using UWexpression
+        coefficients. Values are updated each step in ``update_pre_solve``.
 
-            elif order == 3:
-                am = (
-                    9 * self.psi_fn
-                    + 19 * self.psi_star[0].sym
-                    - 5 * self.psi_star[1].sym
-                    + self.psi_star[2].sym
-                ) / 24
-
-        return am
+        Parameters
+        ----------
+        order : int, optional
+            Ignored (kept for API compatibility).
+        """
+        return _build_weighted_sum(self._am_coeffs, self.psi_fn, [ps.sym for ps in self.psi_star])
