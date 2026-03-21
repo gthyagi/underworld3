@@ -2783,12 +2783,9 @@ class SNES_NavierStokes(SNES_Stokes_SaddlePt):
         """Pointwise momentum source term (body force + inertia)."""
         DuDt = self.Unknowns.DuDt
 
-        # I think this should be bdf(1) ... the higher order
-        # terms are introduced through the adams_moulton fluxes
-
         f0 = expression(
             r"\mathbf{f}_0\left( \mathbf{u} \right)",
-            -self.bodyforce + self.rho * DuDt.bdf(1) / self.delta_t,
+            -self.bodyforce + self.rho * DuDt.bdf() / self.delta_t,
             "NStokes pointwise force term: f_0(u)",
         )
 
