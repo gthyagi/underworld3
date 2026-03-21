@@ -1360,25 +1360,45 @@ class SNES_VE_Stokes(SNES_Stokes):
         if uw.mpi.rank == 0 and verbose:
             print(f"VE Stokes solver - store stress and shift history", flush=True)
 
-        # Save advected σ* before anything modifies psi_star[0]
         import numpy as np
-        _advected_sigma_star = np.copy(self.DFDt.psi_star[0].array[...])
+        import sympy as _sympy
 
-        # Project actual stress into psi_star[0]
-        # Uses the constitutive formula (not the stored values property) so
-        # that σ* and σ** from psi_star are read correctly during projection.
+        # Running average blending factor.
+        # When timestep == dt_elastic: phi = 1 → hard copy (standard behaviour).
+        # When timestep < dt_elastic: phi < 1 → gradual accumulation so each
+        # history slot represents approximately one dt_elastic of elapsed time.
+        dt_elastic_value = self.delta_t.sym
+        try:
+            _phi = float(_sympy.Min(1, timestep / dt_elastic_value))
+        except (TypeError, ValueError):
+            _phi = 1.0
+
+        # Save advected psi_star values before projection modifies psi_star[0].
+        # We need psi_star[i-1] for the running average shift.
+        _saved = []
+        for i in range(self.DFDt.order):
+            _saved.append(np.copy(self.DFDt.psi_star[i].array[...]))
+
+        # Project actual stress into psi_star[0].
+        # Uses the constitutive formula so that σ* and σ** from psi_star
+        # are read correctly during projection.
         self.DFDt._psi_star_projection_solver.uw_function = self.constitutive_model.flux
         self.DFDt._psi_star_projection_solver.smoothing = 0.0
         self.DFDt._psi_star_projection_solver.solve(verbose=verbose)
 
-        # Now psi_star[0] = projected τ (actual stress from this solve)
-        # Shift: psi_star[1] ← saved advected σ* (for chained tracing next step)
+        # Now psi_star[0] = projected τ (actual stress from this solve).
+        #
+        # Shift history with running average:
+        #   psi_star[i] ← phi * saved[i-1] + (1-phi) * saved[i]
+        #
+        # When phi=1 (dt==dt_elastic): straight copy (classical behaviour).
+        # When phi<1 (dt<dt_elastic): exponential moving average with time
+        # constant dt_elastic. Each slot gradually accumulates toward the
+        # value of the slot above it, representing stress from ~i*dt_elastic ago.
         for i in range(self.DFDt.order - 1, 0, -1):
-            if i == 1:
-                self.DFDt.psi_star[i].array[...] = _advected_sigma_star
-            else:
-                # For order > 2, shift higher levels down
-                self.DFDt.psi_star[i].array[...] = self.DFDt.psi_star[i - 1].array[...]
+            self.DFDt.psi_star[i].array[...] = (
+                _phi * _saved[i - 1] + (1 - _phi) * _saved[i]
+            )
 
         # 5. BOOKKEEPING
 

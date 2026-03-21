@@ -1198,32 +1198,19 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
             if inner_self.shear_modulus == sympy.oo:
                 return inner_self.shear_viscosity_0
 
-            # Note, 1st order only here but we should add higher order versions of this
+            # BDF-k effective viscosity: eta_eff = eta*mu*dt / (c0*eta + mu*dt)
+            # c0: 1 (BDF-1), 3/2 (BDF-2), 11/6 (BDF-3)
+            eta = inner_self.shear_viscosity_0
+            mu = inner_self.shear_modulus
+            dt_e = inner_self.dt_elastic
+            eff_order = inner_self._owning_model.effective_order
 
-            # 1st Order version (default)
-            if inner_self._owning_model.effective_order != 2:
-                el_eff_visc = (
-                    inner_self.shear_viscosity_0
-                    * inner_self.shear_modulus
-                    * inner_self.dt_elastic
-                    / (
-                        inner_self.shear_viscosity_0
-                        + inner_self.dt_elastic * inner_self.shear_modulus
-                    )
-                )
-
-            # 2nd Order version (need to ask for this one)
+            if eff_order == 2:
+                el_eff_visc = 2 * eta * mu * dt_e / (3 * eta + 2 * mu * dt_e)
+            elif eff_order >= 3:
+                el_eff_visc = 6 * eta * mu * dt_e / (11 * eta + 6 * mu * dt_e)
             else:
-                el_eff_visc = (
-                    2
-                    * inner_self.shear_viscosity_0
-                    * inner_self.shear_modulus
-                    * inner_self.dt_elastic
-                    / (
-                        3 * inner_self.shear_viscosity_0
-                        + 2 * inner_self.dt_elastic * inner_self.shear_modulus
-                    )
-                )
+                el_eff_visc = eta * mu * dt_e / (eta + mu * dt_e)
 
             inner_self._ve_effective_viscosity.sym = el_eff_visc
 
@@ -1300,20 +1287,23 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
         if self.Unknowns.DFDt is not None:
 
             if self.is_elastic:
-                if self.effective_order != 2:
-                    stress_star = self.Unknowns.DFDt.psi_star[0].sym
-                    E += stress_star / (
-                        2 * self.Parameters.dt_elastic * self.Parameters.shear_modulus
-                    )
+                mu_dt = self.Parameters.dt_elastic * self.Parameters.shear_modulus
+                eff_order = self.effective_order
 
-                else:
+                if eff_order == 2:
                     stress_star = self.Unknowns.DFDt.psi_star[0].sym
                     stress_2star = self.Unknowns.DFDt.psi_star[1].sym
-                    E += stress_star / (
-                        self.Parameters.dt_elastic * self.Parameters.shear_modulus
-                    ) - stress_2star / (
-                        4 * self.Parameters.dt_elastic * self.Parameters.shear_modulus
-                    )
+                    E += stress_star / mu_dt - stress_2star / (4 * mu_dt)
+                elif eff_order >= 3:
+                    stress_star = self.Unknowns.DFDt.psi_star[0].sym
+                    stress_2star = self.Unknowns.DFDt.psi_star[1].sym
+                    stress_3star = self.Unknowns.DFDt.psi_star[2].sym
+                    E += (3 * stress_star / (2 * mu_dt)
+                          - 3 * stress_2star / (4 * mu_dt)
+                          + stress_3star / (6 * mu_dt))
+                else:
+                    stress_star = self.Unknowns.DFDt.psi_star[0].sym
+                    E += stress_star / (2 * mu_dt)
 
         self._E_eff.sym = E
 
@@ -1511,30 +1501,28 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
         if self.Unknowns.DFDt is not None:
 
             if self.is_elastic:
-                if self.effective_order != 2:
-                    stress_star = self.Unknowns.DFDt.psi_star[0].sym
-                    stress += (
-                        2
-                        * self.viscosity
-                        * (
-                            stress_star
-                            / (2 * self.Parameters.dt_elastic * self.Parameters.shear_modulus)
-                        )
-                    )
+                mu_dt = self.Parameters.dt_elastic * self.Parameters.shear_modulus
+                eff_order = self.effective_order
 
-                else:
+                if eff_order == 2:
                     stress_star = self.Unknowns.DFDt.psi_star[0].sym
                     stress_2star = self.Unknowns.DFDt.psi_star[1].sym
-
-                    stress += (
-                        2
-                        * self.viscosity
-                        * (
-                            stress_star
-                            / (self.Parameters.dt_elastic * self.Parameters.shear_modulus)
-                            - stress_2star
-                            / (4 * self.Parameters.dt_elastic * self.Parameters.shear_modulus)
-                        )
+                    stress += 2 * self.viscosity * (
+                        stress_star / mu_dt - stress_2star / (4 * mu_dt)
+                    )
+                elif eff_order >= 3:
+                    stress_star = self.Unknowns.DFDt.psi_star[0].sym
+                    stress_2star = self.Unknowns.DFDt.psi_star[1].sym
+                    stress_3star = self.Unknowns.DFDt.psi_star[2].sym
+                    stress += 2 * self.viscosity * (
+                        3 * stress_star / (2 * mu_dt)
+                        - 3 * stress_2star / (4 * mu_dt)
+                        + stress_3star / (6 * mu_dt)
+                    )
+                else:
+                    stress_star = self.Unknowns.DFDt.psi_star[0].sym
+                    stress += 2 * self.viscosity * (
+                        stress_star / (2 * mu_dt)
                     )
 
         return stress
