@@ -8,6 +8,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_FILE="$SCRIPT_DIR/.pixi-env"
 PETSC_CUSTOM="$SCRIPT_DIR/petsc-custom/petsc"
 
+# Ensure pixi resolves to THIS repo/worktree, not a parent env
+export PIXI_PROJECT_MANIFEST="$SCRIPT_DIR/pixi.toml"
+
 # Colors (if terminal supports it)
 if [ -t 1 ]; then
     GREEN='\033[0;32m'
@@ -172,6 +175,43 @@ run_build() {
         echo -e "${YELLOW}underworld3 build failed${NC}"
         exit 1
     }
+
+    # Verify Python source files were actually installed.
+    # pip's wheel cache can silently serve stale .py files even with
+    # --no-cache-dir (version 0.0.0 problem). Compare checksums of key
+    # source files against the installed copies and warn if they differ.
+    local site_packages=$($PIXI run -e "$env" python -c \
+        "import underworld3, pathlib; print(pathlib.Path(underworld3.__file__).parent)" 2>/dev/null)
+
+    if [ -n "$site_packages" ] && [ -d "$site_packages" ]; then
+        local stale_files=()
+        # Check .py files under src/underworld3/ against installed copies
+        while IFS= read -r src_file; do
+            local rel_path="${src_file#src/underworld3/}"
+            local inst_file="$site_packages/$rel_path"
+            if [ -f "$inst_file" ]; then
+                local src_hash=$(shasum -a 256 "$src_file" | cut -d' ' -f1)
+                local inst_hash=$(shasum -a 256 "$inst_file" | cut -d' ' -f1)
+                if [ "$src_hash" != "$inst_hash" ]; then
+                    stale_files+=("$rel_path")
+                fi
+            fi
+        done < <(find src/underworld3 -name '*.py' -not -path '*/__pycache__/*' 2>/dev/null)
+
+        if [ ${#stale_files[@]} -gt 0 ]; then
+            echo ""
+            echo -e "${YELLOW}${BOLD}WARNING: ${#stale_files[@]} source file(s) differ from installed copies:${NC}"
+            for f in "${stale_files[@]}"; do
+                echo -e "  ${YELLOW}STALE: $f${NC}"
+            done
+            echo ""
+            echo "  Fixing: copying source files to installed location..."
+            for f in "${stale_files[@]}"; do
+                cp "src/underworld3/$f" "$site_packages/$f"
+            done
+            echo -e "  ${GREEN}✓${NC} ${#stale_files[@]} file(s) updated"
+        fi
+    fi
 
     echo ""
     echo -e "${GREEN}${BOLD}Build complete!${NC}"
@@ -423,6 +463,66 @@ configure_ai_tools() {
     fi
 }
 
+# Configure Claude Code permissions (safe defaults for development monitoring)
+# Usage: configure_claude_permissions <pixi-env>
+configure_claude_permissions() {
+    local env="${1:-$(get_env)}"
+    mkdir -p "$HOME/.claude"
+
+    # Use Python to safely merge permissions into settings.json
+    $PIXI run -e "$env" python -c "
+import json, os, sys
+
+settings_file = os.path.expanduser('~/.claude/settings.json')
+
+# Load existing settings or start fresh
+settings = {}
+if os.path.exists(settings_file):
+    with open(settings_file) as f:
+        settings = json.load(f)
+
+# Ensure permissions.allow exists
+settings.setdefault('permissions', {})
+settings['permissions'].setdefault('allow', [])
+allow = settings['permissions']['allow']
+
+# Permissions for development and unattended monitoring
+required = [
+    'Bash(git *)',
+    'Bash(gh *)',
+    'Bash(pixi *)',
+    'Bash(./uw *)',
+    'Bash(python *)',
+    'Bash(sleep *)',
+    \"Bash(osascript -e 'display notification*')\",
+    'Bash(notify-send *)',
+    'Edit',
+    'Write',
+    'Agent',
+]
+
+added = []
+for perm in required:
+    if perm not in allow:
+        allow.append(perm)
+        added.append(perm)
+
+with open(settings_file, 'w') as f:
+    json.dump(settings, f, indent=2)
+    print('', file=f)
+
+if added:
+    print(f'Added {len(added)} permission(s):')
+    for p in added:
+        print(f'  + {p}')
+else:
+    print('All permissions already configured.')
+"
+    echo ""
+    echo -e "  ${GREEN}✓${NC} Claude Code permissions updated"
+    echo "  Includes: git, gh, pixi, build tools, desktop notifications (macOS + Linux)"
+}
+
 # Interactive setup wizard
 run_setup() {
     # Ensure pixi is available
@@ -617,6 +717,20 @@ run_setup() {
         fi
     fi
 
+    # Optional: Configure Claude Code permissions for unattended monitoring
+    echo ""
+    echo -e "${BOLD}Claude Code Permissions (Optional)${NC}"
+    echo "  Configure allowed tools for Claude Code sessions, including permissions"
+    echo "  for background monitoring (CI checks, issue tracking, notifications)."
+    echo "  Adds safe defaults to ~/.claude/settings.json."
+    echo ""
+    read -p "Configure Claude Code permissions? [y/N]: " config_perms
+    config_perms=${config_perms:-n}
+
+    if [ "$config_perms" = "y" ] || [ "$config_perms" = "Y" ]; then
+        configure_claude_permissions "$new_env"
+    fi
+
     echo ""
     echo -e "${GREEN}${BOLD}Setup complete!${NC}"
     echo ""
@@ -686,6 +800,7 @@ COMMANDS
     setup               Interactive configuration wizard
     set-env NAME        Change environment directly
     ai-tools            Configure external AI instruction paths
+    claude-perms        Configure Claude Code permissions (safe defaults)
 
   Building:
     build               Build underworld3
@@ -1325,6 +1440,9 @@ case "${1:-}" in
         ;;
     ai-tools)
         configure_ai_tools
+        ;;
+    claude-perms)
+        configure_claude_permissions "$(get_env)"
         ;;
     --help|-h|help)
         show_help

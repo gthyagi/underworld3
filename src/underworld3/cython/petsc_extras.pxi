@@ -46,6 +46,7 @@ cdef extern from "petsc_compat.h":
     PetscErrorCode UW_DMPlexComputeBdIntegral( PetscDM, PetscVec, PetscDMLabel, PetscInt, const PetscInt*, void*, PetscScalar*, void*)
 
 cdef extern from "petsc.h" nogil:
+    PetscErrorCode PetscDSSetConstants(PetscDS, PetscInt, const PetscScalar[])
     PetscErrorCode DMPlexSNESComputeBoundaryFEM( PetscDM, void *, void *)
     # PetscErrorCode DMPlexSetSNESLocalFEM( PetscDM, void *, void *, void *)
     # PetscErrorCode DMPlexSetSNESLocalFEM( PetscDM, PetscBool, void *)

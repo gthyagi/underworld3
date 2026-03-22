@@ -251,6 +251,47 @@ mpirun -np 256 python convection.py \
     -uw_max_iterations 100
 ```
 
+## Using Parameters with Solvers: Expressions
+
+When passing parameters to solver constitutive models, wrap them in
+`uw.expression()`. This creates a named symbolic container that the JIT
+compiler can update efficiently — changing the value between time steps
+does **not** trigger recompilation of the C extension.
+
+```python
+import underworld3 as uw
+
+# Define parameters
+VISCOSITY = 1e21      # Named constant
+MODULUS = 1e10        # Named constant
+DT = 0.01            # Timestep
+
+params = uw.Params(
+    uw_viscosity = VISCOSITY,
+    uw_modulus = MODULUS,
+)
+
+# Wrap in expressions for solver use
+eta = uw.expression("eta", params.uw_viscosity)
+mu = uw.expression("mu", params.uw_modulus)
+dt_e = uw.expression("dt_e", DT)
+
+# Pass expressions to constitutive model
+stokes.constitutive_model.Parameters.shear_viscosity_0 = eta
+stokes.constitutive_model.Parameters.shear_modulus = mu
+stokes.constitutive_model.Parameters.dt_elastic = dt_e
+
+# Time-stepping: change dt without recompilation
+for step in range(100):
+    dt_e.sym = compute_new_timestep()  # Updates value, ~0ms
+    stokes.solve()                      # No JIT rebuild needed
+```
+
+Without expressions, changing a solver parameter between steps requires
+setting `_force_setup=True` on the solve call, which triggers a full JIT
+recompilation (~5–15 seconds). With expressions, parameter updates go
+through PETSc's `constants[]` array and cost essentially nothing.
+
 ## Angle Units
 
 Angles work naturally - you can define in degrees and provide radians (or vice versa):

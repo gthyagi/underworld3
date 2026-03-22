@@ -396,6 +396,17 @@ class Mesh(Stateful, uw_object):
         self.boundaries = boundaries
         self.boundary_normals = boundary_normals
 
+        # Wrapped imported DMPlex meshes may only expose generic Gmsh labels
+        # such as "Face Sets". Rebuild named boundary labels from those sets so
+        # boundary APIs behave the same way as the standard Mesh(mesh_file) path.
+        if isinstance(plex_or_meshfile, PETSc.DMPlex) and self.boundaries is not None:
+            has_named_boundary_labels = any(self.dm.getLabel(b.name) for b in self.boundaries)
+            if not has_named_boundary_labels:
+                for stacked_label_name in ("Face Sets", "Edge Sets", "Vertex Sets"):
+                    if self.dm.getLabel(stacked_label_name):
+                        uw.adaptivity._dm_unstack_bcs(self.dm, self.boundaries, stacked_label_name)
+                        break
+
         # options.delValue("dm_plex_gmsh_mark_vertices")
         # options.delValue("dm_plex_gmsh_multiple_tags")
         # options.delValue("dm_plex_gmsh_use_regions")
@@ -1096,8 +1107,13 @@ class Mesh(Stateful, uw_object):
         # later where we call the interpolation routines to project from the linear
         # mesh coordinates to other mesh coordinates.
 
+        # Dual-space options control node placement on simplices and must be set
+        # before createDefault(). Currently only P1 coordinate meshes are used,
+        # but these are needed for higher-order (curved) coordinate meshes.
         options = PETSc.Options()
         options.setValue(f"meshproj_{self.mesh_instances}_petscspace_degree", self.degree)
+        options.setValue(f"meshproj_{self.mesh_instances}_petscdualspace_lagrange_continuity", True)
+        options.setValue(f"meshproj_{self.mesh_instances}_petscdualspace_lagrange_node_endpoints", False)
 
         self.petsc_fe = PETSc.FE().createDefault(
             self.dim,
