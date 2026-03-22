@@ -101,9 +101,8 @@ step for semi-Lagrangian history transport. It does **not** overwrite
 `dt_elastic` — these are independent parameters.
 
 A running-average approach for accumulating history when $\Delta t \ll \Delta t_e$
-was investigated but found to be inaccurate: the BDF constitutive formula
-inherently couples `dt_elastic` to the time between stress evaluations, so
-the history smoothing cannot compensate for the mismatch. For problems requiring
-small advection steps with a longer relaxation scale, viscosity clamping
-(flooring $\eta_{\text{eff}}$ at the `dt_elastic`-derived value) is the
-recommended approach.
+was investigated but found to be extremely diffusive for semi-Lagrangian
+transport and is not implemented. To prevent runaway or unstable behaviour
+when timesteps become small (e.g. due to CFL constraints or failure events),
+we advise limiting the minimum effective viscosity, in line with the physics
+of the problem.
