@@ -1513,8 +1513,11 @@ class Mesh(Stateful, uw_object):
         and Jacobian functions. Use ``mesh.t`` in expressions to reference
         this time without forcing JIT recompilation each timestep.
 
-        The solver sets the time value via ``solve(time=t)``. If ``time``
-        is not provided, ``petsc_t`` defaults to 0.
+        The low-level PETSc solver accepts ``time=t`` to set the value
+        of ``petsc_t`` for pointwise functions. If not provided, ``petsc_t``
+        defaults to 0. Note: the high-level Python ``solve()`` wrappers
+        do not yet pass ``time=`` through — set it directly via
+        ``UW_DMSetTime`` at the Cython level if needed.
 
         When the scaling system is active, ``mesh.t`` carries time units
         (derived from the model's time scale) so that dimensional analysis

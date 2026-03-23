@@ -5,7 +5,7 @@ Produces a figure showing:
   - Bottom panel: stress σ_xy(t) for order 1 and order 2 vs analytical
 
 Maxwell analytical solution including startup transient:
-    σ_xy(t) = η γ̇₀ De/(1+De²) [sin(ωt) - De cos(ωt) + De exp(-t/t_r)]
+    σ_xy(t) = η γ̇₀/(1+De²) [sin(ωt) - De cos(ωt) + De exp(-t/t_r)]
 
 Results are saved as .npz checkpoint files for re-analysis.
 
@@ -137,7 +137,7 @@ def make_plot(results, params, output_path):
     shear_rate = gamma_dot_0 * np.sin(omega * t_fine)
 
     phase_lag_deg = np.degrees(np.arctan(De))
-    steady_amp = ETA * gamma_dot_0 * De / np.sqrt(1 + De**2)
+    steady_amp = ETA * gamma_dot_0 / np.sqrt(1 + De**2)
     period = 2.0 * np.pi / omega
 
     fig, (ax1, ax2) = plt.subplots(

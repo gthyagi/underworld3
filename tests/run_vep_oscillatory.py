@@ -1,7 +1,7 @@
 """Oscillatory VEP shear box — does the yield stress cap the oscillation?
 
 Same setup as the VE oscillatory test but with a yield stress.
-The VE amplitude at steady state is η γ̇₀ De/√(1+De²).
+The VE amplitude at steady state is η γ̇₀/√(1+De²).
 If τ_y is below this amplitude, the stress should be clipped.
 """
 
@@ -16,7 +16,7 @@ def maxwell_oscillatory(t, eta, mu, gamma_dot_0, omega):
     """Full analytical σ_xy for oscillatory Maxwell shear (incl. transient)."""
     t_r = eta / mu
     De = omega * t_r
-    prefactor = eta * gamma_dot_0 * De / (1.0 + De**2)
+    prefactor = eta * gamma_dot_0 / (1.0 + De**2)
     return prefactor * (np.sin(omega * t) - De * np.cos(omega * t) + De * np.exp(-t / t_r))
 
 
@@ -31,7 +31,7 @@ def run_vep_oscillatory(order, n_steps, dt_over_tr, De, tau_y):
     dt = dt_over_tr * t_r
 
     # VE steady-state amplitude
-    ve_amplitude = ETA * gamma_dot_0 * De / np.sqrt(1 + De**2)
+    ve_amplitude = ETA * gamma_dot_0 / np.sqrt(1 + De**2)
 
     mesh = uw.meshing.StructuredQuadBox(
         elementRes=(16, 8), minCoords=(-W/2, -H/2), maxCoords=(W/2, H/2),
@@ -100,7 +100,7 @@ if __name__ == "__main__":
     n_steps = int(n_periods * period / (dt_ratio * t_r))
 
     ETA, gamma_dot_0 = 1.0, 1.0
-    ve_amp = ETA * gamma_dot_0 * De / np.sqrt(1 + De**2)
+    ve_amp = ETA * gamma_dot_0 / np.sqrt(1 + De**2)
 
     # Set τ_y below the VE amplitude so we see clipping
     TAU_Y = 0.4

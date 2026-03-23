@@ -96,7 +96,7 @@ class TimeSymbol(sympy.Symbol):
     _units = None
 
     def __new__(cls, name="t", **kwargs):
-        obj = super().__new__(cls, name, real=True, positive=True, **kwargs)
+        obj = super().__new__(cls, name, real=True, nonnegative=True, **kwargs)
         return obj
 
     @property

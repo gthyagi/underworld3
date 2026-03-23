@@ -3,12 +3,12 @@
 Maxwell material under sinusoidal boundary velocity V(t) = V0 sin(ωt).
 Full solution including startup transient:
 
-    σ_xy(t) = η γ̇₀ De/(1+De²) [sin(ωt) - De cos(ωt) + De exp(-t/t_r)]
+    σ_xy(t) = η γ̇₀/(1+De²) [sin(ωt) - De cos(ωt) + De exp(-t/t_r)]
 
 where De = ω t_r is the Deborah number.
 
 At steady state (t >> t_r), the transient dies out and the stress
-oscillates with amplitude η γ̇₀ De/√(1+De²) and phase lag arctan(De).
+oscillates with amplitude η γ̇₀/√(1+De²) and phase lag arctan(De).
 """
 
 import time as timer

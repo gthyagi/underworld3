@@ -18,7 +18,7 @@ def maxwell_oscillatory(t, eta, mu, gamma_dot_0, omega):
     """Full analytical σ_xy for oscillatory Maxwell shear."""
     t_r = eta / mu
     De = omega * t_r
-    prefactor = eta * gamma_dot_0 * De / (1.0 + De**2)
+    prefactor = eta * gamma_dot_0 / (1.0 + De**2)
     return prefactor * (np.sin(omega * t) - De * np.cos(omega * t) + De * np.exp(-t / t_r))
 
 
@@ -108,7 +108,7 @@ if __name__ == "__main__":
     n_periods = 2
     n_steps = int(n_periods * period / dt)
 
-    ve_amp = ETA * gamma_dot_0 * De / np.sqrt(1.0 + De**2)
+    ve_amp = ETA * gamma_dot_0 / np.sqrt(1.0 + De**2)
     sigma_t0 = maxwell_oscillatory(t0, ETA, MU, gamma_dot_0, omega)
 
     print(f"De={De}, omega={omega:.3f}, period={period:.3f}")
