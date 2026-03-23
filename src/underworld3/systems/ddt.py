@@ -526,6 +526,11 @@ class Symbolic(uw_object):
 
         return
 
+    @property
+    def bdf_coefficients(self):
+        """Current BDF coefficients [c0, c1, ...] accounting for variable timesteps."""
+        return _bdf_coefficients(self.effective_order, self._dt, self._dt_history)
+
     def bdf(self, order: Optional[int] = None):
         r"""Backward differentiation approximation of the time-derivative of ψ.
 
@@ -893,6 +898,11 @@ class Eulerian(uw_object):
             self._n_solves_completed += 1
 
         return
+
+    @property
+    def bdf_coefficients(self):
+        """Current BDF coefficients [c0, c1, ...] accounting for variable timesteps."""
+        return _bdf_coefficients(self.effective_order, self._dt, self._dt_history)
 
     def bdf(self, order=None):
         r"""Backward differentiation approximation of the time-derivative of :math:`\psi`.
@@ -1717,6 +1727,11 @@ class SemiLagrangian(uw_object):
 
         return
 
+    @property
+    def bdf_coefficients(self):
+        """Current BDF coefficients [c0, c1, ...] accounting for variable timesteps."""
+        return _bdf_coefficients(self.effective_order, self._dt, self._dt_history)
+
     def bdf(self, order=None):
         r"""Backward differentiation approximation of the time-derivative of :math:`\psi`.
 
@@ -2009,6 +2024,11 @@ class Lagrangian(uw_object):
 
         if self._n_solves_completed < self.order:
             self._n_solves_completed += 1
+
+    @property
+    def bdf_coefficients(self):
+        """Current BDF coefficients [c0, c1, ...] accounting for variable timesteps."""
+        return _bdf_coefficients(self.effective_order, self._dt, self._dt_history)
 
     def bdf(self, order=None):
         r"""Backward differentiation approximation of the time-derivative of :math:`\psi`.
@@ -2306,6 +2326,11 @@ class Lagrangian_Swarm(uw_object):
             self._n_solves_completed += 1
 
         return
+
+    @property
+    def bdf_coefficients(self):
+        """Current BDF coefficients [c0, c1, ...] accounting for variable timesteps."""
+        return _bdf_coefficients(self.effective_order, self._dt, self._dt_history)
 
     def bdf(self, order=None):
         r"""Backward differentiation approximation of the time-derivative of :math:`\psi`.

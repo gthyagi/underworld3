@@ -48,6 +48,7 @@ from underworld3.utilities._api_tools import uw_object
 from underworld3.swarm import IndexSwarmVariable
 from underworld3.discretisation import MeshVariable
 from underworld3.systems.ddt import SemiLagrangian as SemiLagrangian_DDt
+from underworld3.systems.ddt import _bdf_coefficients
 from underworld3.function.quantities import UWQuantity
 from underworld3.systems.ddt import Lagrangian as Lagrangian_DDt
 
@@ -1199,18 +1200,14 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
                 return inner_self.shear_viscosity_0
 
             # BDF-k effective viscosity: eta_eff = eta*mu*dt / (c0*eta + mu*dt)
-            # c0: 1 (BDF-1), 3/2 (BDF-2), 11/6 (BDF-3)
+            # c0 from DDt's BDF coefficients (variable-dt aware)
             eta = inner_self.shear_viscosity_0
             mu = inner_self.shear_modulus
             dt_e = inner_self.dt_elastic
-            eff_order = inner_self._owning_model.effective_order
+            coeffs = inner_self._owning_model._get_bdf_coefficients()
+            c0 = coeffs[0]
 
-            if eff_order == 2:
-                el_eff_visc = 2 * eta * mu * dt_e / (3 * eta + 2 * mu * dt_e)
-            elif eff_order >= 3:
-                el_eff_visc = 6 * eta * mu * dt_e / (11 * eta + 6 * mu * dt_e)
-            else:
-                el_eff_visc = eta * mu * dt_e / (eta + mu * dt_e)
+            el_eff_visc = eta * mu * dt_e / (c0 * eta + mu * dt_e)
 
             inner_self._ve_effective_viscosity.sym = el_eff_visc
 
@@ -1252,6 +1249,12 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
             return min(self._order, self.Unknowns.DFDt.effective_order)
         return self._order
 
+    def _get_bdf_coefficients(self):
+        """Get BDF coefficients from DDt (variable-dt aware) or fall back to uniform."""
+        if self.Unknowns is not None and self.Unknowns.DFDt is not None:
+            return self.Unknowns.DFDt.bdf_coefficients
+        return _bdf_coefficients(self.effective_order, None, [])
+
     # The following should have no setters
     @property
     def stress_star(self):
@@ -1288,22 +1291,11 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
 
             if self.is_elastic:
                 mu_dt = self.Parameters.dt_elastic * self.Parameters.shear_modulus
-                eff_order = self.effective_order
+                coeffs = self._get_bdf_coefficients()
 
-                if eff_order == 2:
-                    stress_star = self.Unknowns.DFDt.psi_star[0].sym
-                    stress_2star = self.Unknowns.DFDt.psi_star[1].sym
-                    E += stress_star / mu_dt - stress_2star / (4 * mu_dt)
-                elif eff_order >= 3:
-                    stress_star = self.Unknowns.DFDt.psi_star[0].sym
-                    stress_2star = self.Unknowns.DFDt.psi_star[1].sym
-                    stress_3star = self.Unknowns.DFDt.psi_star[2].sym
-                    E += (3 * stress_star / (2 * mu_dt)
-                          - 3 * stress_2star / (4 * mu_dt)
-                          + stress_3star / (6 * mu_dt))
-                else:
-                    stress_star = self.Unknowns.DFDt.psi_star[0].sym
-                    E += stress_star / (2 * mu_dt)
+                # History contribution: -Σ cᵢ·σ_star[i-1] / (2·μ·dt)
+                for i in range(1, len(coeffs)):
+                    E += -coeffs[i] * self.Unknowns.DFDt.psi_star[i - 1].sym / (2 * mu_dt)
 
         self._E_eff.sym = E
 
@@ -1502,27 +1494,12 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
 
             if self.is_elastic:
                 mu_dt = self.Parameters.dt_elastic * self.Parameters.shear_modulus
-                eff_order = self.effective_order
+                coeffs = self._get_bdf_coefficients()
 
-                if eff_order == 2:
-                    stress_star = self.Unknowns.DFDt.psi_star[0].sym
-                    stress_2star = self.Unknowns.DFDt.psi_star[1].sym
+                # History contribution: 2·η_eff · (-Σ cᵢ·σ_star[i-1]) / (2·μ·dt)
+                for i in range(1, len(coeffs)):
                     stress += 2 * self.viscosity * (
-                        stress_star / mu_dt - stress_2star / (4 * mu_dt)
-                    )
-                elif eff_order >= 3:
-                    stress_star = self.Unknowns.DFDt.psi_star[0].sym
-                    stress_2star = self.Unknowns.DFDt.psi_star[1].sym
-                    stress_3star = self.Unknowns.DFDt.psi_star[2].sym
-                    stress += 2 * self.viscosity * (
-                        3 * stress_star / (2 * mu_dt)
-                        - 3 * stress_2star / (4 * mu_dt)
-                        + stress_3star / (6 * mu_dt)
-                    )
-                else:
-                    stress_star = self.Unknowns.DFDt.psi_star[0].sym
-                    stress += 2 * self.viscosity * (
-                        stress_star / (2 * mu_dt)
+                        -coeffs[i] * self.Unknowns.DFDt.psi_star[i - 1].sym / (2 * mu_dt)
                     )
 
         return stress
