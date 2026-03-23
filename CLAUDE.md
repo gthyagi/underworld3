@@ -70,21 +70,6 @@ If something needs more than an annotation or simple addition, mention it in con
 
 ---
 
-## Pending Release Actions
-
-**⚠️ REMINDER: Tag v3.0.0 when `uw3-release-candidate` merges to `main`**
-
-The AI-friendly codebase with improved documentation, patterns, and tooling should be released as Underworld3 version 3.0.0. After merging the release candidate branch to main:
-
-```bash
-git tag -a v3.0.0 -m "Underworld3 Release 3.0.0"
-git push origin v3.0.0
-```
-
-See `docs/developer/guides/version-management.md` for details.
-
----
-
 ## Documentation Requests
 
 **⚠️ MANDATORY - READ BEFORE WRITING ANY DOCUMENTATION ⚠️**
@@ -244,84 +229,23 @@ the build directory: `rm -rf build/lib.* build/bdist.*` then rebuild.
 
 ---
 
-## Design Documents Reference
-
-**Location**: `docs/developer/design/`
-
-| Document | Status | Purpose |
-|----------|--------|---------|
-| `UNITS_SIMPLIFIED_DESIGN_2025-11.md` | **AUTHORITATIVE** | Current units architecture |
-| `PARALLEL_PRINT_SIMPLIFIED.md` | Implemented | `uw.pprint()` and `selective_ranks()` |
-| `RANK_SELECTION_SPECIFICATION.md` | Implemented | Rank selection syntax |
-| `mathematical_objects_plan.md` | Implemented | Mathematical objects design |
-
----
-
 ## Units System Principles
 
-### String Input, Pint Object Storage
-**Accept strings for convenience, store/return Pint objects internally.**
+**Authoritative design doc**: `docs/developer/design/UNITS_SIMPLIFIED_DESIGN_2025-11.md`
 
-```python
-# User creates with string (convenience)
-viscosity = uw.quantity(1e21, "Pa*s")
-
-# Internally stored as Pint object
-# .units returns Pint Unit object (NOT string!)
-viscosity.units  # <Unit('pascal * second')>
-
-# Arithmetic works correctly
-Ra = (rho0 * alpha * g * DeltaT * L**3) / (eta0 * kappa)
-```
-
-### Unit vs Quantity Distinction
-```python
-# Pint Quantity = value + units (can convert)
-qty = uw.quantity(2900, "km")
-qty.to("m")              # Returns new UWQuantity
-qty.to_base_units()      # Returns new UWQuantity
-
-# Pint Unit = just the unit (cannot convert!)
-qty.units                # <Unit('kilometer')>
-qty.units.to("m")        # AttributeError! Use qty.to("m") instead
-```
-
-### Transparent Container Principle
-**UWexpression is a container that derives properties from its contents.**
-- Atomic (UWQuantity): `.units` comes from stored value
-- Composite (SymPy tree): `.units` derived via `get_units(self._sym)`
-- No cached state on composites - eliminates sync issues
+- Accept strings for convenience, store/return Pint objects: `uw.quantity(1e21, "Pa*s")`
+- `.units` returns a Pint **Unit** (not string) — call `.to("m")` on the **Quantity**, not on `.units`
+- UWexpression derives `.units` from contents (atomic: stored value; composite: `get_units(self._sym)`)
 
 ---
 
 ## Parallel Computing Patterns
 
-### Key Understanding
-**Underworld3 rarely uses MPI directly - PETSc handles all parallel synchronization.**
-
-- PETSc manages parallelism for mesh operations, solvers, vector updates
-- UW3 API wraps PETSc collective operations correctly
-- Avoid direct mpi4py usage unless absolutely necessary
-
-### Current Parallel Safety API
-
-```python
-# OLD (deprecated) - DANGEROUS if stats() is collective
-if uw.mpi.rank == 0:
-    print(f"Stats: {var.stats()}")
-
-# NEW (safe) - All ranks execute, only selected ranks print
-uw.pprint(0, f"Stats: {var.stats()}")
-
-# For code blocks (visualization, etc.)
-with uw.selective_ranks(0) as should_execute:
-    if should_execute:
-        import pyvista as pv
-        plotter = pv.Plotter()
-```
+PETSc handles all parallel synchronization — avoid direct mpi4py unless necessary.
+Use `uw.pprint()` and `uw.selective_ranks()` for rank-safe output and code blocks.
 
 **Implementation**: `src/underworld3/mpi.py`
-**Documentation**: `docs/advanced/parallel-computing.qmd`
+**Documentation**: `docs/advanced/parallel-computing.md`
 
 ---
 
@@ -357,30 +281,7 @@ The PETSc-based solvers are carefully optimized and validated. **NO CHANGES with
 | `with swarm.access(var):` | **Deprecated** | Direct: `var.data[...]` |
 | `mesh.data` (coordinates) | **Deprecated** | `mesh.X.coords` |
 
-### Current Patterns
-```python
-# Single variable - direct access
-var.data[...] = values
-var.array[:, 0, 0] = scalar_values   # Scalar
-var.array[:, 0, :] = vector_values   # Vector
-
-# Multiple variables - batch synchronization
-with uw.synchronised_array_update():
-    var1.data[...] = values1
-    var2.data[...] = values2
-
-# Coordinates
-mesh.X.coords    # Mesh vertex coordinates
-var.coords       # Variable DOF coordinates
-swarm.data       # Swarm particle positions
-```
-
-### Array Shapes
-- **array**: `(N, a, b)` where scalar=`(N,1,1)`, vector=`(N,1,dim)`, tensor=`(N,dim,dim)`
-- **data**: `(-1, num_components)` flat format for backward compatibility
-
-### Data Cache Safety
-The `.data` property caches an `NDArray_With_Callback` view into the PETSc local vector. This cache self-validates via `id(self._lvec)` tracking — if the underlying vector is replaced (DM rebuild, mesh adaptation), the cache auto-rebuilds on next access. See `docs/developer/subsystems/data-access.md` for details.
+See `docs/developer/UW3_Style_and_Patterns_Guide.md` and `docs/developer/subsystems/data-access.md` for full patterns, array shapes, and cache safety details.
 
 ---
 
@@ -398,8 +299,8 @@ if any_uwexpressions_in_expression:
 symbols = expr.atoms(...)
 ```
 
-**Safe locations**: JIT Compiler (`_jitextension.py`), `extract_expressions()`
-**Check if issues**: `is_pure_sympy_expression()`, `nondimensional.py`
+**Safe locations**: JIT Compiler (`utilities/_jitextension.py`), `extract_expressions()`
+**Check if issues**: `is_pure_sympy_expression()` in `function/pure_sympy_evaluator.py`, `utilities/nondimensional.py`
 
 ---
 
@@ -441,12 +342,7 @@ velocity.norm()         # Magnitude
 ## Coding Conventions
 
 ### Prefer Glob and Grep Over find
-**Use the Glob and Grep tools instead of `find` in Bash.**
-- `Glob` handles file pattern matching (e.g., `**/*.py`, `src/**/*.pyx`)
-- `Grep` handles content search (e.g., searching for class definitions, imports)
-- Both are faster, safer, and give the user better visibility than shell `find`
-- `find` with `-exec`, `-execdir`, or `-delete` can execute arbitrary commands — avoid it
-- Only fall back to `find` via Bash if Glob/Grep genuinely cannot express the query
+**Use Glob and Grep tools instead of `find` or `grep` in Bash.** They are safer (no `-exec`), faster, and don't require user approval. Only fall back to `find` via Bash if Glob/Grep genuinely cannot express the query.
 
 ### Desktop Notifications for Background Monitoring
 When using CronCreate for background monitoring (CI status, issues, etc.), use
