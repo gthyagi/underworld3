@@ -1181,11 +1181,18 @@ worktree_remove() {
     fi
 
     local branch=$(git -C "$wt_path" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
-    local status=$(git -C "$wt_path" status --short 2>/dev/null | wc -l | tr -d ' ')
+
+    # Filter out symlinks we created (.pixi, petsc-custom/petsc) from the dirty check
+    local status=$(git -C "$wt_path" status --short 2>/dev/null \
+        | grep -v '^?? \.pixi$' \
+        | grep -v '^?? petsc-custom/petsc$' \
+        | wc -l | tr -d ' ')
 
     if [ "$status" -gt 0 ]; then
-        echo -e "${YELLOW}Worktree has $status uncommitted change(s):${NC}"
-        git -C "$wt_path" status --short
+        echo -e "${YELLOW}Worktree has $status uncommitted change(s) (excluding setup symlinks):${NC}"
+        git -C "$wt_path" status --short \
+            | grep -v '^?? \.pixi$' \
+            | grep -v '^?? petsc-custom/petsc$'
         echo ""
         read -p "Remove anyway? [y/N]: " confirm
         [ "$confirm" != "y" ] && [ "$confirm" != "Y" ] && exit 1
