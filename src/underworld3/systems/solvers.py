@@ -1333,6 +1333,12 @@ class SNES_VE_Stokes(SNES_Stokes):
         self.DFDt.update_pre_solve(timestep, verbose=verbose, evalf=evalf,
                                    store_result=False)
 
+        # Update BDF coefficients from current dt_elastic and DDt history.
+        # These are UWexpressions that route through PetscDS constants[],
+        # so the compiled pointwise functions pick up the new values without
+        # JIT recompilation.
+        self.constitutive_model._update_bdf_coefficients()
+
         # 2. SOLVE: PETSc uses the advected σ*, σ** via the constitutive model
 
         if uw.mpi.rank == 0 and verbose:

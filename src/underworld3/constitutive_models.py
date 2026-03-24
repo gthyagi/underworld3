@@ -1087,6 +1087,14 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
 
         self._order = order
 
+        # BDF coefficients as UWexpressions — route through PetscDS constants[].
+        # Updated each step by _update_bdf_coefficients() before solve.
+        # Initialised to BDF-1 values: [1, -1, 0, 0].
+        self._bdf_c0 = expression(r"{c_0^{\mathrm{BDF}}}", sympy.Integer(1), "BDF leading coefficient")
+        self._bdf_c1 = expression(r"{c_1^{\mathrm{BDF}}}", sympy.Integer(-1), "BDF history coefficient 1")
+        self._bdf_c2 = expression(r"{c_2^{\mathrm{BDF}}}", sympy.Integer(0), "BDF history coefficient 2")
+        self._bdf_c3 = expression(r"{c_3^{\mathrm{BDF}}}", sympy.Integer(0), "BDF history coefficient 3")
+
         self._reset()
 
         super().__init__(unknowns, material_name=material_name)
@@ -1200,12 +1208,12 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
                 return inner_self.shear_viscosity_0
 
             # BDF-k effective viscosity: eta_eff = eta*mu*dt / (c0*eta + mu*dt)
-            # c0 from DDt's BDF coefficients (variable-dt aware)
+            # c0 is a UWexpression routed through PetscDS constants[],
+            # updated each step by _update_bdf_coefficients().
             eta = inner_self.shear_viscosity_0
             mu = inner_self.shear_modulus
             dt_e = inner_self.dt_elastic
-            coeffs = inner_self._owning_model._get_bdf_coefficients()
-            c0 = coeffs[0]
+            c0 = inner_self._owning_model._bdf_c0
 
             el_eff_visc = eta * mu * dt_e / (c0 * eta + mu * dt_e)
 
@@ -1249,11 +1257,32 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
             return min(self._order, self.Unknowns.DFDt.effective_order)
         return self._order
 
-    def _get_bdf_coefficients(self):
-        """Get BDF coefficients from DDt (variable-dt aware) or fall back to uniform."""
+    def _update_bdf_coefficients(self):
+        """Update BDF coefficient UWexpressions from current dt_elastic and DDt history.
+
+        Call this before each solve so that the constants[] array carries the
+        correct coefficients to the compiled pointwise functions. The coefficient
+        UWexpressions (_bdf_c0..c3) are referenced symbolically in ve_effective_viscosity,
+        E_eff, and stress() — their numeric values flow through PetscDSSetConstants.
+        """
         if self.Unknowns is not None and self.Unknowns.DFDt is not None:
-            return self.Unknowns.DFDt.bdf_coefficients
-        return _bdf_coefficients(self.effective_order, None, [])
+            dt_current = self.Parameters.dt_elastic
+            if hasattr(dt_current, 'sym'):
+                dt_current = dt_current.sym
+            coeffs = _bdf_coefficients(
+                self.effective_order, dt_current, self.Unknowns.DFDt._dt_history
+            )
+        else:
+            coeffs = _bdf_coefficients(self.effective_order, None, [])
+
+        # Pad to length 4
+        while len(coeffs) < 4:
+            coeffs.append(sympy.Integer(0))
+
+        self._bdf_c0.sym = coeffs[0]
+        self._bdf_c1.sym = coeffs[1]
+        self._bdf_c2.sym = coeffs[2]
+        self._bdf_c3.sym = coeffs[3]
 
     # The following should have no setters
     @property
@@ -1291,11 +1320,12 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
 
             if self.is_elastic:
                 mu_dt = self.Parameters.dt_elastic * self.Parameters.shear_modulus
-                coeffs = self._get_bdf_coefficients()
+                # BDF history coefficients as UWexpressions (route through constants[])
+                bdf_cs = [self._bdf_c1, self._bdf_c2, self._bdf_c3]
 
                 # History contribution: -Σ cᵢ·σ_star[i-1] / (2·μ·dt)
-                for i in range(1, len(coeffs)):
-                    E += -coeffs[i] * self.Unknowns.DFDt.psi_star[i - 1].sym / (2 * mu_dt)
+                for i in range(self.Unknowns.DFDt.order):
+                    E += -bdf_cs[i] * self.Unknowns.DFDt.psi_star[i].sym / (2 * mu_dt)
 
         self._E_eff.sym = E
 
@@ -1494,12 +1524,12 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
 
             if self.is_elastic:
                 mu_dt = self.Parameters.dt_elastic * self.Parameters.shear_modulus
-                coeffs = self._get_bdf_coefficients()
+                bdf_cs = [self._bdf_c1, self._bdf_c2, self._bdf_c3]
 
                 # History contribution: 2·η_eff · (-Σ cᵢ·σ_star[i-1]) / (2·μ·dt)
-                for i in range(1, len(coeffs)):
+                for i in range(self.Unknowns.DFDt.order):
                     stress += 2 * self.viscosity * (
-                        -coeffs[i] * self.Unknowns.DFDt.psi_star[i - 1].sym / (2 * mu_dt)
+                        -bdf_cs[i] * self.Unknowns.DFDt.psi_star[i].sym / (2 * mu_dt)
                     )
 
         return stress
