@@ -57,7 +57,22 @@ def test_stokes_pressure_nullspace_solves_without_pressure_bc():
     stokes.solve()
 
     assert stokes.snes.getConvergedReason() > 0
+    assert len(stokes._stokes_nullspace_basis) == 1
 
     jacobian = stokes.snes.getJacobian()
     nullspace = jacobian[0].getNullSpace()
     assert nullspace is not None
+
+    basis_vec = stokes._stokes_nullspace_basis[0]
+    velocity_is = stokes._subdict["velocity"][0]
+    pressure_is = stokes._subdict["pressure"][0]
+
+    velocity_subvec = basis_vec.getSubVector(velocity_is)
+    pressure_subvec = basis_vec.getSubVector(pressure_is)
+
+    try:
+        assert velocity_subvec.norm() == pytest.approx(0.0, abs=1.0e-12)
+        assert pressure_subvec.norm() > 0.0
+    finally:
+        basis_vec.restoreSubVector(velocity_is, velocity_subvec)
+        basis_vec.restoreSubVector(pressure_is, pressure_subvec)
