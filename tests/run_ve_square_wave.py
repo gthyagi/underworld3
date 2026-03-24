@@ -183,7 +183,7 @@ if __name__ == "__main__":
     De = 1.5
     order = 2
     n_periods = 3
-    n_harmonics = 15
+    n_harmonics = 3
 
     print("=" * 60)
     print(f"Square-wave VE benchmark: De={De}, order={order}")

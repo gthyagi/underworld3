@@ -1317,18 +1317,21 @@ class SNES_VE_Stokes(SNES_Stokes):
             self._setup_discretisation(verbose)
             self._setup_solver(verbose)
 
-        # --- Explicit stress history management ---
+        # --- Stress history management via standard DDt pathway ---
         #
-        # 1. ADVECT: trace psi_star values to upstream positions along
-        #    characteristics. psi_star[0] contains the actual stress from
-        #    the previous solve (stored by step 4 below). After advection,
-        #    psi_star[0] = σ* (previous stress at upstream) and
-        #    psi_star[1] = σ** (stress from 2 steps ago, double-traced).
+        # update_pre_solve(advect_only=True) performs:
+        #   1. History shift: psi_star[i] ← psi_star[i-1]
+        #   2. Skip psi_fn evaluation (psi_star[0] already has projected stress)
+        #   3. Advect all history levels to upstream positions along characteristics
+        #
+        # After this: psi_star[0] = σ* (previous stress at upstream),
+        #             psi_star[1] = σ** (stress from 2 steps ago, double-traced).
 
         if uw.mpi.rank == 0 and verbose:
             print(f"VE Stokes solver - advect stress history", flush=True)
 
-        self.DFDt.advect_history(timestep, verbose=verbose, evalf=evalf)
+        self.DFDt.update_pre_solve(timestep, verbose=verbose, evalf=evalf,
+                                   advect_only=True)
 
         # 2. SOLVE: PETSc uses the advected σ*, σ** via the constitutive model
 

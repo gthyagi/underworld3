@@ -1254,11 +1254,21 @@ class SemiLagrangian(uw_object):
         evalf: Optional[bool] = False,
         verbose: Optional[bool] = False,
         dt_physical: Optional[float] = None,
+        advect_only: Optional[bool] = False,
     ):
         """Sample upstream values along characteristics before solve.
 
         On the first call, automatically initialises history from the
         current field values so that bdf() returns zero on the first step.
+
+        Parameters
+        ----------
+        advect_only : bool, optional
+            If True, skip the psi_fn evaluation into psi_star[0] (step 2)
+            and only perform history shift (step 1) and upstream advection
+            (step 3). Used by VE_Stokes where psi_star[0] already contains
+            the projected actual stress from the previous solve — we want to
+            advect that stored stress, not overwrite it with the flux expression.
         """
 
         self._dt = dt
@@ -1292,15 +1302,19 @@ class SemiLagrangian(uw_object):
         else:
             phi = sympy.sympify(1)
 
-        for i in range(self.order - 1, 0, -1):
-            self.psi_star[i].array[...] = (
-                phi * self.psi_star[i - 1].array[...] + (1 - phi) * self.psi_star[i].array[...]
-            )
+        if not advect_only:
+            for i in range(self.order - 1, 0, -1):
+                self.psi_star[i].array[...] = (
+                    phi * self.psi_star[i - 1].array[...] + (1 - phi) * self.psi_star[i].array[...]
+                )
 
         # 2. Compute the current value of psi_fn which we store in psi_star[0]
         #    Note the need to do a try/except to handle unsupported evaluations
         #    (e.g. of derivatives)
         #
+        #    When advect_only=True (VE stress history), skip this step —
+        #    psi_star[0] already contains the projected actual stress from
+        #    the previous solve and we want to advect *that*, not the flux.
 
         # CRITICAL FIX (2025-11-28): Handle coordinates correctly for unit-aware mode.
         # Previous bug: extracting .magnitude gives METERS (e.g., 1000000), but:
@@ -1339,28 +1353,29 @@ class SemiLagrangian(uw_object):
             :, :
         ]
 
-        try:
-            # Use shifted ND coords to avoid quad mesh boundary issues
-            # node_coords_nd is slightly shifted toward cell centroids (lines 703-709)
-            # evaluate() treats plain numpy as ND [0-1] coordinates
-            eval_result = uw.function.evaluate(
-                self.psi_fn,
-                node_coords_nd,
-                evalf=evalf,
-            )
-            # Wrap result with units if psi_star has units but eval didn't return UnitAwareArray
-            psi_star_units = self.psi_star[0].units
-            if psi_star_units is not None and not isinstance(eval_result, UnitAwareArray):
-                eval_result = UnitAwareArray(eval_result, units=psi_star_units)
+        if not advect_only:
+            try:
+                # Use shifted ND coords to avoid quad mesh boundary issues
+                # node_coords_nd is slightly shifted toward cell centroids
+                # evaluate() treats plain numpy as ND [0-1] coordinates
+                eval_result = uw.function.evaluate(
+                    self.psi_fn,
+                    node_coords_nd,
+                    evalf=evalf,
+                )
+                # Wrap result with units if psi_star has units but eval didn't return UnitAwareArray
+                psi_star_units = self.psi_star[0].units
+                if psi_star_units is not None and not isinstance(eval_result, UnitAwareArray):
+                    eval_result = UnitAwareArray(eval_result, units=psi_star_units)
 
-            self.psi_star[0].array[...] = eval_result
+                self.psi_star[0].array[...] = eval_result
 
-        except Exception:
-            # Fallback to projection solver for expressions that can't be directly evaluated
-            # (e.g., containing derivatives)
-            self._psi_star_projection_solver.uw_function = self.psi_fn
-            self._psi_star_projection_solver.smoothing = 0.0
-            self._psi_star_projection_solver.solve(verbose=verbose)
+            except Exception:
+                # Fallback to projection solver for expressions that can't be directly evaluated
+                # (e.g., containing derivatives)
+                self._psi_star_projection_solver.uw_function = self.psi_fn
+                self._psi_star_projection_solver.smoothing = 0.0
+                self._psi_star_projection_solver.solve(verbose=verbose)
 
         # 3. Compute the upstream values from the psi_fn
 
@@ -1612,7 +1627,7 @@ class SemiLagrangian(uw_object):
 
         return
 
-    def advect_history(self, dt, evalf=False, verbose=False):
+    def _advect_history_PARKED(self, dt, evalf=False, verbose=False):
         """Advect all psi_star history levels to upstream positions.
 
         Pure advection only — no copy-down, no psi_fn evaluation.
@@ -1695,6 +1710,7 @@ class SemiLagrangian(uw_object):
 
             # RK2: midpoint velocity
             mid_pt_coords = coords - v_at_node_pts * (0.5 * dt_for_calc)
+            mid_pt_coords = self.mesh.return_coords_to_bounds(mid_pt_coords)
             v_mid_result = uw.function.global_evaluate(self.V_fn, mid_pt_coords)
             if isinstance(v_mid_result, UnitAwareArray):
                 v_at_mid_pts = v_mid_result[:, 0, :]
@@ -1709,6 +1725,7 @@ class SemiLagrangian(uw_object):
 
             # Upstream position
             end_pt_coords = coords - v_at_mid_pts * dt_for_calc
+            end_pt_coords = self.mesh.return_coords_to_bounds(end_pt_coords)
 
             # Sample psi_star[i] at upstream position
             expr_to_evaluate = self.psi_star[i].sym
