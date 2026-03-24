@@ -1331,7 +1331,7 @@ class SNES_VE_Stokes(SNES_Stokes):
             print(f"VE Stokes solver - advect stress history", flush=True)
 
         self.DFDt.update_pre_solve(timestep, verbose=verbose, evalf=evalf,
-                                   advect_only=True)
+                                   store_result=False)
 
         # 2. SOLVE: PETSc uses the advected σ*, σ** via the constitutive model
 

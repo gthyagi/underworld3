@@ -1254,7 +1254,7 @@ class SemiLagrangian(uw_object):
         evalf: Optional[bool] = False,
         verbose: Optional[bool] = False,
         dt_physical: Optional[float] = None,
-        advect_only: Optional[bool] = False,
+        store_result: Optional[bool] = True,
     ):
         """Sample upstream values along characteristics before solve.
 
@@ -1263,12 +1263,13 @@ class SemiLagrangian(uw_object):
 
         Parameters
         ----------
-        advect_only : bool, optional
-            If True, skip the psi_fn evaluation into psi_star[0] (step 2)
-            and only perform history shift (step 1) and upstream advection
-            (step 3). Used by VE_Stokes where psi_star[0] already contains
-            the projected actual stress from the previous solve — we want to
-            advect that stored stress, not overwrite it with the flux expression.
+        store_result : bool, optional
+            If True (default), evaluate psi_fn at current positions and store
+            in psi_star[0] before advection — the standard DDt behaviour.
+            If False, skip this step and the history shift: only advect the
+            existing psi_star levels upstream. Used by VE_Stokes where
+            psi_star[0] already contains the projected actual stress from
+            the previous solve.
         """
 
         self._dt = dt
@@ -1302,7 +1303,7 @@ class SemiLagrangian(uw_object):
         else:
             phi = sympy.sympify(1)
 
-        if not advect_only:
+        if store_result:
             for i in range(self.order - 1, 0, -1):
                 self.psi_star[i].array[...] = (
                     phi * self.psi_star[i - 1].array[...] + (1 - phi) * self.psi_star[i].array[...]
@@ -1312,7 +1313,7 @@ class SemiLagrangian(uw_object):
         #    Note the need to do a try/except to handle unsupported evaluations
         #    (e.g. of derivatives)
         #
-        #    When advect_only=True (VE stress history), skip this step —
+        #    When store_result=False (e.g. VE stress history), skip this step —
         #    psi_star[0] already contains the projected actual stress from
         #    the previous solve and we want to advect *that*, not the flux.
 
@@ -1353,7 +1354,7 @@ class SemiLagrangian(uw_object):
             :, :
         ]
 
-        if not advect_only:
+        if store_result:
             try:
                 # Use shifted ND coords to avoid quad mesh boundary issues
                 # node_coords_nd is slightly shifted toward cell centroids
