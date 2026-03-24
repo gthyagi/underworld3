@@ -10,4 +10,5 @@ Validation benchmarks comparing Underworld3 solvers against analytical solutions
 :maxdepth: 1
 
 ve-oscillatory-shear
+ve-square-wave-shear
 ```

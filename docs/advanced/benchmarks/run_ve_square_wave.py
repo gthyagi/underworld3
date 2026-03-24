@@ -183,7 +183,7 @@ if __name__ == "__main__":
     De = 1.5
     order = 2
     n_periods = 3
-    n_harmonics = 3
+    n_harmonics = 10
 
     print("=" * 60)
     print(f"Square-wave VE benchmark: De={De}, order={order}")
@@ -231,7 +231,7 @@ if __name__ == "__main__":
 
     # Save results
     np.savez(
-        "tests/ve_square_wave_benchmark.npz",
+        f"tests/ve_square_wave_{n_harmonics}h.npz",
         adaptive_times=result_adaptive["times"],
         adaptive_numerical=result_adaptive["numerical"],
         adaptive_analytical=result_adaptive["analytical"],
@@ -241,4 +241,4 @@ if __name__ == "__main__":
         uniform_analytical=result_uniform["analytical"],
         uniform_timesteps=result_uniform["timesteps"],
     )
-    print("\nResults saved to tests/ve_square_wave_benchmark.npz")
+    print(f"\nResults saved to tests/ve_square_wave_{n_harmonics}h.npz")
