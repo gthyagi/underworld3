@@ -447,6 +447,10 @@ class SolverBaseClass(uw_object):
                 self.dm = None  # Should be able to avoid nuking this if we
                             # can insert new functions in template (surface integrals problematic in
                             # the current implementation )
+                if hasattr(self, "_pressure_nullspace"):
+                    self._pressure_nullspace = None
+                if hasattr(self, "_pressure_nullspace_basis"):
+                    self._pressure_nullspace_basis = None
 
         # This is a workaround for some problem in the PETSc machinery
         # where we need a surface integral term somewhere on every process
@@ -2829,6 +2833,9 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
         self.boundary_conditions = False
         # self._constitutive_model = None
         self._saddle_preconditioner = None
+        self._petsc_use_pressure_nullspace = False
+        self._pressure_nullspace = None
+        self._pressure_nullspace_basis = None
 
         # Construct strainrate tensor for future usage.
         # Grab gradients, and let's switch out to sympy.Matrix notation
@@ -3087,6 +3094,100 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
     def saddle_preconditioner(self, function):
         self.is_setup = False
         self._saddle_preconditioner = function
+
+    @property
+    def petsc_use_pressure_nullspace(self):
+        """
+        Enable PETSc handling of the constant-pressure nullspace.
+
+        When enabled, the solver attaches a nullspace basis with zero
+        velocity entries and constant pressure entries to the coupled
+        Stokes matrices before solve.
+        """
+        return self._petsc_use_pressure_nullspace
+
+    @petsc_use_pressure_nullspace.setter
+    def petsc_use_pressure_nullspace(self, value):
+        self._petsc_use_pressure_nullspace = bool(value)
+        self._pressure_nullspace = None
+        self._pressure_nullspace_basis = None
+        self.is_setup = False
+
+    def _pressure_dirichlet_bcs(self):
+        """Return essential boundary conditions applied to the pressure field."""
+
+        pressure_field_ids = {1}
+        try:
+            pressure_field_ids.add(self.p.field_id)
+        except Exception:
+            pass
+
+        return [bc for bc in self.essential_bcs if bc.f_id in pressure_field_ids]
+
+    def _build_pressure_nullspace(self):
+        """Create a constant-pressure nullspace basis for the coupled Stokes DM."""
+
+        template_vec = self.dm.getGlobalVec()
+        try:
+            null_vec = template_vec.duplicate()
+        finally:
+            self.dm.restoreGlobalVec(template_vec)
+
+        null_vec.set(0.0)
+
+        pressure_is = self._subdict["pressure"][0]
+        pressure_subvec = null_vec.getSubVector(pressure_is)
+        pressure_subvec.set(1.0)
+        null_vec.restoreSubVector(pressure_is, pressure_subvec)
+
+        self._pressure_nullspace_basis = null_vec
+        self._pressure_nullspace = PETSc.NullSpace().create(
+            constant=False,
+            vectors=(null_vec,),
+            comm=self.dm.comm,
+        )
+
+        return self._pressure_nullspace
+
+    def _attach_pressure_nullspace(self):
+        """Attach the configured pressure nullspace to the Stokes matrices."""
+
+        if not self._petsc_use_pressure_nullspace:
+            return
+
+        pressure_bcs = self._pressure_dirichlet_bcs()
+        if pressure_bcs:
+            boundaries = ", ".join(sorted({bc.boundary for bc in pressure_bcs}))
+            raise ValueError(
+                "petsc_use_pressure_nullspace=True requires the pressure field to be "
+                f"free of Dirichlet boundary conditions. Found pressure Dirichlet BCs on: {boundaries}"
+            )
+
+        if "pressure" not in self._subdict:
+            raise RuntimeError("Pressure field decomposition is unavailable; cannot attach nullspace.")
+
+        self.snes.setUp()
+
+        jacobian = self.snes.getJacobian()
+        operator_matrix = jacobian[0]
+        preconditioner_matrix = jacobian[1] if len(jacobian) > 1 else None
+
+        nullspace = self._pressure_nullspace
+        if nullspace is None:
+            nullspace = self._build_pressure_nullspace()
+
+        operator_matrix.setNullSpace(nullspace)
+        operator_matrix.setTransposeNullSpace(nullspace)
+
+        if preconditioner_matrix is not None:
+            preconditioner_matrix.setNullSpace(nullspace)
+            preconditioner_matrix.setTransposeNullSpace(nullspace)
+
+        if self.verbose and uw.mpi.rank == 0:
+            print(
+                f"Stokes Saddle Pt ({self.name}): attached constant-pressure nullspace",
+                flush=True,
+            )
 
 
     ## F0, F1 should be f0 and F1, (pf0 for Saddles can be added here)
@@ -3744,6 +3845,8 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
         for index,name in enumerate(names):
             self._subdict[name] = (isets[index],dms[index])
 
+        self._attach_pressure_nullspace()
+
         self.is_setup = True
         self.constitutive_model._solver_is_setup = True
 
@@ -3846,6 +3949,7 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
             self.petsc_options.setValue("snes_max_it", 0)
             self.snes.setType("nrichardson")
             self.snes.setFromOptions()
+            self._attach_pressure_nullspace()
             self.snes.solve(None, gvec)
 
             # with self.mesh.access():
@@ -3871,6 +3975,7 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
             self.snes.atol = self.atol
             self.snes.setType("nrichardson")
             self.snes.setFromOptions()
+            self._attach_pressure_nullspace()
             self.snes.solve(None, gvec)
             self._warn_on_divergence(phase="picard")
 
@@ -3880,6 +3985,7 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
             self.snes.atol = self.atol
             self.petsc_options.setValue("snes_max_it", snes_max_it)
             self.snes.setFromOptions()
+            self._attach_pressure_nullspace()
             self.snes.solve(None, gvec)
 
         else:
@@ -3889,6 +3995,7 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
             self.snes.atol = self.atol
             self.petsc_options.setValue("snes_max_it", snes_max_it)
             self.snes.setFromOptions()
+            self._attach_pressure_nullspace()
             self.snes.solve(None, gvec)
 
         cdef DM dm = self.dm
