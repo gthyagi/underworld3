@@ -96,26 +96,15 @@ def run_square_wave(order, De, n_periods, dt_min_over_tr, dt_max_over_tr,
     stokes.constitutive_model.Parameters.shear_viscosity_0 = ETA
     stokes.constitutive_model.Parameters.shear_modulus = MU
 
-    # Boundary conditions: oscillatory shear with square-wave envelope
-    x, y = mesh.X
-    t_sym = sympy.Symbol("t_sim")
-    t_expr = expression(R"t_{\mathrm{sim}}", t_sym, "Simulation time")
+    # Boundary conditions: simple shear driven by top/bottom velocity
+    # V_top updated numerically each timestep to produce square-wave γ̇
+    V_top = expression(R"V_{\mathrm{top}}", sympy.Float(0.0), "Top boundary velocity")
 
-    # Build the Fourier-series velocity symbolically (truncated)
-    v_top_sym = sympy.Integer(0)
-    for k in range(1, n_harmonics + 1):
-        n = 2 * k - 1
-        a_k = sympy.Rational(4, 1) / (sympy.pi * n)
-        v_top_sym += a_k * sympy.sin(n * omega * t_sym)
-    v_top_sym *= V0
-
-    v_bc_sym = v_top_sym * (y / (H / 2))
-    v_bc = expression(R"v_{\mathrm{bc}}", v_bc_sym, "Square-wave shear velocity")
-
-    stokes.add_dirichlet_bc((v_bc.sym, 0.0), "Top")
-    stokes.add_dirichlet_bc((-v_bc.sym, 0.0), "Bottom")
-    stokes.add_dirichlet_bc((None, 0.0), "Left")
-    stokes.add_dirichlet_bc((None, 0.0), "Right")
+    stokes.add_dirichlet_bc((V_top, 0.0), "Top")
+    stokes.add_dirichlet_bc((-V_top, 0.0), "Bottom")
+    stokes.add_dirichlet_bc((sympy.oo, 0.0), "Left")
+    stokes.add_dirichlet_bc((sympy.oo, 0.0), "Right")
+    stokes.tolerance = 1.0e-6
 
     # Time loop
     times = []
@@ -131,19 +120,25 @@ def run_square_wave(order, De, n_periods, dt_min_over_tr, dt_max_over_tr,
         else:
             dt = adaptive_dt(t_current, omega, dt_min, dt_max)
 
-        # Update simulation time and dt_elastic
-        t_expr.sym = t_current + dt
+        t_next = t_current + dt
+
+        # Update boundary velocity: V_top(t) such that γ̇ = 2·V_top/H = square wave
+        # square_wave_shear_rate returns the actual γ̇, so V_top = γ̇ · H/2
+        gamma_dot_t = square_wave_shear_rate(
+            np.array([t_next]), gamma_dot_0, omega, n_harmonics
+        )[0]
+        V_top.sym = sympy.Float(gamma_dot_t * H / 2.0)
+
         stokes.constitutive_model.Parameters.dt_elastic = dt
 
-        stokes.solve(timestep=dt)
+        stokes.solve(zero_init_guess=False, timestep=dt)
 
         t_current += dt
         step += 1
 
         # Extract stress at mesh centre
-        tau = stokes.tau
         centre = np.array([[0.0, 0.0]])
-        tau_xy = uw.function.evaluate(tau.sym[0, 1], centre, mesh)
+        tau_xy = uw.function.evaluate(stokes.tau.sym[0, 1], centre)
         sigma_xy = float(tau_xy.flatten()[0])
 
         times.append(t_current)

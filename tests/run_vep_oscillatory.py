@@ -70,7 +70,6 @@ def run_vep_oscillatory(order, n_steps, dt_over_tr, De, tau_y):
         time_phys += dt
         V_t = V0 * np.sin(omega * time_phys)
         V_bc.sym = V_t
-        stokes.is_setup = False
 
         t0s = __import__('time').time()
         stokes.solve(zero_init_guess=False, evalf=False)

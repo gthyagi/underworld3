@@ -77,7 +77,6 @@ def run_oscillatory(order, n_steps, dt, omega, V0, t0, tau_y=None):
     for step in range(n_steps):
         time_phys += dt
         V_bc.sym = V0 * np.sin(omega * time_phys)
-        stokes.is_setup = False
 
         stokes.solve(zero_init_guess=False, evalf=False)
 

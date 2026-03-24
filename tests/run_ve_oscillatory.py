@@ -67,7 +67,6 @@ def run_oscillatory(order, n_steps, dt_over_tr, De):
         # Update boundary velocity for this timestep
         V_t = V0 * np.sin(omega * time_phys)
         V_bc.sym = V_t
-        stokes.is_setup = False  # force BC re-evaluation
 
         stokes.solve(zero_init_guess=False, evalf=False)
 
