@@ -1037,20 +1037,18 @@ worktree_create() {
     # 3. Rename branch to follow convention
     git -C "$wt_path" branch -m "worktree-$name" "$branch_name" 2>/dev/null || true
 
-    # 4. Symlink shared resources
-    echo "  Linking shared environment..."
+    # 4. Set up isolated environment
+    #
+    # Each worktree gets its OWN pixi environment (not a symlink to the main
+    # repo's .pixi). This prevents Cython binary incompatibilities when
+    # worktrees have different source code. Only PETSc is shared (it's
+    # non-relocatable and expensive to rebuild).
+    echo "  Setting up isolated environment..."
 
-    # .pixi → main repo's .pixi (shared conda/pip packages)
-    if [ -d "$main_repo/.pixi" ]; then
-        rm -rf "$wt_path/.pixi"
-        ln -s "$main_repo/.pixi" "$wt_path/.pixi"
-        echo -e "    ${GREEN}✓${NC} .pixi → main repo"
-    fi
-
-    # petsc-custom/petsc → main repo's PETSc build (read-only, not relocatable)
+    # petsc-custom/petsc → main repo's PETSc build (read-only, shared)
     if [ -d "$main_repo/petsc-custom/petsc" ]; then
         ln -sf "$main_repo/petsc-custom/petsc" "$wt_path/petsc-custom/petsc"
-        echo -e "    ${GREEN}✓${NC} petsc-custom/petsc → main repo"
+        echo -e "    ${GREEN}✓${NC} petsc-custom/petsc → main repo (shared)"
     fi
 
     # .pixi-env — copy so ./uw knows which environment to use
@@ -1059,9 +1057,18 @@ worktree_create() {
         echo -e "    ${GREEN}✓${NC} .pixi-env copied ($(cat "$main_repo/.pixi-env"))"
     fi
 
-    # 5. Exclude symlinks from git tracking in this worktree.
-    # Without this, "git add -A" or "git add ." can accidentally commit
-    # these machine-local symlinks, breaking CI.
+    # Install pixi environment (own copy, not symlinked)
+    local env=$(cat "$wt_path/.pixi-env" 2>/dev/null || echo "runtime")
+    echo "  Installing pixi environment ($env) — this may take a moment..."
+    (cd "$wt_path" && $PIXI install -e "$env" 2>/dev/null) && \
+        echo -e "    ${GREEN}✓${NC} .pixi/ installed (isolated)" || {
+        echo -e "    ${YELLOW}pixi install failed — falling back to symlink${NC}"
+        rm -rf "$wt_path/.pixi"
+        ln -s "$main_repo/.pixi" "$wt_path/.pixi"
+        echo -e "    ${YELLOW}✓${NC} .pixi → main repo (shared fallback)"
+    }
+
+    # 5. Exclude local files from git tracking in this worktree.
     local git_dir
     git_dir=$(git -C "$wt_path" rev-parse --git-dir)
     local exclude_file="$git_dir/info/exclude"
@@ -1071,7 +1078,7 @@ worktree_create() {
             echo "$entry" >> "$exclude_file"
         fi
     done
-    echo -e "    ${GREEN}✓${NC} git exclude updated (symlinks won't be committed)"
+    echo -e "    ${GREEN}✓${NC} git exclude updated"
 
     echo ""
     echo -e "${GREEN}${BOLD}Worktree ready!${NC}"
@@ -1142,7 +1149,7 @@ worktree_list() {
         if [ -f "$d/.git" ]; then
             local branch=$(git -C "$d" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "?")
             local status=$(git -C "$d" status --short 2>/dev/null | wc -l | tr -d ' ')
-            local linked=$( [ -L "$d/.pixi" ] && echo "linked" || echo "standalone" )
+            local linked=$( [ -L "$d/.pixi" ] && echo "shared env" || echo "isolated" )
             local dirty=""
             [ "$status" -gt 0 ] && dirty="  ${YELLOW}($status modified)${NC}"
 
