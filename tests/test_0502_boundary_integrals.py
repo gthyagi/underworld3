@@ -291,3 +291,46 @@ def test_bd_integral_annulus_internal_normal_tangential():
     value = bd_int.evaluate()
 
     assert abs(value) < 0.05, f"Expected ~0, got {value}"
+
+
+def _build_spherical_shell_for_integrals():
+    from underworld3.meshing import SphericalShell
+
+    mesh_spherical = SphericalShell(
+        radiusOuter=1.0,
+        radiusInner=0.5,
+        cellSize=1.0 / 4.0,
+        degree=1,
+        qdegree=2,
+    )
+    uw.discretisation.MeshVariable("P_spherical_int", mesh_spherical, 1, degree=1, continuous=True)
+    return mesh_spherical
+
+
+def test_spherical_bd_then_integral_does_not_poison_volume_path():
+    """Boundary and volume integrals must not collide in the JIT cache."""
+
+    mesh_spherical = _build_spherical_shell_for_integrals()
+
+    boundary_before = float(uw.maths.BdIntegral(mesh_spherical, fn=1.0, boundary="Lower").evaluate())
+    volume = float(uw.maths.Integral(mesh_spherical, fn=1.0).evaluate())
+    boundary_after = float(uw.maths.BdIntegral(mesh_spherical, fn=1.0, boundary="Lower").evaluate())
+
+    assert boundary_before > 0.0
+    assert volume > 0.0
+    assert abs(boundary_after - boundary_before) < 1.0e-10
+
+
+def test_spherical_integral_then_bd_does_not_poison_boundary_path():
+    """Volume and boundary integrals must remain order-independent on spherical meshes."""
+
+    mesh_reference = _build_spherical_shell_for_integrals()
+    boundary_reference = float(uw.maths.BdIntegral(mesh_reference, fn=1.0, boundary="Lower").evaluate())
+
+    mesh_spherical = _build_spherical_shell_for_integrals()
+    volume = float(uw.maths.Integral(mesh_spherical, fn=1.0).evaluate())
+    boundary_after = float(uw.maths.BdIntegral(mesh_spherical, fn=1.0, boundary="Lower").evaluate())
+
+    assert volume > 0.0
+    assert boundary_reference > 0.0
+    assert abs(boundary_after - boundary_reference) < 1.0e-10
