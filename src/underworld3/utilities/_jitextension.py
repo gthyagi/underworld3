@@ -300,13 +300,20 @@ def getext(
     import time
 
     time_s = time.time()
+    primary_field_list = tuple(primary_field_list)
+
+    raw_fns_residual = tuple(fns_residual)
+    raw_fns_bcs = tuple(fns_bcs)
+    raw_fns_jacobian = tuple(fns_jacobian)
+    raw_fns_bd_residual = tuple(fns_bd_residual)
+    raw_fns_bd_jacobian = tuple(fns_bd_jacobian)
 
     raw_fns = (
-        tuple(fns_residual)
-        + tuple(fns_bcs)
-        + tuple(fns_jacobian)
-        + tuple(fns_bd_residual)
-        + tuple(fns_bd_jacobian)
+        raw_fns_residual
+        + raw_fns_bcs
+        + raw_fns_jacobian
+        + raw_fns_bd_residual
+        + raw_fns_bd_jacobian
     )
 
     # Extract constant UWexpressions that will go through constants[] array
@@ -315,23 +322,41 @@ def getext(
     # Build structurally-expanded functions for cache hashing.
     # Constants are replaced with placeholder symbols (value-independent),
     # so changing a constant value won't cause a cache miss.
-    expanded_fns = []
-    for fn in raw_fns:
+    def _structural_expand(fn):
         # Phase 1: Substitute constants with _JITConstant placeholders
         if constants_subs_map and fn is not None:
             try:
-                fn_structural = fn.xreplace(constants_subs_map) if hasattr(fn, 'xreplace') else fn
+                fn_structural = fn.xreplace(constants_subs_map) if hasattr(fn, "xreplace") else fn
             except Exception:
                 fn_structural = fn
         else:
             fn_structural = fn
 
         # Phase 2: Unwrap remaining (non-constant) expressions
-        expanded_fns.append(
-            underworld3.function.expressions.unwrap(fn_structural, keep_constants=False, return_self=False)
+        return underworld3.function.expressions.unwrap(
+            fn_structural, keep_constants=False, return_self=False
         )
 
-    fns = tuple(expanded_fns)
+    expanded_fns_residual = tuple(_structural_expand(fn) for fn in raw_fns_residual)
+    expanded_fns_bcs = tuple(_structural_expand(fn) for fn in raw_fns_bcs)
+    expanded_fns_jacobian = tuple(_structural_expand(fn) for fn in raw_fns_jacobian)
+    expanded_fns_bd_residual = tuple(_structural_expand(fn) for fn in raw_fns_bd_residual)
+    expanded_fns_bd_jacobian = tuple(_structural_expand(fn) for fn in raw_fns_bd_jacobian)
+
+    fns = (
+        expanded_fns_residual
+        + expanded_fns_bcs
+        + expanded_fns_jacobian
+        + expanded_fns_bd_residual
+        + expanded_fns_bd_jacobian
+    )
+    fns_signature = (
+        expanded_fns_residual,
+        expanded_fns_bcs,
+        expanded_fns_jacobian,
+        expanded_fns_bd_residual,
+        expanded_fns_bd_jacobian,
+    )
 
     if debug and underworld3.mpi.rank == 0:
         print(f"Expanded functions for compilation:")
@@ -353,8 +378,14 @@ def getext(
         # unique modules.
         jitname += "_" + str(len(_ext_dict.keys()))
 
-    else:  # Else name from fns hash — uses structural form (constants as placeholders)
-        jitname = abs(hash((mesh, fns, tuple(mesh.vars.keys()))))
+    else:  # Else name from a structured hash — function role/signature must be preserved.
+        primary_field_signature = tuple(
+            (getattr(field, "field_id", None), getattr(field, "clean_name", None))
+            for field in primary_field_list
+        )
+        jitname = abs(
+            hash((mesh, fns_signature, tuple(mesh.vars.keys()), primary_field_signature))
+        )
 
     # Create the module if not in dictionary
     if jitname not in _ext_dict.keys() or not cache:
