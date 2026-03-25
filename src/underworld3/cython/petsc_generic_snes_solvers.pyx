@@ -9,7 +9,7 @@ from petsc4py import PETSc
 
 import underworld3
 import underworld3 as uw
-from   underworld3.utilities._jitextension import getext
+from   underworld3.utilities._jitextension import getext, JITCallbackSet
 import underworld3.timing as timing
 
 from underworld3.utilities._api_tools import uw_object
@@ -1542,15 +1542,19 @@ class SNES_Scalar(SolverBaseClass):
             print(f"Scalar SNES: Jacobians complete, now compile", flush=True)
 
         prim_field_list = [self.u]
-        _getext_result = getext(self.mesh,
-                                       tuple(fns_residual),
-                                       tuple(fns_jacobian),
-                                       [x.fn for x in self.essential_bcs],
-                                       tuple(fns_bd_residual),
-                                       tuple(fns_bd_jacobian),
-                                       primary_field_list=prim_field_list,
-                                       verbose=verbose,
-                                       debug=debug,)
+        _getext_result = getext(
+            self.mesh,
+            JITCallbackSet(
+                residual=tuple(fns_residual),
+                bcs=tuple(x.fn for x in self.essential_bcs),
+                jacobian=tuple(fns_jacobian),
+                bd_residual=tuple(fns_bd_residual),
+                bd_jacobian=tuple(fns_bd_jacobian),
+            ),
+            prim_field_list,
+            verbose=verbose,
+            debug=debug,
+        )
         self.compiled_extensions = _getext_result.ptrobj
         self.ext_dict = _getext_result.fn_dicts
         self.constants_manifest = _getext_result.constants_manifest
@@ -2291,15 +2295,19 @@ class SNES_Vector(SolverBaseClass):
         # note also that the order here is important.
 
         prim_field_list = [self.u,]
-        _getext_result = getext(self.mesh,
-                                       tuple(fns_residual),
-                                       tuple(fns_jacobian),
-                                       [x.fn for x in self.essential_bcs],
-                                       tuple(fns_bd_residual),
-                                       tuple(fns_bd_jacobian),
-                                       primary_field_list=prim_field_list,
-                                       verbose=verbose,
-                                       debug=debug,)
+        _getext_result = getext(
+            self.mesh,
+            JITCallbackSet(
+                residual=tuple(fns_residual),
+                bcs=tuple(x.fn for x in self.essential_bcs),
+                jacobian=tuple(fns_jacobian),
+                bd_residual=tuple(fns_bd_residual),
+                bd_jacobian=tuple(fns_bd_jacobian),
+            ),
+            prim_field_list,
+            verbose=verbose,
+            debug=debug,
+        )
         self.compiled_extensions = _getext_result.ptrobj
         self.ext_dict = _getext_result.fn_dicts
         self.constants_manifest = _getext_result.constants_manifest
@@ -3669,17 +3677,21 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
             print(f"Stokes: Jacobians complete, now compile", flush=True)
 
         prim_field_list = [self.u, self.p]
-        _getext_result = getext(self.mesh,
-                                       tuple(fns_residual),
-                                       tuple(fns_jacobian),
-                                       [x.fn for x in self.essential_bcs],
-                                       tuple(fns_bd_residual),
-                                       tuple(fns_bd_jacobian),
-                                       primary_field_list=prim_field_list,
-                                       verbose=verbose,
-                                       debug=debug,
-                                       debug_name=debug_name,
-                                       cache=False)
+        _getext_result = getext(
+            self.mesh,
+            JITCallbackSet(
+                residual=tuple(fns_residual),
+                bcs=tuple(x.fn for x in self.essential_bcs),
+                jacobian=tuple(fns_jacobian),
+                bd_residual=tuple(fns_bd_residual),
+                bd_jacobian=tuple(fns_bd_jacobian),
+            ),
+            prim_field_list,
+            verbose=verbose,
+            debug=debug,
+            debug_name=debug_name,
+            cache=False,
+        )
         self.compiled_extensions = _getext_result.ptrobj
         self.ext_dict = _getext_result.fn_dicts
         self.constants_manifest = _getext_result.constants_manifest

@@ -3,7 +3,7 @@ import sympy
 
 import underworld3
 import underworld3.timing as timing
-from   underworld3.utilities._jitextension import getext
+from   underworld3.utilities._jitextension import getext, JITCallbackSet
 
 from petsc4py import PETSc
 
@@ -89,7 +89,8 @@ class Integral:
         self.dm = self.mesh.dm  # .clone()
         mesh=self.mesh
 
-        _getext_result = getext(self.mesh, [self.fn,], [], [], [], [], self.mesh.vars.values(), verbose=verbose)
+        _getext_result = getext(self.mesh, JITCallbackSet(residual=(self.fn,)),
+                                self.mesh.vars.values(), verbose=verbose)
         cdef PtrContainer ext = _getext_result.ptrobj
 
         # Pull out vec for variables, and go ahead with the integral
@@ -273,7 +274,8 @@ class CellWiseIntegral:
         elif isinstance(self.fn, sympy.vector.Dyadic):
             raise RuntimeError("Integral evaluation for Dyadic integrands not supported.")
 
-        cdef PtrContainer ext = getext(self.mesh, [self.fn,], [], [], [], [], self.mesh.vars.values()).ptrobj
+        cdef PtrContainer ext = getext(self.mesh, JITCallbackSet(residual=(self.fn,)),
+                                       self.mesh.vars.values()).ptrobj
 
         # Pull out vec for variables, and go ahead with the integral
         self.mesh.update_lvec()
@@ -388,8 +390,8 @@ class BdIntegral:
 
         # Compile integrand using the boundary residual slot (includes petsc_n[] in signature)
         _getext_result = getext(
-            self.mesh, [], [], [], [self.fn,], [], self.mesh.vars.values(), verbose=verbose
-        )
+            self.mesh, JITCallbackSet(bd_residual=(self.fn,)),
+            self.mesh.vars.values(), verbose=verbose)
         cdef PtrContainer ext = _getext_result.ptrobj
 
         # Prepare the solution vector
