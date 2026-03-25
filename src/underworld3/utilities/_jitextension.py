@@ -32,6 +32,21 @@ from dataclasses import dataclass
 
 _ext_dict = {}
 
+# Per-function cache: maps (fn_hash, sig_type) -> _CachedFn
+_fn_cache = {}
+
+
+@dataclass
+class _CachedFn:
+    """Registry entry for a single cached compiled function pointer."""
+    ptr_container: object   # PtrContainer from the .so that compiled this fn
+    sig_type: str           # "residual" | "jacobian" | "bcs" | "bd_residual" | "bd_jacobian"
+    index: int              # index within that container's sig_type array
+
+
+# Signature type names used by the per-function cache
+_SIG_TYPES = ("residual", "bcs", "jacobian", "bd_residual", "bd_jacobian")
+
 
 # ============================================================================
 # JIT Callback Set
@@ -428,6 +443,11 @@ def getext(
 
     import os
 
+    primary_field_signature = tuple(
+        (getattr(field, "field_id", None), getattr(field, "clean_name", None))
+        for field in primary_field_list
+    )
+
     if debug_name is not None:
         jitname = debug_name
 
@@ -438,33 +458,155 @@ def getext(
         jitname += "_" + str(len(_ext_dict.keys()))
 
     else:  # Name from structured hash — function role must be preserved.
-        primary_field_signature = tuple(
-            (getattr(field, "field_id", None), getattr(field, "clean_name", None))
-            for field in primary_field_list
-        )
         jitname = abs(
             hash((mesh, expanded.signature(), tuple(mesh.vars.keys()), primary_field_signature))
         )
 
-    # Create the module if not in dictionary
-    if jitname not in _ext_dict.keys() or not cache:
+    # ── Fast path: whole-bundle cache hit ──────────────────────────────────
+    if jitname in _ext_dict and cache:
+        if verbose and underworld3.mpi.rank == 0:
+            print(f"JIT compiled module cached ... {jitname} ", flush=True)
+
+        module = _ext_dict[jitname]
+        ptrobj = module.getptrobj()
+
+        i_res = {fn: i for i, fn in enumerate(callbacks.residual)}
+        i_ebc = {fn: i for i, fn in enumerate(callbacks.bcs)}
+        i_jac = {fn: i for i, fn in enumerate(callbacks.jacobian)}
+        i_bd_res = {fn: i for i, fn in enumerate(callbacks.bd_residual)}
+        i_bd_jac = {fn: i for i, fn in enumerate(callbacks.bd_jacobian)}
+
+        extn_fn_dict = namedtuple(
+            "Functions", ["res", "jac", "ebc", "bd_res", "bd_jac"],
+        )
+        return _GextResult(
+            ptrobj,
+            extn_fn_dict(i_res, i_jac, i_ebc, i_bd_res, i_bd_jac),
+            constants_manifest,
+        )
+
+    # ── Per-function cache: check which individual functions are cached ──
+    # Build a hashable key for the constants manifest so it's part of
+    # every per-function hash (ensures constants[i] means the same thing).
+    constants_manifest_key = tuple(
+        (str(expr), idx) for idx, expr in constants_manifest
+    )
+
+    # Compute per-function hashes for each expression, grouped by sig_type
+    fn_hashes = {}  # maps (sig_type, slot_index) -> hash
+    for sig_type, slot_fns in zip(
+        _SIG_TYPES,
+        [expanded.residual, expanded.bcs, expanded.jacobian,
+         expanded.bd_residual, expanded.bd_jacobian],
+    ):
+        for i, fn_expanded in enumerate(slot_fns):
+            fn_hashes[(sig_type, i)] = abs(
+                hash((mesh, fn_expanded, tuple(mesh.vars.keys()),
+                      sig_type, constants_manifest_key, primary_field_signature))
+            )
+
+    # Partition into cached vs new
+    cached_hits = {}   # (sig_type, slot_index) -> _CachedFn
+    new_needed = {}    # (sig_type, slot_index) -> original expression
+    for sig_type, slot_fns in zip(
+        _SIG_TYPES,
+        [callbacks.residual, callbacks.bcs, callbacks.jacobian,
+         callbacks.bd_residual, callbacks.bd_jacobian],
+    ):
+        for i, fn_orig in enumerate(slot_fns):
+            key = (sig_type, i)
+            fn_hash = fn_hashes[key]
+            cache_key = (fn_hash, sig_type)
+            if cache_key in _fn_cache and cache:
+                cached_hits[key] = _fn_cache[cache_key]
+            else:
+                new_needed[key] = fn_orig
+
+    n_hits = len(cached_hits)
+    n_new = len(new_needed)
+
+    if verbose and underworld3.mpi.rank == 0:
+        total = n_hits + n_new
+        print(f"Per-function cache: {n_hits}/{total} hits, {n_new} new", flush=True)
+
+    # ── Compile new functions ───────────────────────────────────────────
+    new_ptr = None
+    new_indices = {}  # (sig_type, slot_index) -> index in new_ptr's arrays
+
+    if n_new > 0:
+        # Build a JITCallbackSet containing ONLY the new functions,
+        # preserving order within each sig_type.
+        new_by_type = {st: [] for st in _SIG_TYPES}
+        new_slot_map = {st: [] for st in _SIG_TYPES}  # tracks original slot indices
+        for (sig_type, slot_idx), fn_orig in sorted(new_needed.items()):
+            new_by_type[sig_type].append(fn_orig)
+            new_slot_map[sig_type].append(slot_idx)
+
+        new_callbacks = JITCallbackSet(
+            residual=tuple(new_by_type["residual"]),
+            bcs=tuple(new_by_type["bcs"]),
+            jacobian=tuple(new_by_type["jacobian"]),
+            bd_residual=tuple(new_by_type["bd_residual"]),
+            bd_jacobian=tuple(new_by_type["bd_jacobian"]),
+        )
+
+        # Compile the new functions
+        new_jitname = abs(hash((jitname, "partial", n_new, time.time())))
         _createext(
-            jitname,
+            new_jitname,
             mesh,
-            callbacks,
+            new_callbacks,
             primary_field_list,
             constants_subs_map=constants_subs_map,
             verbose=verbose,
             debug=debug,
             debug_name=debug_name,
         )
-    else:
-        if verbose and underworld3.mpi.rank == 0:
-            print(f"JIT compiled module cached ... {jitname} ", flush=True)
 
-    module = _ext_dict[jitname]
-    ptrobj = module.getptrobj()
+        new_module = _ext_dict[new_jitname]
+        new_ptr = new_module.getptrobj()
 
+        # Register each new function in the per-function cache
+        for sig_type in _SIG_TYPES:
+            for local_idx, slot_idx in enumerate(new_slot_map[sig_type]):
+                key = (sig_type, slot_idx)
+                fn_hash = fn_hashes[key]
+                cache_key = (fn_hash, sig_type)
+                entry = _CachedFn(
+                    ptr_container=new_ptr,
+                    sig_type=sig_type,
+                    index=local_idx,
+                )
+                _fn_cache[cache_key] = entry
+                cached_hits[key] = entry
+
+    # Also register the full bundle in _ext_dict if ALL functions were new
+    # (common case: first compile of a solver)
+    if n_new > 0 and n_hits == 0:
+        _ext_dict[jitname] = _ext_dict[new_jitname]
+
+    # ── Assemble PtrContainer from cached function pointers ─────────────
+    from underworld3.cython.petsc_types import PtrContainer
+
+    result_ptr = PtrContainer()
+    counts = callbacks.counts
+    result_ptr.allocate(*counts)
+
+    _copy_methods = {
+        "residual": result_ptr.copy_residual_from,
+        "bcs": result_ptr.copy_bcs_from,
+        "jacobian": result_ptr.copy_jacobian_from,
+        "bd_residual": result_ptr.copy_bd_residual_from,
+        "bd_jacobian": result_ptr.copy_bd_jacobian_from,
+    }
+
+    for sig_type, n_fns in zip(_SIG_TYPES, counts):
+        copy_fn = _copy_methods[sig_type]
+        for slot_idx in range(n_fns):
+            entry = cached_hits[(sig_type, slot_idx)]
+            copy_fn(slot_idx, entry.ptr_container, entry.index)
+
+    # ── Build fn_dicts (unchanged from original) ────────────────────────
     i_res = {fn: i for i, fn in enumerate(callbacks.residual)}
     i_ebc = {fn: i for i, fn in enumerate(callbacks.bcs)}
     i_jac = {fn: i for i, fn in enumerate(callbacks.jacobian)}
@@ -472,13 +614,14 @@ def getext(
     i_bd_jac = {fn: i for i, fn in enumerate(callbacks.bd_jacobian)}
 
     extn_fn_dict = namedtuple(
-        "Functions",
-        ["res", "jac", "ebc", "bd_res", "bd_jac"],
+        "Functions", ["res", "jac", "ebc", "bd_res", "bd_jac"],
     )
 
-    extensions_functions_dicts = extn_fn_dict(i_res, i_jac, i_ebc, i_bd_res, i_bd_jac)
-
-    return _GextResult(ptrobj, extensions_functions_dicts, constants_manifest)
+    return _GextResult(
+        result_ptr,
+        extn_fn_dict(i_res, i_jac, i_ebc, i_bd_res, i_bd_jac),
+        constants_manifest,
+    )
 
 
 @timing.routine_timer_decorator

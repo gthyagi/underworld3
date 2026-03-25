@@ -1275,7 +1275,7 @@ class SNES_VE_Stokes(SNES_Stokes):
             timestep = self.delta_t.sym
 
         if timestep != self.delta_t:
-            self._constitutive_model.Parameters.elastic_dt = timestep  # this will force an initialisation because the functions need to be updated
+            self._constitutive_model.Parameters.dt_elastic = timestep  # this will force an initialisation because the functions need to be updated
 
         if _force_setup:
             self.is_setup = False
