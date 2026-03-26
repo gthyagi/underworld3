@@ -1097,6 +1097,11 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
 
         self._order = order
 
+        # Timestep — set by the solver before each solve(). Not a user parameter.
+        # Initialised to oo (viscous limit). The solver overwrites this with the
+        # actual timestep on every call to solve(timestep=dt).
+        self._dt = expression(r"{\Delta t}", sympy.oo, "Timestep (set by solver)")
+
         # BDF coefficients as UWexpressions — route through PetscDS constants[].
         # Updated each step by _update_bdf_coefficients() before solve.
         # Initialised to BDF-1 values: [1, -1, 0, 0].
@@ -1138,12 +1143,23 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
             units="Pa",
         )
 
-        dt_elastic = api_tools.Parameter(
-            R"{\Delta t_{e}}",
-            lambda inner_self: sympy.oo,
-            "Elastic timestep",
-            units="s",
-        )
+        @property
+        def dt_elastic(inner_self):
+            """Timestep for VE formulas. Set by the solver, not a user parameter.
+
+            Returns the UWexpression that the solver updates before each solve.
+            This flows through PetscDS constants[] so the JIT-compiled pointwise
+            functions always see the current timestep.
+            """
+            return inner_self._owning_model._dt
+
+        @dt_elastic.setter
+        def dt_elastic(inner_self, value):
+            """Allow the solver to set dt via Parameters.dt_elastic = timestep."""
+            if hasattr(value, 'sym'):
+                inner_self._owning_model._dt.sym = value.sym
+            else:
+                inner_self._owning_model._dt.sym = value
 
         shear_viscosity_min = api_tools.Parameter(
             R"{\eta_{\textrm{min}}}",

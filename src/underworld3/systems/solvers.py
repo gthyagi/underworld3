@@ -753,10 +753,11 @@ class SNES_Stokes(SNES_Stokes_SaddlePt):
                     "Call stokes.solve(timestep=dt)"
                 )
 
-            # Ensure dt_elastic is set — it defaults to oo which NaNs the solver.
-            # The solve timestep is the only sane default.
-            if self.constitutive_model.Parameters.dt_elastic.sym is sympy.oo:
-                self.constitutive_model.Parameters.dt_elastic = timestep
+            # dt_elastic must always equal the solve timestep. The constitutive
+            # model's VE formulas (eta_eff, stress history terms) all reference
+            # Parameters.dt_elastic. If it differs from the actual timestep,
+            # the stress computation is inconsistent with the time integration.
+            self.constitutive_model.Parameters.dt_elastic = timestep
 
             if order is None or order > self._order:
                 order = self._order
