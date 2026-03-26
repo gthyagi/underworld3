@@ -48,6 +48,7 @@ from underworld3.utilities._api_tools import uw_object
 from underworld3.swarm import IndexSwarmVariable
 from underworld3.discretisation import MeshVariable
 from underworld3.systems.ddt import SemiLagrangian as SemiLagrangian_DDt
+from underworld3.systems.ddt import _bdf_coefficients
 from underworld3.function.quantities import UWQuantity
 from underworld3.systems.ddt import Lagrangian as Lagrangian_DDt
 
@@ -971,12 +972,12 @@ class ViscoPlasticFlowModel(ViscousFlowModel):
         # Keep this as an sub-expression for clarity
 
         if inner_self.shear_viscosity_min.sym != -sympy.oo:
-            self._plastic_eff_viscosity._sym = sympy.simplify(
-                sympy.Max(effective_viscosity, inner_self.shear_viscosity_min)
+            self._plastic_eff_viscosity._sym = sympy.Max(
+                effective_viscosity, inner_self.shear_viscosity_min
             )
 
         else:
-            self._plastic_eff_viscosity._sym = sympy.simplify(effective_viscosity)
+            self._plastic_eff_viscosity._sym = effective_viscosity
 
         # Returns an expression that has a different description
         return self._plastic_eff_viscosity
@@ -1085,6 +1086,14 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
         )
 
         self._order = order
+
+        # BDF coefficients as UWexpressions — route through PetscDS constants[].
+        # Updated each step by _update_bdf_coefficients() before solve.
+        # Initialised to BDF-1 values: [1, -1, 0, 0].
+        self._bdf_c0 = expression(r"{c_0^{\mathrm{BDF}}}", sympy.Integer(1), "BDF leading coefficient")
+        self._bdf_c1 = expression(r"{c_1^{\mathrm{BDF}}}", sympy.Integer(-1), "BDF history coefficient 1")
+        self._bdf_c2 = expression(r"{c_2^{\mathrm{BDF}}}", sympy.Integer(0), "BDF history coefficient 2")
+        self._bdf_c3 = expression(r"{c_3^{\mathrm{BDF}}}", sympy.Integer(0), "BDF history coefficient 3")
 
         self._reset()
 
@@ -1198,32 +1207,15 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
             if inner_self.shear_modulus == sympy.oo:
                 return inner_self.shear_viscosity_0
 
-            # Note, 1st order only here but we should add higher order versions of this
+            # BDF-k effective viscosity: eta_eff = eta*mu*dt / (c0*eta + mu*dt)
+            # c0 is a UWexpression routed through PetscDS constants[],
+            # updated each step by _update_bdf_coefficients().
+            eta = inner_self.shear_viscosity_0
+            mu = inner_self.shear_modulus
+            dt_e = inner_self.dt_elastic
+            c0 = inner_self._owning_model._bdf_c0
 
-            # 1st Order version (default)
-            if inner_self._owning_model.order != 2:
-                el_eff_visc = (
-                    inner_self.shear_viscosity_0
-                    * inner_self.shear_modulus
-                    * inner_self.dt_elastic
-                    / (
-                        inner_self.shear_viscosity_0
-                        + inner_self.dt_elastic * inner_self.shear_modulus
-                    )
-                )
-
-            # 2nd Order version (need to ask for this one)
-            else:
-                el_eff_visc = (
-                    2
-                    * inner_self.shear_viscosity_0
-                    * inner_self.shear_modulus
-                    * inner_self.dt_elastic
-                    / (
-                        3 * inner_self.shear_viscosity_0
-                        + 2 * inner_self.dt_elastic * inner_self.shear_modulus
-                    )
-                )
+            el_eff_visc = eta * mu * dt_e / (c0 * eta + mu * dt_e)
 
             inner_self._ve_effective_viscosity.sym = el_eff_visc
 
@@ -1251,6 +1243,46 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
         self._order = value
         self._reset()
         return
+
+    @property
+    def effective_order(self):
+        """Effective order accounting for DDt history startup.
+
+        During the first few timesteps, the DDt may not have enough history
+        to support the requested order. This property returns the lower of
+        the requested order and the DDt's effective order (which ramps from
+        1 to self.order as history accumulates).
+        """
+        if self.Unknowns is not None and self.Unknowns.DFDt is not None:
+            return min(self._order, self.Unknowns.DFDt.effective_order)
+        return self._order
+
+    def _update_bdf_coefficients(self):
+        """Update BDF coefficient UWexpressions from current dt_elastic and DDt history.
+
+        Call this before each solve so that the constants[] array carries the
+        correct coefficients to the compiled pointwise functions. The coefficient
+        UWexpressions (_bdf_c0..c3) are referenced symbolically in ve_effective_viscosity,
+        E_eff, and stress() — their numeric values flow through PetscDSSetConstants.
+        """
+        if self.Unknowns is not None and self.Unknowns.DFDt is not None:
+            dt_current = self.Parameters.dt_elastic
+            if hasattr(dt_current, 'sym'):
+                dt_current = dt_current.sym
+            coeffs = _bdf_coefficients(
+                self.effective_order, dt_current, self.Unknowns.DFDt._dt_history
+            )
+        else:
+            coeffs = _bdf_coefficients(self.effective_order, None, [])
+
+        # Pad to length 4
+        while len(coeffs) < 4:
+            coeffs.append(sympy.Integer(0))
+
+        self._bdf_c0.sym = coeffs[0]
+        self._bdf_c1.sym = coeffs[1]
+        self._bdf_c2.sym = coeffs[2]
+        self._bdf_c3.sym = coeffs[3]
 
     # The following should have no setters
     @property
@@ -1287,20 +1319,13 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
         if self.Unknowns.DFDt is not None:
 
             if self.is_elastic:
-                if self.order != 2:
-                    stress_star = self.Unknowns.DFDt.psi_star[0].sym
-                    E += stress_star / (
-                        2 * self.Parameters.dt_elastic * self.Parameters.shear_modulus
-                    )
+                mu_dt = self.Parameters.dt_elastic * self.Parameters.shear_modulus
+                # BDF history coefficients as UWexpressions (route through constants[])
+                bdf_cs = [self._bdf_c1, self._bdf_c2, self._bdf_c3]
 
-                else:
-                    stress_star = self.Unknowns.DFDt.psi_star[0].sym
-                    stress_2star = self.Unknowns.DFDt.psi_star[1].sym
-                    E += stress_star / (
-                        self.Parameters.dt_elastic * self.Parameters.shear_modulus
-                    ) - stress_2star / (
-                        4 * self.Parameters.dt_elastic * self.Parameters.shear_modulus
-                    )
+                # History contribution: -Σ cᵢ·σ_star[i-1] / (2·μ·dt)
+                for i in range(self.Unknowns.DFDt.order):
+                    E += -bdf_cs[i] * self.Unknowns.DFDt.psi_star[i].sym / (2 * mu_dt)
 
         self._E_eff.sym = E
 
@@ -1365,16 +1390,10 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
         if parameters.yield_stress == sympy.oo:
             return sympy.oo
 
-        Edot = self.Unknowns.E
-        if self.Unknowns.DFDt is not None:
-
-            ## First order ...
-            stress_star = self.Unknowns.DFDt.psi_star[0]
-
-            if self.is_elastic:
-                Edot += stress_star.sym / (
-                    2 * self.Parameters.dt_elastic * self.Parameters.shear_modulus
-                )
+        # Use the effective strain rate (including elastic history) for the
+        # yield criterion. This must use the same order-dependent BDF
+        # coefficients as the stress formula.
+        Edot = self.E_eff.sym
 
         strainrate_inv_II = expression(
             R"{\dot\varepsilon_{II}'}",
@@ -1468,8 +1487,6 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
         #     plastic_scale_factor = sympy.Max(1, self.plastic_overshoot())
         #     stress /= plastic_scale_factor
 
-        stress = sympy.simplify(stress)
-
         return stress
 
     def stress_projection(self):
@@ -1492,8 +1509,6 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
                     / (self.Parameters.dt_elastic * self.Parameters.shear_modulus)
                 )
 
-        stress = sympy.simplify(stress)
-
         return stress
 
     def stress(self):
@@ -1508,33 +1523,14 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
         if self.Unknowns.DFDt is not None:
 
             if self.is_elastic:
-                if self.order != 2:
-                    stress_star = self.Unknowns.DFDt.psi_star[0].sym
-                    stress += (
-                        2
-                        * self.viscosity
-                        * (
-                            stress_star
-                            / (2 * self.Parameters.dt_elastic * self.Parameters.shear_modulus)
-                        )
+                mu_dt = self.Parameters.dt_elastic * self.Parameters.shear_modulus
+                bdf_cs = [self._bdf_c1, self._bdf_c2, self._bdf_c3]
+
+                # History contribution: 2·η_eff · (-Σ cᵢ·σ_star[i-1]) / (2·μ·dt)
+                for i in range(self.Unknowns.DFDt.order):
+                    stress += 2 * self.viscosity * (
+                        -bdf_cs[i] * self.Unknowns.DFDt.psi_star[i].sym / (2 * mu_dt)
                     )
-
-                else:
-                    stress_star = self.Unknowns.DFDt.psi_star[0].sym
-                    stress_2star = self.Unknowns.DFDt.psi_star[1].sym
-
-                    stress += (
-                        2
-                        * self.viscosity
-                        * (
-                            stress_star
-                            / (self.Parameters.dt_elastic * self.Parameters.shear_modulus)
-                            - stress_2star
-                            / (4 * self.Parameters.dt_elastic * self.Parameters.shear_modulus)
-                        )
-                    )
-
-        stress = sympy.simplify(stress)
 
         return stress
 

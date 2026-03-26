@@ -956,6 +956,122 @@ class SolverBaseClass(uw_object):
 
 
 
+    @property
+    def tau(self):
+        r"""Computed flux from the constitutive model, projected onto the mesh.
+
+        Returns a :class:`~underworld3.discretisation.MeshVariable` containing
+        the flux that the solver actually computed. The variable is created
+        lazily on first access and updated by solving a projection each time
+        the property is read.
+
+        For Stokes-family solvers, this is the deviatoric stress tensor
+        :math:`\boldsymbol{\tau}`. For Poisson/diffusion, it is the
+        diffusive flux :math:`\kappa \nabla u`. The projection handles
+        derivative evaluation internally — users should use this property
+        rather than manually reconstructing the flux from the constitutive
+        formula.
+
+        Subclasses may override this to return pre-computed values (e.g.
+        VE_Stokes returns the stress stored during the solve).
+
+        Returns
+        -------
+        MeshVariable
+            Mesh variable containing the projected flux values.
+            Access numerical data via ``.data`` or ``.array``, symbolic
+            expression via ``.sym``.
+        """
+
+        if self._constitutive_model is None:
+            raise RuntimeError(
+                "No constitutive model set. Assign solver.constitutive_model first."
+            )
+
+        # Lazy initialization of projection infrastructure
+        if not hasattr(self, '_tau_var') or self._tau_var is None:
+            self._setup_tau_projection()
+
+        # Project the constitutive flux onto the mesh variable
+        # Transpose if needed: flux may be (dim,1) column but projector expects row
+        flux = self._constitutive_model.flux
+        if hasattr(flux, 'shape') and flux.shape[1] == 1 and flux.shape[0] > 1:
+            flux = flux.T
+        self._tau_projector.uw_function = flux
+        self._tau_projector.smoothing = 0.0
+        self._tau_projector.solve()
+
+        return self._tau_var
+
+    def _setup_tau_projection(self):
+        """Create the mesh variable and projector for tau (lazy init)."""
+
+        flux = self._constitutive_model.flux
+        dim = self.mesh.dim
+        rows, cols = flux.shape
+
+        # Determine variable type and create appropriate projection solver
+        if rows == cols and rows == dim:
+            # Tensor flux (Stokes stress)
+            self._tau_var = uw.discretisation.MeshVariable(
+                f"tau_{self.instance_number}",
+                self.mesh,
+                (dim, dim),
+                vtype=uw.VarType.SYM_TENSOR,
+                degree=self.u.degree,
+                continuous=True,
+                varsymbol=r"{\tau}",
+            )
+            _work = uw.discretisation.MeshVariable(
+                f"tau_work_{self.instance_number}",
+                self.mesh,
+                1,
+                degree=self.u.degree,
+                continuous=True,
+            )
+            from underworld3.systems.solvers import SNES_Tensor_Projection
+            self._tau_projector = SNES_Tensor_Projection(
+                self.mesh, self._tau_var, _work, verbose=False
+            )
+
+        elif rows == dim and cols == 1:
+            # Vector flux (Poisson heat flux)
+            self._tau_var = uw.discretisation.MeshVariable(
+                f"tau_{self.instance_number}",
+                self.mesh,
+                dim,
+                vtype=uw.VarType.VECTOR,
+                degree=self.u.degree,
+                continuous=True,
+                varsymbol=r"{\mathbf{q}}",
+            )
+            from underworld3.systems.solvers import SNES_Vector_Projection
+            self._tau_projector = SNES_Vector_Projection(
+                self.mesh, self._tau_var, verbose=False
+            )
+
+        elif cols == dim and rows == 1:
+            # Transposed vector flux
+            self._tau_var = uw.discretisation.MeshVariable(
+                f"tau_{self.instance_number}",
+                self.mesh,
+                dim,
+                vtype=uw.VarType.VECTOR,
+                degree=self.u.degree,
+                continuous=True,
+                varsymbol=r"{\mathbf{q}}",
+            )
+            from underworld3.systems.solvers import SNES_Vector_Projection
+            self._tau_projector = SNES_Vector_Projection(
+                self.mesh, self._tau_var, verbose=False
+            )
+
+        else:
+            raise RuntimeError(
+                f"Cannot create tau projection for flux shape {flux.shape}. "
+                f"Expected ({dim},{dim}) tensor, ({dim},1) or (1,{dim}) vector."
+            )
+
     def validate_solver(self):
         """
         Checks to see if the required properties have been set.
@@ -1668,7 +1784,8 @@ class SNES_Scalar(SolverBaseClass):
               _force_setup:    bool =False,
               verbose:         bool=False,
               debug:           bool=False,
-              debug_name:      str=None ):
+              debug_name:      str=None,
+              time=None, ):
         """
         Solve the system of equations.
 
@@ -1691,6 +1808,11 @@ class SNES_Scalar(SolverBaseClass):
             Enable debug output including intermediate residuals.
         debug_name : str, optional
             Name prefix for debug output files.
+        time : float or Quantity, optional
+            Physical time for this solve. Passed as ``petsc_t`` to all
+            pointwise functions. Expressions using ``mesh.t`` evaluate at
+            this time. Non-dimensionalised when scaling is active.
+            Default: None (petsc_t unchanged).
 
         Returns
         -------
@@ -1727,6 +1849,16 @@ class SNES_Scalar(SolverBaseClass):
             self.is_setup = False
 
         self._build(verbose, debug, debug_name)
+
+        # Set time on the DM so petsc_t is available in pointwise functions
+        cdef DM _time_dm
+        if time is not None:
+            if hasattr(time, 'magnitude') or hasattr(time, '_pint_qty'):
+                t_nd = float(uw.non_dimensionalise(time))
+            else:
+                t_nd = float(time)
+            _time_dm = self.dm
+            UW_DMSetTime(_time_dm.dm, t_nd)
 
         gvec = self.dm.getGlobalVec()
 
@@ -4037,7 +4169,8 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
               verbose=False,
               debug=False,
               debug_name=None,
-              _force_setup: bool =False, ):
+              _force_setup: bool =False,
+              time=None, ):
         """
         Solve the Stokes system for velocity and pressure.
 
@@ -4064,6 +4197,11 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
             Name prefix for debug output files.
         _force_setup : bool, default=False
             Force rebuild of the solver even if already set up.
+        time : float or Quantity, optional
+            Physical time for this solve. Passed as ``petsc_t`` to all
+            pointwise residual and Jacobian functions. Expressions using
+            ``mesh.t`` will evaluate at this time. Non-dimensionalised
+            automatically when scaling is active. Default: None (petsc_t=0).
 
         Returns
         -------
@@ -4104,6 +4242,17 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
             self.is_setup = False
 
         self._build(verbose, debug, debug_name)
+
+        # Set time on the DM so petsc_t is available in pointwise functions.
+        # Non-dimensionalise if the scaling system is active.
+        cdef DM _time_dm_stokes
+        if time is not None:
+            if hasattr(time, 'magnitude') or hasattr(time, '_pint_qty'):
+                t_nd = float(uw.non_dimensionalise(time))
+            else:
+                t_nd = float(time)
+            _time_dm_stokes = self.dm
+            UW_DMSetTime(_time_dm_stokes.dm, t_nd)
 
         # Keep a record of these set-up parameters
         tolerance = self.tolerance

@@ -445,7 +445,9 @@ class Symbolic(uw_object):
         startup, ``effective_order`` ramps from 1 to ``self.order`` as
         successive solves populate the history slots with distinct values.
         """
-        return min(self.order, max(1, self._n_solves_completed + 1))
+        # BDF-k requires k completed solves to have k distinct history values.
+        # With 0 or 1 completed solves → order 1. Order 2 needs ≥2 solves.
+        return min(self.order, max(1, self._n_solves_completed))
 
     def update_history_fn(self):
         r"""Copy current :math:`\psi` to the first history slot ``psi_star[0]``."""
@@ -523,6 +525,11 @@ class Symbolic(uw_object):
             self._n_solves_completed += 1
 
         return
+
+    @property
+    def bdf_coefficients(self):
+        """Current BDF coefficients [c0, c1, ...] accounting for variable timesteps."""
+        return _bdf_coefficients(self.effective_order, self._dt, self._dt_history)
 
     def bdf(self, order: Optional[int] = None):
         r"""Backward differentiation approximation of the time-derivative of ψ.
@@ -763,7 +770,9 @@ class Eulerian(uw_object):
         startup, ``effective_order`` ramps from 1 to ``self.order`` as
         successive solves populate the history slots with distinct values.
         """
-        return min(self.order, max(1, self._n_solves_completed + 1))
+        # BDF-k requires k completed solves to have k distinct history values.
+        # With 0 or 1 completed solves → order 1. Order 2 needs ≥2 solves.
+        return min(self.order, max(1, self._n_solves_completed))
 
     def update_history_fn(self):
         r"""Copy current :math:`\psi` to ``psi_star[0]`` via evaluation or projection."""
@@ -889,6 +898,11 @@ class Eulerian(uw_object):
             self._n_solves_completed += 1
 
         return
+
+    @property
+    def bdf_coefficients(self):
+        """Current BDF coefficients [c0, c1, ...] accounting for variable timesteps."""
+        return _bdf_coefficients(self.effective_order, self._dt, self._dt_history)
 
     def bdf(self, order=None):
         r"""Backward differentiation approximation of the time-derivative of :math:`\psi`.
@@ -1158,7 +1172,9 @@ class SemiLagrangian(uw_object):
         startup, ``effective_order`` ramps from 1 to ``self.order`` as
         successive solves populate the history slots with distinct values.
         """
-        return min(self.order, max(1, self._n_solves_completed + 1))
+        # BDF-k requires k completed solves to have k distinct history values.
+        # With 0 or 1 completed solves → order 1. Order 2 needs ≥2 solves.
+        return min(self.order, max(1, self._n_solves_completed))
 
     def initialise_history(self):
         r"""Initialize all history slots to the current value of :math:`\psi`.
@@ -1229,6 +1245,7 @@ class SemiLagrangian(uw_object):
 
         if self._n_solves_completed < self.order:
             self._n_solves_completed += 1
+
         return
 
     def update_pre_solve(
@@ -1237,11 +1254,22 @@ class SemiLagrangian(uw_object):
         evalf: Optional[bool] = False,
         verbose: Optional[bool] = False,
         dt_physical: Optional[float] = None,
+        store_result: Optional[bool] = True,
     ):
         """Sample upstream values along characteristics before solve.
 
         On the first call, automatically initialises history from the
         current field values so that bdf() returns zero on the first step.
+
+        Parameters
+        ----------
+        store_result : bool, optional
+            If True (default), evaluate psi_fn at current positions and store
+            in psi_star[0] before advection — the standard DDt behaviour.
+            If False, skip this step and the history shift: only advect the
+            existing psi_star levels upstream. Used by VE_Stokes where
+            psi_star[0] already contains the projected actual stress from
+            the previous solve.
         """
 
         self._dt = dt
@@ -1275,15 +1303,19 @@ class SemiLagrangian(uw_object):
         else:
             phi = sympy.sympify(1)
 
-        for i in range(self.order - 1, 0, -1):
-            self.psi_star[i].array[...] = (
-                phi * self.psi_star[i - 1].array[...] + (1 - phi) * self.psi_star[i].array[...]
-            )
+        if store_result:
+            for i in range(self.order - 1, 0, -1):
+                self.psi_star[i].array[...] = (
+                    phi * self.psi_star[i - 1].array[...] + (1 - phi) * self.psi_star[i].array[...]
+                )
 
         # 2. Compute the current value of psi_fn which we store in psi_star[0]
         #    Note the need to do a try/except to handle unsupported evaluations
         #    (e.g. of derivatives)
         #
+        #    When store_result=False (e.g. VE stress history), skip this step —
+        #    psi_star[0] already contains the projected actual stress from
+        #    the previous solve and we want to advect *that*, not the flux.
 
         # CRITICAL FIX (2025-11-28): Handle coordinates correctly for unit-aware mode.
         # Previous bug: extracting .magnitude gives METERS (e.g., 1000000), but:
@@ -1322,28 +1354,29 @@ class SemiLagrangian(uw_object):
             :, :
         ]
 
-        try:
-            # Use shifted ND coords to avoid quad mesh boundary issues
-            # node_coords_nd is slightly shifted toward cell centroids (lines 703-709)
-            # evaluate() treats plain numpy as ND [0-1] coordinates
-            eval_result = uw.function.evaluate(
-                self.psi_fn,
-                node_coords_nd,
-                evalf=evalf,
-            )
-            # Wrap result with units if psi_star has units but eval didn't return UnitAwareArray
-            psi_star_units = self.psi_star[0].units
-            if psi_star_units is not None and not isinstance(eval_result, UnitAwareArray):
-                eval_result = UnitAwareArray(eval_result, units=psi_star_units)
+        if store_result:
+            try:
+                # Use shifted ND coords to avoid quad mesh boundary issues
+                # node_coords_nd is slightly shifted toward cell centroids
+                # evaluate() treats plain numpy as ND [0-1] coordinates
+                eval_result = uw.function.evaluate(
+                    self.psi_fn,
+                    node_coords_nd,
+                    evalf=evalf,
+                )
+                # Wrap result with units if psi_star has units but eval didn't return UnitAwareArray
+                psi_star_units = self.psi_star[0].units
+                if psi_star_units is not None and not isinstance(eval_result, UnitAwareArray):
+                    eval_result = UnitAwareArray(eval_result, units=psi_star_units)
 
-            self.psi_star[0].array[...] = eval_result
+                self.psi_star[0].array[...] = eval_result
 
-        except Exception:
-            # Fallback to projection solver for expressions that can't be directly evaluated
-            # (e.g., containing derivatives)
-            self._psi_star_projection_solver.uw_function = self.psi_fn
-            self._psi_star_projection_solver.smoothing = 0.0
-            self._psi_star_projection_solver.solve(verbose=verbose)
+            except Exception:
+                # Fallback to projection solver for expressions that can't be directly evaluated
+                # (e.g., containing derivatives)
+                self._psi_star_projection_solver.uw_function = self.psi_fn
+                self._psi_star_projection_solver.smoothing = 0.0
+                self._psi_star_projection_solver.solve(verbose=verbose)
 
         # 3. Compute the upstream values from the psi_fn
 
@@ -1595,6 +1628,11 @@ class SemiLagrangian(uw_object):
 
         return
 
+    @property
+    def bdf_coefficients(self):
+        """Current BDF coefficients [c0, c1, ...] accounting for variable timesteps."""
+        return _bdf_coefficients(self.effective_order, self._dt, self._dt_history)
+
     def bdf(self, order=None):
         r"""Backward differentiation approximation of the time-derivative of :math:`\psi`.
 
@@ -1773,7 +1811,9 @@ class Lagrangian(uw_object):
     @property
     def effective_order(self):
         """Current effective BDF order, accounting for history startup."""
-        return min(self.order, max(1, self._n_solves_completed + 1))
+        # BDF-k requires k completed solves to have k distinct history values.
+        # With 0 or 1 completed solves → order 1. Order 2 needs ≥2 solves.
+        return min(self.order, max(1, self._n_solves_completed))
 
     def initialise_history(self):
         r"""Initialize all history slots to the current value of :math:`\psi`.
@@ -1885,6 +1925,11 @@ class Lagrangian(uw_object):
 
         if self._n_solves_completed < self.order:
             self._n_solves_completed += 1
+
+    @property
+    def bdf_coefficients(self):
+        """Current BDF coefficients [c0, c1, ...] accounting for variable timesteps."""
+        return _bdf_coefficients(self.effective_order, self._dt, self._dt_history)
 
     def bdf(self, order=None):
         r"""Backward differentiation approximation of the time-derivative of :math:`\psi`.
@@ -2067,7 +2112,9 @@ class Lagrangian_Swarm(uw_object):
     @property
     def effective_order(self):
         """Current effective BDF order, accounting for history startup."""
-        return min(self.order, max(1, self._n_solves_completed + 1))
+        # BDF-k requires k completed solves to have k distinct history values.
+        # With 0 or 1 completed solves → order 1. Order 2 needs ≥2 solves.
+        return min(self.order, max(1, self._n_solves_completed))
 
     def initialise_history(self):
         r"""Initialize all history slots to the current value of :math:`\psi`.
@@ -2180,6 +2227,11 @@ class Lagrangian_Swarm(uw_object):
             self._n_solves_completed += 1
 
         return
+
+    @property
+    def bdf_coefficients(self):
+        """Current BDF coefficients [c0, c1, ...] accounting for variable timesteps."""
+        return _bdf_coefficients(self.effective_order, self._dt, self._dt_history)
 
     def bdf(self, order=None):
         r"""Backward differentiation approximation of the time-derivative of :math:`\psi`.

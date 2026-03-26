@@ -629,6 +629,14 @@ class Mesh(Stateful, uw_object):
         self._Gamma.y._ccodestr = "petsc_n[1]"
         self._Gamma.z._ccodestr = "petsc_n[2]"
 
+        # Time coordinate — PETSc passes this as petsc_t to all pointwise
+        # functions. Solvers set dm.time before each solve via solve(time=t).
+        # Users reference it as mesh.t in expressions (e.g. V0 * sympy.sin(omega * mesh.t))
+        from ..utilities.unit_aware_coordinates import TimeSymbol
+
+        self._t = TimeSymbol("t")
+        self._t._units = None  # patched below by _patch_time_units
+
         # Add unit awareness to coordinate symbols if mesh has units or model has scales
         from ..utilities.unit_aware_coordinates import patch_coordinate_units
 
@@ -1496,6 +1504,32 @@ class Mesh(Stateful, uw_object):
     def CoordinateSystem(self) -> CoordinateSystem:
         r"""Alias for :attr:`X` (the coordinate system object)."""
         return self._CoordinateSystem
+
+    @property
+    def t(self):
+        r"""Symbolic time coordinate.
+
+        PETSc passes a time value (``petsc_t``) to all pointwise residual
+        and Jacobian functions. Use ``mesh.t`` in expressions to reference
+        this time without forcing JIT recompilation each timestep.
+
+        The low-level PETSc solver accepts ``time=t`` to set the value
+        of ``petsc_t`` for pointwise functions. If not provided, ``petsc_t``
+        defaults to 0. Note: the high-level Python ``solve()`` wrappers
+        do not yet pass ``time=`` through — set it directly via
+        ``UW_DMSetTime`` at the Cython level if needed.
+
+        When the scaling system is active, ``mesh.t`` carries time units
+        (derived from the model's time scale) so that dimensional analysis
+        works correctly in expressions.
+
+        Examples
+        --------
+        >>> omega = 2 * np.pi / period
+        >>> stokes.add_dirichlet_bc((V0 * sympy.sin(omega * mesh.t), 0.0), "Top")
+        >>> stokes.solve(time=current_time)   # sets petsc_t before SNES
+        """
+        return self._t
 
     @property
     def r(self) -> Tuple[sympy.vector.BaseScalar]:
