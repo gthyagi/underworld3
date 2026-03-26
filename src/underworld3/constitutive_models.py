@@ -1267,6 +1267,11 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
             return min(self._order, self.Unknowns.DFDt.effective_order)
         return self._order
 
+    # Maximum timestep ratio (dt_new / dt_old) for which BDF-2+ is safe.
+    # Beyond this, fall back to BDF-1 to avoid negative-stress extrapolation
+    # when stress history is non-smooth (e.g. yield events).
+    _max_dt_ratio_for_higher_order = 2.0
+
     def _update_bdf_coefficients(self):
         """Update BDF coefficient UWexpressions from current dt_elastic and DDt history.
 
@@ -1274,16 +1279,32 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
         correct coefficients to the compiled pointwise functions. The coefficient
         UWexpressions (_bdf_c0..c3) are referenced symbolically in ve_effective_viscosity,
         E_eff, and stress() — their numeric values flow through PetscDSSetConstants.
+
+        When the timestep ratio exceeds ``_max_dt_ratio_for_higher_order``,
+        BDF-2+ coefficients can cause negative stress extrapolation if the
+        stress history is non-smooth (e.g. after a yield event). In this case
+        we fall back to BDF-1 coefficients for safety.
         """
+        order = self.effective_order
+
         if self.Unknowns is not None and self.Unknowns.DFDt is not None:
             dt_current = self.Parameters.dt_elastic
             if hasattr(dt_current, 'sym'):
                 dt_current = dt_current.sym
-            coeffs = _bdf_coefficients(
-                self.effective_order, dt_current, self.Unknowns.DFDt._dt_history
-            )
+
+            # Guard: fall back to BDF-1 when timestep increases too rapidly
+            dt_history = self.Unknowns.DFDt._dt_history
+            if order >= 2 and len(dt_history) > 0 and dt_history[0] is not None:
+                try:
+                    ratio = float(dt_current) / float(dt_history[0])
+                    if ratio > self._max_dt_ratio_for_higher_order:
+                        order = 1
+                except (TypeError, ZeroDivisionError):
+                    pass  # symbolic dt — can't evaluate, keep requested order
+
+            coeffs = _bdf_coefficients(order, dt_current, dt_history)
         else:
-            coeffs = _bdf_coefficients(self.effective_order, None, [])
+            coeffs = _bdf_coefficients(order, None, [])
 
         # Pad to length 4
         while len(coeffs) < 4:
