@@ -1,10 +1,12 @@
 """VEP shear box with strain-weakening yield stress.
 
-Plastic fraction = 1 - eta_vep / eta_ve
-Evaluated via uw.function.evaluate() which can see the stress history.
+Plastic fraction computed directly from stored data:
+  eta_ve = eta * mu * dt / (eta + mu * dt)              (known scalar)
+  edot_II_eff = edot_kin + sigma_star / (2 * mu * dt)   (from psi_star data)
+  eta_vep = min(eta_ve, tau_y / (2 * edot_II_eff))      (yield viscosity)
+  plastic_fraction = max(0, 1 - eta_vep / eta_ve)
 
-tau_y weakens with accumulated plastic strain:
-    tau_y = tau_y0 + (tau_residual - tau_y0) * min(eps_p / eps_crit, 1)
+No evaluate, no projection — pure numpy on stored data.
 
 Run: pixi run -e amr-dev python tests/vep_strain_weakening.py
 """
@@ -30,21 +32,17 @@ mesh = uw.meshing.StructuredQuadBox(
 v = uw.discretisation.MeshVariable("U", mesh, 2, degree=2, vtype=uw.VarType.VECTOR)
 p = uw.discretisation.MeshVariable("P", mesh, 1, degree=1, continuous=True,
                                     vtype=uw.VarType.SCALAR)
-eps_p = uw.discretisation.MeshVariable("eps_p", mesh, 1, degree=2, continuous=True)
 
 stokes = uw.systems.Stokes(mesh, velocityField=v, pressureField=p)
 stokes.constitutive_model = uw.constitutive_models.ViscoElasticPlasticFlowModel
 cm = stokes.constitutive_model
 cm.Parameters.shear_viscosity_0 = ETA
 cm.Parameters.shear_modulus = MU
+cm.Parameters.yield_stress = TAU_Y0
 cm.Parameters.shear_viscosity_min = ETA * 1.0e-3
 cm.Parameters.strainrate_inv_II_min = 1.0e-10
 stokes.saddle_preconditioner = 1.0
 stokes.tolerance = 1.0e-4
-
-weakening = sympy.Min(eps_p.sym[0] / EPS_CRIT, 1.0)
-tau_y_expr = TAU_Y0 + (TAU_RESIDUAL - TAU_Y0) * weakening
-cm.Parameters.yield_stress = tau_y_expr
 
 stokes.add_essential_bc(sympy.Matrix([V_TOP, 0.0]), "Top")
 stokes.add_essential_bc(sympy.Matrix([0.0, 0.0]), "Bottom")
@@ -53,24 +51,29 @@ stokes.add_essential_bc((sympy.oo, 0.0), "Right")
 stokes.bodyforce = sympy.Matrix([0.0, 0.0])
 stokes.petsc_options["ksp_type"] = "fgmres"
 
-# No symbolic evaluation needed — compute everything from stored data
-
 print(f"Setup: {time.time()-t0:.1f}s")
 print(f"eta={ETA}, mu={MU}, t_relax={ETA/MU}")
 print(f"tau_y0={TAU_Y0}, tau_residual={TAU_RESIDUAL}, eps_crit={EPS_CRIT}")
-print(f"Maxwell steady state: eta*gamma_dot = {ETA*V_TOP}")
 print()
 
 times = []
 max_stresses = []
 tau_y_values = []
+eps_p_cum = 0.0
 eps_p_values = []
 edot_p_values = []
+
+eta_ve = ETA * MU * DT / (ETA + MU * DT)
+edot_kin = V_TOP / 2.0  # tensor shear rate for simple shear
 
 print(f"{'step':>4} {'t':>5} {'sigma_xy':>10} {'tau_y':>8} {'eps_p':>8} {'edot_p':>8}")
 print("-" * 60)
 
+current_tau_y = TAU_Y0
+
 for step in range(NSTEPS):
+    cm.Parameters.yield_stress.sym = current_tau_y
+
     t1 = time.time()
     stokes.solve(timestep=DT, zero_init_guess=False)
     solve_time = time.time() - t1
@@ -78,39 +81,33 @@ for step in range(NSTEPS):
     t = (step + 1) * DT
     times.append(t)
 
-    sd = stokes.tau.data
-    sigma_xy = sd[:, 2].max()
+    sigma_xy = stokes.tau.data[:, 2].max()
     max_stresses.append(sigma_xy)
 
-    # Current tau_y from accumulated eps_p
-    ep_max = float(eps_p.data[:, 0].max())
-    current_tau_y = TAU_Y0 + (TAU_RESIDUAL - TAU_Y0) * min(ep_max / EPS_CRIT, 1.0)
-
-    # Compute plastic fraction from data — no symbolic evaluation
-    eta_ve = ETA * MU * DT / (ETA + MU * DT)
-
-    # Effective strain rate = kinematic + history contribution
-    edot_kin = V_TOP / 2.0  # tensor shear rate for simple shear
+    # Compute plastic fraction from stored data
     sigma_star_xy = stokes.DFDt.psi_star[0].data[:, 2].mean()
     edot_history = sigma_star_xy / (2 * MU * DT)
     edot_II_eff = edot_kin + edot_history
 
-    # eta_vep = min(eta_ve, tau_y / (2 * edot_II_eff))
-    eta_vep = min(eta_ve, current_tau_y / (2 * edot_II_eff)) if edot_II_eff > 0 else eta_ve
+    if edot_II_eff > 0:
+        eta_vep = min(eta_ve, current_tau_y / (2 * edot_II_eff))
+    else:
+        eta_vep = eta_ve
 
     plastic_fraction = max(0.0, 1.0 - eta_vep / eta_ve)
-    edot_plastic = edot_II_eff * plastic_fraction
-    edot_p_values.append(edot_plastic)
+    edot_p = edot_II_eff * plastic_fraction
+    edot_p_values.append(edot_p)
 
-    # Accumulate plastic strain (uniform)
-    eps_p.data[:, 0] += edot_plastic * DT
-    ep_max = float(eps_p.data[:, 0].max())
-    current_tau_y = TAU_Y0 + (TAU_RESIDUAL - TAU_Y0) * min(ep_max / EPS_CRIT, 1.0)
+    # Accumulate and weaken
+    eps_p_cum += edot_p * DT
+    weakening = min(eps_p_cum / EPS_CRIT, 1.0)
+    current_tau_y = TAU_Y0 + (TAU_RESIDUAL - TAU_Y0) * weakening
+
     tau_y_values.append(current_tau_y)
-    eps_p_values.append(ep_max)
+    eps_p_values.append(eps_p_cum)
 
     if (step + 1) % 5 == 0 or step < 12:
-        print(f"{step+1:4d} {t:5.2f} {sigma_xy:10.4f} {current_tau_y:8.4f} {ep_max:8.4f} {edot_plastic:8.4f}  ({solve_time:.1f}s)")
+        print(f"{step+1:4d} {t:5.2f} {sigma_xy:10.4f} {current_tau_y:8.4f} {eps_p_cum:8.4f} {edot_p:8.4f}  ({solve_time:.1f}s)")
 
 print()
 print(f"Total: {time.time()-t0:.0f}s")
