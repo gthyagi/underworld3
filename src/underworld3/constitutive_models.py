@@ -579,6 +579,16 @@ class Constitutive_Model(uw_object):
 
         return
 
+    @property
+    def requires_stress_history(self):
+        """Whether this model needs DFDt stress history tracking.
+
+        Models that return True require a solver with stress history
+        management (e.g. VE_Stokes). Assigning such a model to a plain
+        Stokes solver will raise an error.
+        """
+        return False
+
     def _build_c_tensor(self):
         """Return the identity tensor of appropriate rank (e.g. for projections)"""
 
@@ -1589,6 +1599,11 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
         )
 
     @property
+    def requires_stress_history(self):
+        """VEP models always require stress history tracking."""
+        return True
+
+    @property
     def is_elastic(self):
         """True if elastic behavior is active (finite dt_elastic and shear_modulus)."""
         # If any of these is not defined, elasticity is switched off
@@ -1604,7 +1619,7 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
     @property
     def is_viscoplastic(self):
         """True if plastic yielding is active (finite yield_stress)."""
-        if self.Parameters.yield_stress == sympy.oo:
+        if self.Parameters.yield_stress.sym is sympy.oo:
             return False
 
         return True
