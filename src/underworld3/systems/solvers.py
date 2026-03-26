@@ -748,7 +748,15 @@ class SNES_Stokes(SNES_Stokes_SaddlePt):
 
         if has_stress_history:
             if timestep is None:
-                timestep = self.constitutive_model.Parameters.dt_elastic.sym
+                raise ValueError(
+                    "timestep is required for viscoelastic solve. "
+                    "Call stokes.solve(timestep=dt)"
+                )
+
+            # Ensure dt_elastic is set — it defaults to oo which NaNs the solver.
+            # The solve timestep is the only sane default.
+            if self.constitutive_model.Parameters.dt_elastic.sym is sympy.oo:
+                self.constitutive_model.Parameters.dt_elastic = timestep
 
             if order is None or order > self._order:
                 order = self._order
