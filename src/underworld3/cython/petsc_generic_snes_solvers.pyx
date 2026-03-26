@@ -930,7 +930,10 @@ class SolverBaseClass(uw_object):
             self._constitutive_model = model_or_class
             self._constitutive_model.Unknowns = self.Unknowns
             self._constitutive_model._solver_is_setup = False
-            self._constitutive_model.order = self._order
+            # Only override the constitutive model's order if the solver has
+            # an explicit VE order (> 0). Otherwise preserve the model's default.
+            if self._order > 0:
+                self._constitutive_model.order = self._order
             # Establish bidirectional reference so parameter changes can propagate to solver
             self._constitutive_model.Parameters._solver = self
 
@@ -938,7 +941,8 @@ class SolverBaseClass(uw_object):
         ### checking if it's a class
         elif type(model_or_class) == type(uw.constitutive_models.Constitutive_Model):
             self._constitutive_model = model_or_class(self.Unknowns)
-            self._constitutive_model.order = self._order
+            if self._order > 0:
+                self._constitutive_model.order = self._order
             # Establish bidirectional reference so parameter changes can propagate to solver
             self._constitutive_model.Parameters._solver = self
 
@@ -950,15 +954,11 @@ class SolverBaseClass(uw_object):
                 "constitutive_model must be a valid class or instance of a valid class"
             )
 
-        # Check that the solver can support this constitutive model's requirements.
-        # Models with stress history (VEP) need a solver that manages DFDt — e.g. VE_Stokes.
-        # Using them on a plain Stokes solver silently drops the history terms.
+        # If the constitutive model requires stress history (e.g. VEP), create the
+        # DFDt infrastructure lazily. This means users don't need to choose between
+        # Stokes and VE_Stokes — the solver adapts to the constitutive model.
         if self._constitutive_model.requires_stress_history and self.Unknowns.DFDt is None:
-            raise TypeError(
-                f"{type(self._constitutive_model).__name__} requires stress history tracking "
-                f"(DFDt). Use uw.systems.VE_Stokes instead of uw.systems.Stokes, or provide "
-                f"a DFDt object when constructing the solver."
-            )
+            self._create_stress_history_ddt(order=self._constitutive_model.order)
 
         # May not work due to flux being incomplete
         if self.Unknowns.DFDt is not None:
