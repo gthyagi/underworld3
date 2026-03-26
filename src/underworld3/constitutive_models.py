@@ -589,6 +589,15 @@ class Constitutive_Model(uw_object):
         """
         return False
 
+    @property
+    def plastic_fraction(self):
+        """Fraction of strain rate that is plastic (0 for non-plastic models).
+
+        Returns a sympy expression that can be evaluated post-solve via
+        ``uw.function.evaluate(cm.plastic_fraction, coords)``.
+        """
+        return sympy.Integer(0)
+
     def _build_c_tensor(self):
         """Return the identity tensor of appropriate rank (e.g. for projections)"""
 
@@ -762,6 +771,11 @@ class ViscousFlowModel(Constitutive_Model):
         # ddu = self.Unknowns.u.sym.jacobian(mesh.CoordinateSystem.N)
         # edot = (ddu + ddu.T) / 2
         # return edot
+
+    @property
+    def plastic_fraction(self):
+        """Fraction of strain rate that is plastic: 1 - η_vp / η_viscous."""
+        return sympy.Max(0, 1 - self.viscosity / self.Parameters.shear_viscosity_0)
 
     def _build_c_tensor(self):
         """For this constitutive law, we expect just a viscosity function"""
@@ -1639,6 +1653,11 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
     def requires_stress_history(self):
         """VEP models always require stress history tracking."""
         return True
+
+    @property
+    def plastic_fraction(self):
+        """Fraction of strain rate that is plastic: 1 - η_vep / η_ve."""
+        return sympy.Max(0, 1 - self.viscosity / self.Parameters.ve_effective_viscosity.sym)
 
     @property
     def is_elastic(self):

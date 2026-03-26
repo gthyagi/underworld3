@@ -62,7 +62,7 @@ stokes.petsc_options["ksp_type"] = "fgmres"
 print(f"Setup: {time.time()-t0:.1f}s")
 print(f"eta={ETA}, mu={MU}, t_relax={ETA/MU}")
 print(f"tau_y: {TAU_Y_START} -> {TAU_Y_END} (t={TAU_Y_DROP_START}..{TAU_Y_DROP_END})")
-print(f"Maxwell steady state: 2*eta*edot = {2*ETA*V_TOP}")
+print(f"Maxwell steady state: eta*gamma_dot = {ETA*V_TOP}")
 print()
 
 times = []
@@ -118,7 +118,9 @@ fig, ax = plt.subplots(figsize=(8, 5))
 
 t_anal = np.linspace(0.001, max(times), 200)
 t_r = ETA / MU
-maxwell = 2 * MU * V_TOP * t_r * (1 - np.exp(-t_anal / t_r))
+# Maxwell: sigma_xy = eta * gamma_dot * (1 - exp(-t/t_r))
+# gamma_dot = V_TOP / H = V_TOP (H=1)
+maxwell = ETA * V_TOP * (1 - np.exp(-t_anal / t_r))
 
 ax.plot(t_anal, maxwell, 'k--', linewidth=1, alpha=0.4, label="Maxwell (no yield)")
 ax.plot(times, max_stresses, 'r-o', linewidth=2, markersize=3, label=r"$\sigma_{xy}$")
