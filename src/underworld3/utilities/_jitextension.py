@@ -1,11 +1,11 @@
-from typing import List
+from typing import Optional
 import subprocess
 from xmlrpc.client import boolean
 import sympy
 import underworld3
 import underworld3.timing as timing
-from typing import Optional
 from collections import namedtuple
+from dataclasses import dataclass
 
 
 ## This is not required in sympy >= 1.9
@@ -31,6 +31,117 @@ from collections import namedtuple
 #     return deriv
 
 _ext_dict = {}
+
+
+# ============================================================================
+# JIT Callback Set
+# ============================================================================
+#
+# Groups the five callback lists that PETSc requires for pointwise functions.
+# Using a structured container prevents cache-key collisions between callback
+# roles (e.g. volume residual vs boundary residual) that share the same
+# symbolic form.
+# ============================================================================
+
+@dataclass(frozen=True)
+class JITCallbackSet:
+    """Immutable container for the five PETSc pointwise callback lists.
+
+    Each slot holds a tuple of SymPy expressions for one callback role.
+    The structured representation ensures that cache keys preserve which
+    role each expression belongs to, preventing the collision bug where
+    ``Integral(fn=1)`` and ``BdIntegral(fn=1)`` would share a cached module.
+
+    Parameters
+    ----------
+    residual : tuple
+        Volume residual expressions (F0, F1 for each field).
+    bcs : tuple
+        Essential boundary condition expressions.
+    jacobian : tuple
+        Jacobian expressions (G0, G1, G2, G3 for each field pair).
+    bd_residual : tuple
+        Boundary residual expressions (includes ``petsc_n[]`` access).
+    bd_jacobian : tuple
+        Boundary Jacobian expressions.
+    """
+    residual: tuple = ()
+    bcs: tuple = ()
+    jacobian: tuple = ()
+    bd_residual: tuple = ()
+    bd_jacobian: tuple = ()
+
+    def __post_init__(self):
+        """Coerce all slots to tuples for immutability and hashability."""
+        for field in ("residual", "bcs", "jacobian", "bd_residual", "bd_jacobian"):
+            val = getattr(self, field)
+            if val is None:
+                object.__setattr__(self, field, ())
+            elif not isinstance(val, tuple):
+                object.__setattr__(self, field, tuple(val))
+
+    def flat(self) -> tuple:
+        """Concatenate all slots into a single ordered tuple.
+
+        The ordering (residual, bcs, jacobian, bd_residual, bd_jacobian)
+        matches what ``_createext()`` expects.
+        """
+        return self.residual + self.bcs + self.jacobian + self.bd_residual + self.bd_jacobian
+
+    def signature(self) -> tuple:
+        """Hashable key that preserves callback role separation.
+
+        Two callback sets with the same expressions in different roles
+        will produce different signatures.
+        """
+        return (self.residual, self.bcs, self.jacobian, self.bd_residual, self.bd_jacobian)
+
+    def map(self, fn) -> 'JITCallbackSet':
+        """Apply *fn* to every expression in every slot, returning a new set."""
+        return JITCallbackSet(
+            residual=tuple(fn(f) for f in self.residual),
+            bcs=tuple(fn(f) for f in self.bcs),
+            jacobian=tuple(fn(f) for f in self.jacobian),
+            bd_residual=tuple(fn(f) for f in self.bd_residual),
+            bd_jacobian=tuple(fn(f) for f in self.bd_jacobian),
+        )
+
+    @property
+    def counts(self):
+        """Lengths of each slot, for ``_createext()`` offset calculation."""
+        return (len(self.residual), len(self.bcs), len(self.jacobian),
+                len(self.bd_residual), len(self.bd_jacobian))
+
+
+def prepare_for_cache_key(fn, constants_subs_map):
+    """Prepare a single expression for JIT cache hashing.
+
+    Two-phase process:
+    1. Substitute constant UWexpressions with ``_JITConstant`` placeholders
+       so that changing a constant's *value* does not invalidate the cache.
+    2. Unwrap remaining (non-constant) UWexpressions to pure SymPy so the
+       hash is deterministic.
+
+    Parameters
+    ----------
+    fn : sympy expression or None
+        The expression to expand.
+    constants_subs_map : dict or None
+        Mapping from UWexpression symbols to ``_JITConstant`` placeholders.
+    """
+    # Phase 1: Substitute constants with _JITConstant placeholders
+    if constants_subs_map and fn is not None:
+        try:
+            fn_structural = fn.xreplace(constants_subs_map) if hasattr(fn, "xreplace") else fn
+        except Exception:
+            fn_structural = fn
+    else:
+        fn_structural = fn
+
+    # Phase 2: Unwrap remaining (non-constant) expressions
+    return underworld3.function.expressions.unwrap(
+        fn_structural, keep_constants=False, return_self=False
+    )
 
 
 # ============================================================================
@@ -275,20 +386,25 @@ _GextResult = namedtuple("GextResult", ["ptrobj", "fn_dicts", "constants_manifes
 @timing.routine_timer_decorator
 def getext(
     mesh,
-    fns_residual,
-    fns_jacobian,
-    fns_bcs,
-    fns_bd_residual,
-    fns_bd_jacobian,
+    callbacks: JITCallbackSet,
     primary_field_list,
     verbose=False,
     debug=False,
     debug_name=None,
     cache=True,
 ):
-    """
-    Check if we've already created an equivalent extension
-    and use if available.
+    """Compile (or retrieve cached) JIT extension for PETSc pointwise functions.
+
+    Parameters
+    ----------
+    mesh : Mesh
+        Supporting mesh for coordinate system and variable information.
+    callbacks : JITCallbackSet
+        Callback expressions grouped by PETSc role (residual, bcs, jacobian,
+        bd_residual, bd_jacobian).
+    primary_field_list : iterable
+        Variables that map to PETSc primary arrays (``petsc_u[]``).
+        All others map to auxiliary arrays (``petsc_a[]``).
 
     Returns
     -------
@@ -302,65 +418,17 @@ def getext(
     time_s = time.time()
     primary_field_list = tuple(primary_field_list)
 
-    raw_fns_residual = tuple(fns_residual)
-    raw_fns_bcs = tuple(fns_bcs)
-    raw_fns_jacobian = tuple(fns_jacobian)
-    raw_fns_bd_residual = tuple(fns_bd_residual)
-    raw_fns_bd_jacobian = tuple(fns_bd_jacobian)
-
-    raw_fns = (
-        raw_fns_residual
-        + raw_fns_bcs
-        + raw_fns_jacobian
-        + raw_fns_bd_residual
-        + raw_fns_bd_jacobian
-    )
-
     # Extract constant UWexpressions that will go through constants[] array
-    constants_manifest, constants_subs_map = _extract_constants(raw_fns, mesh)
+    constants_manifest, constants_subs_map = _extract_constants(callbacks.flat(), mesh)
 
     # Build structurally-expanded functions for cache hashing.
     # Constants are replaced with placeholder symbols (value-independent),
     # so changing a constant value won't cause a cache miss.
-    def _structural_expand(fn):
-        # Phase 1: Substitute constants with _JITConstant placeholders
-        if constants_subs_map and fn is not None:
-            try:
-                fn_structural = fn.xreplace(constants_subs_map) if hasattr(fn, "xreplace") else fn
-            except Exception:
-                fn_structural = fn
-        else:
-            fn_structural = fn
-
-        # Phase 2: Unwrap remaining (non-constant) expressions
-        return underworld3.function.expressions.unwrap(
-            fn_structural, keep_constants=False, return_self=False
-        )
-
-    expanded_fns_residual = tuple(_structural_expand(fn) for fn in raw_fns_residual)
-    expanded_fns_bcs = tuple(_structural_expand(fn) for fn in raw_fns_bcs)
-    expanded_fns_jacobian = tuple(_structural_expand(fn) for fn in raw_fns_jacobian)
-    expanded_fns_bd_residual = tuple(_structural_expand(fn) for fn in raw_fns_bd_residual)
-    expanded_fns_bd_jacobian = tuple(_structural_expand(fn) for fn in raw_fns_bd_jacobian)
-
-    fns = (
-        expanded_fns_residual
-        + expanded_fns_bcs
-        + expanded_fns_jacobian
-        + expanded_fns_bd_residual
-        + expanded_fns_bd_jacobian
-    )
-    fns_signature = (
-        expanded_fns_residual,
-        expanded_fns_bcs,
-        expanded_fns_jacobian,
-        expanded_fns_bd_residual,
-        expanded_fns_bd_jacobian,
-    )
+    expanded = callbacks.map(lambda fn: prepare_for_cache_key(fn, constants_subs_map))
 
     if debug and underworld3.mpi.rank == 0:
         print(f"Expanded functions for compilation:")
-        for i, fn in enumerate(fns):
+        for i, fn in enumerate(expanded.flat()):
             print(f"{i}: {fn}")
         if constants_manifest:
             print(f"Constants manifest ({len(constants_manifest)} entries):")
@@ -378,13 +446,13 @@ def getext(
         # unique modules.
         jitname += "_" + str(len(_ext_dict.keys()))
 
-    else:  # Else name from a structured hash — function role/signature must be preserved.
+    else:  # Name from structured hash — function role must be preserved.
         primary_field_signature = tuple(
             (getattr(field, "field_id", None), getattr(field, "clean_name", None))
             for field in primary_field_list
         )
         jitname = abs(
-            hash((mesh, fns_signature, tuple(mesh.vars.keys()), primary_field_signature))
+            hash((mesh, expanded.signature(), tuple(mesh.vars.keys()), primary_field_signature))
         )
 
     # Create the module if not in dictionary
@@ -392,11 +460,7 @@ def getext(
         _createext(
             jitname,
             mesh,
-            fns_residual,
-            fns_bcs,
-            fns_jacobian,
-            fns_bd_residual,
-            fns_bd_jacobian,
+            callbacks,
             primary_field_list,
             constants_subs_map=constants_subs_map,
             verbose=verbose,
@@ -410,25 +474,11 @@ def getext(
     module = _ext_dict[jitname]
     ptrobj = module.getptrobj()
 
-    i_res = {}
-    for index, fn in enumerate(fns_residual):
-        i_res[fn] = index
-
-    i_ebc = {}
-    for index, fn in enumerate(fns_bcs):
-        i_ebc[fn] = index
-
-    i_jac = {}
-    for index, fn in enumerate(fns_jacobian):
-        i_jac[fn] = index
-
-    i_bd_res = {}
-    for index, fn in enumerate(fns_bd_residual):
-        i_bd_res[fn] = index
-
-    i_bd_jac = {}
-    for index, fn in enumerate(fns_bd_jacobian):
-        i_bd_jac[fn] = index
+    i_res = {fn: i for i, fn in enumerate(callbacks.residual)}
+    i_ebc = {fn: i for i, fn in enumerate(callbacks.bcs)}
+    i_jac = {fn: i for i, fn in enumerate(callbacks.jacobian)}
+    i_bd_res = {fn: i for i, fn in enumerate(callbacks.bd_residual)}
+    i_bd_jac = {fn: i for i, fn in enumerate(callbacks.bd_jacobian)}
 
     extn_fn_dict = namedtuple(
         "Functions",
@@ -444,74 +494,37 @@ def getext(
 def _createext(
     name: str,
     mesh: underworld3.discretisation.Mesh,
-    fns_residual: List[sympy.Basic],
-    fns_bcs: List[sympy.Basic],
-    fns_jacobian: List[sympy.Basic],
-    fns_bd_residual: List[sympy.Basic],
-    fns_bd_jacobian: List[sympy.Basic],
-    primary_field_list: List[underworld3.discretisation.MeshVariable],
+    callbacks: JITCallbackSet,
+    primary_field_list,
     constants_subs_map: Optional[dict] = None,
     verbose: Optional[bool] = False,
     debug: Optional[bool] = False,
     debug_name=None,
 ):
-    """
-    This creates the required extension which houses the JIT
-    fn pointer for PETSc.
+    """Create the JIT extension module with PETSc function pointers.
 
     Note that it is not possible to replace loaded shared libraries
     in Python, so we instead create a new extension for each new function.
 
-    We hash the functions and create a dictionary of the generated extensions
-    to avoid redundantly creating new extensions.
-
-    Params
-    ------
-    name:
-        Name for the extension. It will be prepended with "fn_ptr_ext_"
-    mesh:
-        Supporting mesh. It is used to get coordinate system and variable
-        information.
-    fns_residual:
-        List of system's residual sympy functions for which JIT equivalents
-        will be generated.
-    fns_jacobian:
-        List of system's Jacobian sympy functions for which JIT equivalents
-        will be generated.
-    fns_bcs:
-        List of system's boundary condition sympy functions for which JIT equivalents
-        will be generated.
-    fns_bd_residual:
-        List of system's boundary integral sympy functions for which JIT equivalents
-        will be generated.
-    fns_bd_jacobian:
-        List of system's boundary integral jacobian sympy functions for which JIT equivalents
-        will be generated.
-    primary_field_list
-        List of variables that will map from petsc primary variable arrays. All
-        other variables will be obtained from the mesh object and will be mapped to
-        petsc auxiliary variable arrays. Note that *all* the variables in the
-        calling system's corresponding `PetscDM` must be included in this list.
-        They must also be ordered according to their `field_id`.
-
+    Parameters
+    ----------
+    name : str
+        Name for the extension. It will be prepended with "fn_ptr_ext_".
+    mesh : Mesh
+        Supporting mesh for coordinate system and variable information.
+    callbacks : JITCallbackSet
+        Structured callback expressions grouped by role.
+    primary_field_list : list
+        Variables that map to PETSc primary variable arrays (``petsc_u[]``).
+        All other variables map to auxiliary arrays (``petsc_a[]``).
+        Must be ordered by ``field_id``.
     """
     from sympy import symbols, Eq, MatrixSymbol
     from underworld3 import VarType
 
-    # Note that the order here is important.
-    fns = (
-        tuple(fns_residual)
-        + tuple(fns_bcs)
-        + tuple(fns_jacobian)
-        + tuple(fns_bd_residual)
-        + tuple(fns_bd_jacobian)
-    )
-
-    count_residual_sig = len(fns_residual)
-    count_bc_sig = len(fns_bcs)
-    count_jacobian_sig = len(fns_jacobian)
-    count_bd_residual_sig = len(fns_bd_residual)
-    count_bd_jacobian_sig = len(fns_bd_jacobian)
+    fns = callbacks.flat()
+    count_residual_sig, count_bc_sig, count_jacobian_sig, \
+        count_bd_residual_sig, count_bd_jacobian_sig = callbacks.counts
 
     # `_ccode` patching
     def ccode_patch_fns(varlist, prefix_str):
@@ -932,39 +945,39 @@ cpdef PtrContainer getptrobj():
     clsguy.fns_bd_residual = <PetscDSBdResidualFn*> malloc({}*sizeof(PetscDSBdResidualFn))
     clsguy.fns_bd_jacobian = <PetscDSBdJacobianFn*> malloc({}*sizeof(PetscDSBdJacobianFn))
 """.format(
-        len(fns_residual),
-        len(fns_bcs),
-        len(fns_jacobian),
-        len(fns_bd_residual),
-        len(fns_bd_jacobian),
+        count_residual_sig,
+        count_bc_sig,
+        count_jacobian_sig,
+        count_bd_residual_sig,
+        count_bd_jacobian_sig,
     )
 
     eqn_count = 0
-    for index, eqn in enumerate(eqns[eqn_count : eqn_count + len(fns_residual)]):
+    for index, eqn in enumerate(eqns[eqn_count : eqn_count + count_residual_sig]):
         pyx_str += "    clsguy.fns_residual[{}] = {}_petsc_{}\n".format(index, randstr, eqn[0])
         eqn_count += 1
 
     residual_equations = (0, eqn_count)
 
-    for index, eqn in enumerate(eqns[eqn_count : eqn_count + len(fns_bcs)]):
+    for index, eqn in enumerate(eqns[eqn_count : eqn_count + count_bc_sig]):
         pyx_str += "    clsguy.fns_bcs[{}] = {}_petsc_{}\n".format(index, randstr, eqn[0])
         eqn_count += 1
 
     boundary_equations = (residual_equations[1], eqn_count)
 
-    for index, eqn in enumerate(eqns[eqn_count : eqn_count + len(fns_jacobian)]):
+    for index, eqn in enumerate(eqns[eqn_count : eqn_count + count_jacobian_sig]):
         pyx_str += "    clsguy.fns_jacobian[{}] = {}_petsc_{}\n".format(index, randstr, eqn[0])
         eqn_count += 1
 
     jacobian_equations = (boundary_equations[1], eqn_count)
 
-    for index, eqn in enumerate(eqns[eqn_count : eqn_count + len(fns_bd_residual)]):
+    for index, eqn in enumerate(eqns[eqn_count : eqn_count + count_bd_residual_sig]):
         pyx_str += "    clsguy.fns_bd_residual[{}] = {}_petsc_{}\n".format(index, randstr, eqn[0])
         eqn_count += 1
 
     boundary_residual_equations = (jacobian_equations[1], eqn_count)
 
-    for index, eqn in enumerate(eqns[eqn_count : eqn_count + len(fns_bd_jacobian)]):
+    for index, eqn in enumerate(eqns[eqn_count : eqn_count + count_bd_jacobian_sig]):
         pyx_str += "    clsguy.fns_bd_jacobian[{}] = {}_petsc_{}\n".format(index, randstr, eqn[0])
         eqn_count += 1
 
@@ -1061,23 +1074,23 @@ cpdef PtrContainer getptrobj():
             flush=True,
         )
         print(
-            f"{randstr}   {len(fns_residual):5d}    residuals: {residual_equations[0]}:{residual_equations[1]}",
+            f"{randstr}   {count_residual_sig:5d}    residuals: {residual_equations[0]}:{residual_equations[1]}",
             flush=True,
         )
         print(
-            f"{randstr}   {len(fns_bcs):5d}   boundaries: {boundary_equations[0]}:{boundary_equations[1]}",
+            f"{randstr}   {count_bc_sig:5d}   boundaries: {boundary_equations[0]}:{boundary_equations[1]}",
             flush=True,
         )
         print(
-            f"{randstr}   {len(fns_jacobian):5d}    jacobians: {jacobian_equations[0]}:{jacobian_equations[1]}",
+            f"{randstr}   {count_jacobian_sig:5d}    jacobians: {jacobian_equations[0]}:{jacobian_equations[1]}",
             flush=True,
         )
         print(
-            f"{randstr}   {len(fns_bd_residual):5d} boundary_res: {boundary_residual_equations[0]}:{boundary_residual_equations[1]}",
+            f"{randstr}   {count_bd_residual_sig:5d} boundary_res: {boundary_residual_equations[0]}:{boundary_residual_equations[1]}",
             flush=True,
         )
         print(
-            f"{randstr}   {len(fns_bd_jacobian):5d} boundary_jac: {boundary_jacobian_equations[0]}:{boundary_jacobian_equations[1]}",
+            f"{randstr}   {count_bd_jacobian_sig:5d} boundary_jac: {boundary_jacobian_equations[0]}:{boundary_jacobian_equations[1]}",
             flush=True,
         )
 
