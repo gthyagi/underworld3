@@ -950,6 +950,16 @@ class SolverBaseClass(uw_object):
                 "constitutive_model must be a valid class or instance of a valid class"
             )
 
+        # Check that the solver can support this constitutive model's requirements.
+        # Models with stress history (VEP) need a solver that manages DFDt — e.g. VE_Stokes.
+        # Using them on a plain Stokes solver silently drops the history terms.
+        if self._constitutive_model.requires_stress_history and self.Unknowns.DFDt is None:
+            raise TypeError(
+                f"{type(self._constitutive_model).__name__} requires stress history tracking "
+                f"(DFDt). Use uw.systems.VE_Stokes instead of uw.systems.Stokes, or provide "
+                f"a DFDt object when constructing the solver."
+            )
+
         # May not work due to flux being incomplete
         if self.Unknowns.DFDt is not None:
             self.Unknowns.DFDt.psi_fn = self._constitutive_model.flux.T
