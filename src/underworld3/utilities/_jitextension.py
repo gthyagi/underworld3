@@ -1,4 +1,4 @@
-from typing import List, Optional, Tuple
+from typing import Optional
 import subprocess
 from xmlrpc.client import boolean
 import sympy
@@ -70,6 +70,15 @@ class JITCallbackSet:
     jacobian: tuple = ()
     bd_residual: tuple = ()
     bd_jacobian: tuple = ()
+
+    def __post_init__(self):
+        """Coerce all slots to tuples for immutability and hashability."""
+        for field in ("residual", "bcs", "jacobian", "bd_residual", "bd_jacobian"):
+            val = getattr(self, field)
+            if val is None:
+                object.__setattr__(self, field, ())
+            elif not isinstance(val, tuple):
+                object.__setattr__(self, field, tuple(val))
 
     def flat(self) -> tuple:
         """Concatenate all slots into a single ordered tuple.
