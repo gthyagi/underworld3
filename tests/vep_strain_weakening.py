@@ -41,7 +41,6 @@ cm.Parameters.shear_modulus = MU
 cm.Parameters.yield_stress = TAU_Y0
 cm.Parameters.shear_viscosity_min = ETA * 1.0e-3
 cm.Parameters.strainrate_inv_II_min = 1.0e-10
-stokes.saddle_preconditioner = 1.0
 stokes.tolerance = 1.0e-4
 
 stokes.add_essential_bc(sympy.Matrix([V_TOP, 0.0]), "Top")
