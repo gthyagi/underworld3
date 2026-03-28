@@ -191,14 +191,24 @@ Run a few steps in the elastic regime, then step carefully through yield onset.
 """
 
 # %%
-# Elastic loading phase — should converge cleanly
-for step in range(1+int(1/DT)):
+import numpy as _np
+
+for step in range(1 + int(2/DT)):
+    # Inspect psi_star before solve
+    s0 = stokes.DFDt.psi_star[0].data
+    s1 = stokes.DFDt.psi_star[1].data if stokes.DFDt.order >= 2 else None
+    s0_xy = f"[{s0[:,2].min():.4f}, {s0[:,2].max():.4f}]"
+    s1_xy = f"[{s1[:,2].min():.4f}, {s1[:,2].max():.4f}]" if s1 is not None else "n/a"
+
     stokes.solve(timestep=DT, zero_init_guess=(step == 0))
     t = (step + 1) * DT
     reason = stokes.snes.getConvergedReason()
     its = stokes.snes.getIterationNumber()
     sigma_xy = stokes.tau.data[:, 2]
-    print(f"Step {step+1}, t={t:.2f}: sigma_xy [{sigma_xy.min():.4f}, {sigma_xy.max():.4f}], SNES={reason}, its={its}")
+
+    flag = " ***" if reason < 0 else ""
+    print(f"Step {step+1:3d}, t={t:.2f}: σ[{sigma_xy.min():.4f},{sigma_xy.max():.4f}] "
+          f"σ*{s0_xy} σ**{s1_xy} SNES={reason} its={its}{flag}")
 
 
 # %% [markdown]
