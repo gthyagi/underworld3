@@ -1072,7 +1072,7 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
 
     """
 
-    def __init__(self, unknowns, order=2, material_name: str = None):
+    def __init__(self, unknowns, order=1, material_name: str = None):
 
         ## We just need to add the expressions for the stress history terms in here.\
         ## They are properties to hold expressions that are persistent for this instance
