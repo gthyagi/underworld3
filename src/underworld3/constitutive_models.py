@@ -1110,6 +1110,7 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
         )
 
         self._order = order
+        self._yield_mode = "min"  # "min" or "harmonic"
 
         # Timestep — set by the solver before each solve(). Not a user parameter.
         # Initialised to oo (viscous limit). The solver overwrites this with the
@@ -1425,7 +1426,10 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
 
         if self.is_viscoplastic:
             vp_effective_viscosity = self._plastic_effective_viscosity
-            effective_viscosity = sympy.Min(effective_viscosity, vp_effective_viscosity)
+            if self._yield_mode == "harmonic":
+                effective_viscosity = 1 / (1 / effective_viscosity + 1 / vp_effective_viscosity)
+            else:
+                effective_viscosity = sympy.Min(effective_viscosity, vp_effective_viscosity)
 
             ## Why is it p**2 here ?
             # p = self.plastic_correction()
@@ -1648,6 +1652,23 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
             )
             ## Todo: add all the other properties in here
         )
+
+    @property
+    def yield_mode(self):
+        """How to combine VE and plastic viscosities: ``"min"`` or ``"harmonic"``.
+
+        ``"min"`` (default): sharp cutoff at yield — ``Min(η_ve, η_pl)``.
+        ``"harmonic"``: smooth blending — ``1/(1/η_ve + 1/η_pl)``.
+        Harmonic mean gives lower stress but avoids BDF-2 overshoot at yield.
+        """
+        return self._yield_mode
+
+    @yield_mode.setter
+    def yield_mode(self, value):
+        if value not in ("min", "harmonic"):
+            raise ValueError(f"yield_mode must be 'min' or 'harmonic', got '{value}'")
+        self._yield_mode = value
+        self._reset()
 
     @property
     def requires_stress_history(self):

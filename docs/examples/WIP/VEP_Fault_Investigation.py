@@ -7,6 +7,15 @@ Step through the model and visualise to find the source of SNES divergence.
 """
 
 # %%
+#|  echo: false  # Hide in html version
+
+# This is required to fix pyvista 
+# (visualisation) crashes in interactive notebooks (including on binder)
+
+import nest_asyncio
+nest_asyncio.apply()
+
+# %%
 import numpy as np
 import sympy
 import underworld3 as uw
@@ -21,9 +30,9 @@ from underworld3.systems import Stokes
 ETA = 1.0
 MU = 1.0
 TAU_Y_FAULT = 0.2
-TAU_Y_BULK = 2.0
-FAULT_WIDTH = 0.08
-DT = 0.1
+TAU_Y_BULK = 200.0
+FAULT_WIDTH = 0.04
+DT = 0.05
 V_TOP = 0.5
 
 # %% [markdown]
@@ -49,12 +58,14 @@ fault_points = np.array([[0.0, 0.5, 0.0], [1.0, 0.5, 0.0]])
 fault = uw.meshing.Surface("fault", mesh, fault_points)
 fault.discretize()
 
-tau_y_field = fault.influence_function(
+# Interpolate weakness (1/tau_y) — avoids steep gaussian ramp in tau_y
+weakness = fault.influence_function(
     width=FAULT_WIDTH,
-    value_near=TAU_Y_FAULT,
-    value_far=TAU_Y_BULK,
+    value_near=1 / TAU_Y_FAULT,
+    value_far=1 / TAU_Y_BULK,
     profile="gaussian",
 )
+tau_y_field = 1 / weakness
 
 print(f"Fault: {fault.n_vertices} vertices")
 
@@ -64,15 +75,25 @@ print(f"Fault: {fault.n_vertices} vertices")
 """
 
 # %%
+
+# %%
 stokes = Stokes(mesh, velocityField=v, pressureField=p)
 stokes.constitutive_model = uw.constitutive_models.ViscoElasticPlasticFlowModel
 cm = stokes.constitutive_model
+cm.order = 2
+
+# %%
+
+# %%
+
 cm.Parameters.shear_viscosity_0 = ETA
 cm.Parameters.shear_modulus = MU
 cm.Parameters.yield_stress = tau_y_field
+cm.yield_mode = "min"  # "min" (sharp cutoff) or "harmonic" (smooth blending)
 cm.Parameters.shear_viscosity_min = ETA * 1.0e-2
-cm.Parameters.strainrate_inv_II_min = 1.0e-10
-# stokes.saddle_preconditioner = 1.0
+cm.Parameters.strainrate_inv_II_min = 1.0e-5
+
+stokes.saddle_preconditioner = 1 / cm.K
 stokes.tolerance = 1.0e-4
 
 stokes.add_essential_bc(sympy.Matrix([V_TOP, 0.0]), "Top")
@@ -81,6 +102,7 @@ stokes.add_essential_bc((sympy.oo, 0.0), "Left")
 stokes.add_essential_bc((sympy.oo, 0.0), "Right")
 stokes.bodyforce = sympy.Matrix([0.0, 0.0])
 stokes.petsc_options["ksp_type"] = "fgmres"
+stokes.petsc_options["snes_force_iteration"] = None  # always do at least 1 SNES iteration
 
 # %% [markdown]
 """
@@ -170,14 +192,14 @@ Run a few steps in the elastic regime, then step carefully through yield onset.
 
 # %%
 # Elastic loading phase — should converge cleanly
-for step in range(8):
+for step in range(1+int(1/DT)):
     stokes.solve(timestep=DT, zero_init_guess=(step == 0))
     t = (step + 1) * DT
     reason = stokes.snes.getConvergedReason()
+    its = stokes.snes.getIterationNumber()
     sigma_xy = stokes.tau.data[:, 2]
-    print(f"Step {step+1}, t={t:.2f}: sigma_xy [{sigma_xy.min():.4f}, {sigma_xy.max():.4f}], SNES={reason}")
+    print(f"Step {step+1}, t={t:.2f}: sigma_xy [{sigma_xy.min():.4f}, {sigma_xy.max():.4f}], SNES={reason}, its={its}")
 
-plot_state(8, " (elastic phase)")
 
 # %% [markdown]
 """
@@ -186,19 +208,19 @@ plot_state(8, " (elastic phase)")
 
 # %%
 # Continue stepping — yield should start around step 9-10
-for step in range(8, 15):
-    stokes.solve(timestep=DT, zero_init_guess=False)
-    t = (step + 1) * DT
-    reason = stokes.snes.getConvergedReason()
-    its = stokes.snes.getIterationNumber()
-    sigma_xy = stokes.tau.data[:, 2]
-    print(f"Step {step+1}, t={t:.2f}: sigma_xy [{sigma_xy.min():.4f}, {sigma_xy.max():.4f}], "
-          f"SNES={reason}, its={its}")
+# for step in range(9, 15):
+#     stokes.solve(timestep=DT, zero_init_guess=False)
+#     t = (step + 1) * DT
+#     reason = stokes.snes.getConvergedReason()
+#     its = stokes.snes.getIterationNumber()
+#     sigma_xy = stokes.tau.data[:, 2]
+#     print(f"Step {step+1}, t={t:.2f}: sigma_xy [{sigma_xy.min():.4f}, {sigma_xy.max():.4f}], "
+#           f"SNES={reason}, its={its}")
 
-    if reason < 0:
-        print(f"  *** DIVERGED at step {step+1} ***")
-        plot_state(step + 1, f" (DIVERGED, SNES={reason})")
-        break
+#     if reason < 0:
+#         print(f"  *** DIVERGED at step {step+1} ***")
+#         plot_state(step + 1, f" (DIVERGED, SNES={reason})")
+#         break
 
 # %% [markdown]
 """
@@ -206,13 +228,14 @@ for step in range(8, 15):
 """
 
 # %%
-# Keep going to see if the solution stabilises
-for step in range(15, 25):
-    stokes.solve(timestep=DT, zero_init_guess=False)
-    t = (step + 1) * DT
-    reason = stokes.snes.getConvergedReason()
-    sigma_xy = stokes.tau.data[:, 2]
-    print(f"Step {step+1}, t={t:.2f}: sigma_xy [{sigma_xy.min():.4f}, {sigma_xy.max():.4f}], SNES={reason}")
+# # Keep going to see if the solution stabilises
+# for step in range(15, 25):
+#     stokes.solve(timestep=DT, zero_init_guess=False)
+#     t = (step + 1) * DT
+#     reason = stokes.snes.getConvergedReason()
+#     its = stokes.snes.getIterationNumber()
+#     sigma_xy = stokes.tau.data[:, 2]
+#     print(f"Step {step+1}, t={t:.2f}: sigma_xy [{sigma_xy.min():.4f}, {sigma_xy.max():.4f}], SNES={reason}, its={its}")
 
 plot_state(25, " (final)")
 
