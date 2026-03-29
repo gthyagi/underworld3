@@ -721,6 +721,7 @@ class SNES_Stokes(SNES_Stokes_SaddlePt):
         verbose=False,
         evalf=False,
         order=None,
+        picard: int = 0,
     ):
         """Solve the Stokes system, with optional viscoelastic stress history.
 
@@ -742,6 +743,10 @@ class SNES_Stokes(SNES_Stokes_SaddlePt):
             Force numerical evaluation during history updates.
         order : int, optional
             Override the VE time integration order.
+        picard : int, default=0
+            Number of Picard iterations before switching to Newton.
+            Picard uses a simplified Jacobian and can help convergence
+            for strongly nonlinear problems like VEP at yield onset.
         """
 
         has_stress_history = self.Unknowns.DFDt is not None
@@ -799,7 +804,7 @@ class SNES_Stokes(SNES_Stokes_SaddlePt):
                 zero_init_guess,
                 _force_setup=_force_setup,
                 verbose=verbose,
-                picard=0,
+                picard=picard,
             )
 
             # 3. PROJECT actual stress and SHIFT history

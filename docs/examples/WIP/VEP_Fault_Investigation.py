@@ -78,18 +78,16 @@ print(f"Fault: {fault.n_vertices} vertices")
 
 # %%
 stokes = Stokes(mesh, velocityField=v, pressureField=p)
-stokes.constitutive_model = uw.constitutive_models.ViscoElasticPlasticFlowModel
-cm = stokes.constitutive_model
-cm.order = 2
-
-# %%
+# Create model instance BEFORE assigning — DFDt order is set at assignment time
+cm = uw.constitutive_models.ViscoElasticPlasticFlowModel(stokes.Unknowns, order=1)
+stokes.constitutive_model = cm
 
 # %%
 
 cm.Parameters.shear_viscosity_0 = ETA
 cm.Parameters.shear_modulus = MU
 cm.Parameters.yield_stress = tau_y_field
-cm.yield_mode = "min"  # "min" (sharp cutoff) or "harmonic" (smooth blending)
+# yield_mode="smooth" is the default (corrected harmonic, no Min/Max)
 cm.Parameters.shear_viscosity_min = ETA * 1.0e-2
 cm.Parameters.strainrate_inv_II_min = 1.0e-5
 
