@@ -1110,7 +1110,9 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
         )
 
         self._order = order
-        self._yield_mode = "smooth"  # "min", "harmonic", or "smooth"
+        self._yield_mode = "smooth"  # "min", "harmonic", "smooth", or "softmin"
+        self._yield_softness = 0.5  # δ parameter for "softmin" mode
+        self._bdf_blend = 0.5  # blend O1/O2 coefficients: 0=pure O1, 1=pure O2
 
         # Timestep — set by the solver before each solve(). Not a user parameter.
         # Initialised to oo (viscous limit). The solver overwrites this with the
@@ -1358,6 +1360,18 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
                     pass  # symbolic dt — can't evaluate, keep requested order
 
             coeffs = _bdf_coefficients(order, dt_current, dt_history)
+
+            # Blend with O1 coefficients for stability
+            # 0 = pure O1, 0.5 = balanced (default), 1 = pure requested order
+            alpha = self._bdf_blend
+            if 0 < alpha < 1 and order >= 2:
+                coeffs_o1 = _bdf_coefficients(1, dt_current, dt_history)
+                while len(coeffs_o1) < len(coeffs):
+                    coeffs_o1.append(sympy.Integer(0))
+                coeffs = [
+                    (1 - alpha) * c1 + alpha * ck
+                    for c1, ck in zip(coeffs_o1, coeffs)
+                ]
         else:
             coeffs = _bdf_coefficients(order, None, [])
 
@@ -1464,10 +1478,19 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
                 #
                 # f → 0 (elastic): η_eff → η_ve   (no correction)
                 # f → ∞ (yielding): η_eff → η_pl  (exact yield)
-                # f = 3 (our test): σ_II ≈ 0.92·τ_y  (vs harmonic 0.75·τ_y)
                 # No Min/Max — just arithmetic. Continuous derivatives.
                 f = effective_viscosity / vp_effective_viscosity
                 effective_viscosity = effective_viscosity * (1 + f) / (1 + f + f**2)
+            elif self._yield_mode == "softmin":
+                # Smooth approximation to Min(η_ve, η_pl):
+                #   η_eff = η_ve / g(f)
+                #   g(f) = (1+f)/2 + √((f-1)² + δ²)/2  ≈ max(1, f)
+                # where f = η_ve/η_pl and δ = yield_softness.
+                # Approaches exact Min as δ→0. No Min/Max in expression.
+                delta = self._yield_softness
+                f = effective_viscosity / vp_effective_viscosity
+                g = (1 + f) / 2 + sympy.sqrt((f - 1)**2 + delta**2) / 2
+                effective_viscosity = effective_viscosity / g
             else:
                 effective_viscosity = sympy.Min(effective_viscosity, vp_effective_viscosity)
 
@@ -1476,7 +1499,7 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
         # BDF-2 Jacobian. Those modes are already smooth and bounded.
 
         if inner_self.shear_viscosity_min.sym != -sympy.oo:
-            if self.is_viscoplastic and self._yield_mode in ("harmonic", "smooth"):
+            if self.is_viscoplastic and self._yield_mode in ("harmonic", "smooth", "softmin"):
                 return effective_viscosity
             else:
                 return sympy.Max(
@@ -1695,7 +1718,11 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
 
         ``"smooth"`` (default): corrected harmonic —
             ``η_ve · (1+f) / (1+f+f²)`` where ``f = η_ve/η_pl``.
-            Smooth, no Min/Max. Converges to exact yield at deep yielding.
+            Smooth, no Min/Max. Best balance of accuracy and robustness.
+        ``"softmin"``: smooth approximation to Min —
+            ``η_ve / g(f)`` where ``g(f) ≈ max(1, f)`` with smoothing
+            parameter δ (``yield_softness``, default 0.5).
+            Closer to exact yield than ``"smooth"`` but less robust.
         ``"harmonic"``: parallel blending — ``1/(1/η_ve + 1/η_pl)``.
             Smooth but undershoots τ_y for soft materials.
         ``"min"``: sharp cutoff — ``Min(η_ve, η_pl)``.
@@ -1705,10 +1732,43 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
 
     @yield_mode.setter
     def yield_mode(self, value):
-        if value not in ("min", "harmonic", "smooth"):
-            raise ValueError(f"yield_mode must be 'min', 'harmonic', or 'smooth', got '{value}'")
+        if value not in ("min", "harmonic", "smooth", "softmin"):
+            raise ValueError(f"yield_mode must be 'min', 'harmonic', 'smooth', or 'softmin', got '{value}'")
         self._yield_mode = value
         self._reset()
+
+    @property
+    def yield_softness(self):
+        r"""Regularisation parameter δ for ``"softmin"`` yield mode.
+
+        Controls how closely the soft minimum approximates the sharp Min.
+        Smaller values → sharper yield (closer to Min, less robust).
+        Larger values → smoother transition (more robust, lower stress).
+
+        Default 0.5. Only used when ``yield_mode == "softmin"``.
+        """
+        return self._yield_softness
+
+    @yield_softness.setter
+    def yield_softness(self, value):
+        self._yield_softness = value
+        self._reset()
+
+    @property
+    def bdf_blend(self):
+        r"""Blending parameter α for BDF history coefficients.
+
+        Blends O1 and O2 BDF coefficients: ``c = (1-α)·c_O1 + α·c_O2``.
+
+        - ``α = 0``: pure BDF-1 (most stable, first-order accurate)
+        - ``α = 0.5`` (default): balanced blend (stable, improved accuracy)
+        - ``α = 1``: pure BDF-2 (second-order, can be unstable for VEP)
+        """
+        return self._bdf_blend
+
+    @bdf_blend.setter
+    def bdf_blend(self, value):
+        self._bdf_blend = value
 
     @property
     def requires_stress_history(self):
