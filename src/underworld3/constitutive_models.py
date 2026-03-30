@@ -2283,7 +2283,7 @@ class TransverseIsotropicFlowModel(ViscousFlowModel):
 
         director = api_tools.Parameter(
             r"\hat{n}",
-            lambda inner_self: 1,
+            lambda inner_self: sympy.Matrix([0] * (inner_self._owning_model.dim - 1) + [1]),
             "Director orientation",
             units=None,  # Dimensionless unit vector
         )
@@ -2491,7 +2491,8 @@ class TransverseIsotropicVEPFlowModel(TransverseIsotropicFlowModel):
             "Fault-plane shear viscosity", units="Pa*s",
         )
         director = api_tools.Parameter(
-            r"\hat{n}", lambda inner_self: 1,
+            r"\hat{n}",
+            lambda inner_self: sympy.Matrix([0] * (inner_self._owning_model.dim - 1) + [1]),
             "Director orientation (fault normal)", units=None,
         )
 
@@ -2808,11 +2809,6 @@ class TransverseIsotropicVEPFlowModel(TransverseIsotropicFlowModel):
     @property
     def flux(self):
         """Stress flux for the weak form."""
-        # Guard: if director not set yet, return simple viscous flux
-        n = self.Parameters.director.sym
-        if not hasattr(n, '__len__') or isinstance(n, (int, float, sympy.Basic)) and not isinstance(n, sympy.MatrixBase):
-            edot = self.grad_u
-            return 2 * self.Parameters.shear_viscosity_0 * edot
         return self.stress()
 
     def stress_projection(self):
