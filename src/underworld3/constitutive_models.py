@@ -2404,6 +2404,535 @@ class TransverseIsotropicFlowModel(ViscousFlowModel):
         )
 
 
+class TransverseIsotropicVEPFlowModel(TransverseIsotropicFlowModel):
+    r"""Transversely isotropic viscoelastic-plastic flow model for fault mechanics.
+
+    Combines the anisotropic viscosity tensor from :class:`TransverseIsotropicFlowModel`
+    with viscoelastic stress history and plastic yield limiting on the fault plane.
+
+    The anisotropic viscosity tensor uses two viscosities (η₀ for the bulk,
+    η₁ for fault-plane shear) and a director n̂ defining the weak plane.
+    The yield stress τ_y limits the shear stress resolved on the fault plane.
+
+    Parameters
+    ----------
+    unknowns : Unknowns
+        Solver unknowns (velocity, pressure).
+    order : int, default=1
+        Time integration order for stress history (1 or 2).
+    material_name : str, optional
+        Name for disambiguation in multi-material setups.
+
+    See Also
+    --------
+    TransverseIsotropicFlowModel : Anisotropic viscous model (no yield/elasticity).
+    ViscoElasticPlasticFlowModel : Isotropic VEP model.
+    """
+
+    def __init__(self, unknowns, order=1, material_name: str = None):
+
+        self._material_name = material_name
+
+        # Stress history expressions
+        self._stress_star = expression(
+            r"{\tau^{*}}", None,
+            r"Lagrangian Stress at $t - \delta_t$",
+        )
+        self._stress_2star = expression(
+            r"{\tau^{**}}", None,
+            r"Lagrangian Stress at $t - 2\delta_t$",
+        )
+        self._E_eff = expression(
+            r"{\dot{\varepsilon}_{\textrm{eff}}}", None,
+            "Equivalent value of strain rate (accounting for stress history)",
+        )
+        self._E_eff_inv_II = expression(
+            r"{\dot{\varepsilon}_{II,\textrm{eff}}}", None,
+            "Equivalent value of strain rate 2nd invariant (accounting for stress history)",
+        )
+
+        self._order = order
+        self._yield_mode = "smooth"
+        self._yield_softness = 0.5
+        self._bdf_blend = 0.5
+        self._max_dt_ratio_for_higher_order = 2.0
+
+        # Timestep (set by solver)
+        self._dt = expression(r"{\Delta t}", sympy.oo, "Timestep (set by solver)")
+
+        # BDF coefficients (initialised to BDF-1)
+        self._bdf_c0 = expression(r"{c_0^{\mathrm{BDF}}}", sympy.Integer(1), "BDF leading coefficient")
+        self._bdf_c1 = expression(r"{c_1^{\mathrm{BDF}}}", sympy.Integer(-1), "BDF history coefficient 1")
+        self._bdf_c2 = expression(r"{c_2^{\mathrm{BDF}}}", sympy.Integer(0), "BDF history coefficient 2")
+        self._bdf_c3 = expression(r"{c_3^{\mathrm{BDF}}}", sympy.Integer(0), "BDF history coefficient 3")
+
+        self._reset()
+
+        super().__init__(unknowns, material_name=material_name)
+
+        return
+
+    class _Parameters(_ParameterBase, _ViscousParameterAlias):
+        """Parameters for transverse isotropic VEP model.
+
+        Combines anisotropic parameters (η₀, η₁, director) with VEP
+        parameters (shear_modulus, yield_stress, etc.).
+        """
+
+        import underworld3.utilities._api_tools as api_tools
+
+        # Anisotropic parameters
+        shear_viscosity_0 = api_tools.Parameter(
+            r"\eta_0", lambda inner_self: 1,
+            "Bulk shear viscosity", units="Pa*s",
+        )
+        shear_viscosity_1 = api_tools.Parameter(
+            r"\eta_1", lambda inner_self: 1,
+            "Fault-plane shear viscosity", units="Pa*s",
+        )
+        director = api_tools.Parameter(
+            r"\hat{n}", lambda inner_self: 1,
+            "Director orientation (fault normal)", units=None,
+        )
+
+        # Elastic parameter
+        shear_modulus = api_tools.Parameter(
+            R"{\mu}", lambda inner_self: sympy.oo,
+            "Shear modulus", units="Pa",
+        )
+
+        # Timestep (managed by solver)
+        @property
+        def dt_elastic(inner_self):
+            """Timestep for VE formulas. Set by the solver."""
+            return inner_self._owning_model._dt
+
+        @dt_elastic.setter
+        def dt_elastic(inner_self, value):
+            if hasattr(value, 'sym'):
+                inner_self._owning_model._dt.sym = value.sym
+            else:
+                inner_self._owning_model._dt.sym = value
+
+        # Viscosity limits
+        shear_viscosity_min = api_tools.Parameter(
+            R"{\eta_{\textrm{min}}}",
+            lambda inner_self: -sympy.oo,
+            "Shear viscosity, minimum cutoff", units="Pa*s",
+        )
+
+        # Yield parameters (applied to fault-plane shear)
+        yield_stress = api_tools.Parameter(
+            R"{\tau_{y}}", lambda inner_self: sympy.oo,
+            "Yield stress (fault-plane shear)", units="Pa",
+        )
+        yield_stress_min = api_tools.Parameter(
+            R"{\tau_{y, \mathrm{min}}}",
+            lambda inner_self: -sympy.oo,
+            "Yield stress minimum cutoff", units="Pa",
+        )
+        strainrate_inv_II_min = api_tools.Parameter(
+            R"{\dot\varepsilon_{II,\mathrm{min}}}",
+            lambda inner_self: 0,
+            "Strain rate invariant minimum value", units="1/s",
+        )
+
+        def __init__(inner_self, _owning_model):
+            inner_self._owning_model = _owning_model
+
+            inner_self._ve_effective_viscosity = expression(
+                R"{\eta_{\mathrm{eff}}}", None,
+                "Effective viscosity (elastic, fault-plane)",
+            )
+            inner_self._t_relax = expression(
+                R"{t_{\mathrm{relax}}}", None,
+                "Maxwell relaxation time",
+            )
+
+        @property
+        def ve_effective_viscosity(inner_self):
+            r"""VE effective viscosity using η₁ (fault-plane viscosity)."""
+            if inner_self.shear_modulus == sympy.oo:
+                return inner_self.shear_viscosity_1
+
+            eta = inner_self.shear_viscosity_1
+            mu = inner_self.shear_modulus
+            dt_e = inner_self.dt_elastic
+            c0 = inner_self._owning_model._bdf_c0
+
+            el_eff_visc = eta * mu * dt_e / (c0 * eta + mu * dt_e)
+            inner_self._ve_effective_viscosity.sym = el_eff_visc
+            return inner_self._ve_effective_viscosity
+
+        @property
+        def t_relax(inner_self):
+            r"""Maxwell relaxation time: η₁ / μ."""
+            inner_self._t_relax.sym = inner_self.shear_viscosity_1 / inner_self.shear_modulus
+            return inner_self._t_relax
+
+    ## End of parameters
+
+    @property
+    def is_elastic(self):
+        return self.Parameters.shear_modulus != sympy.oo
+
+    @property
+    def is_viscoplastic(self):
+        return self.Parameters.yield_stress.sym != sympy.oo
+
+    @property
+    def order(self):
+        """Time integration order (1 or 2)."""
+        return self._order
+
+    @order.setter
+    def order(self, value):
+        """Set time integration order (warns if DFDt already created)."""
+        self._order = value
+        self._reset()
+        solver = getattr(self.Parameters, '_solver', None)
+        if solver is not None:
+            ddt = getattr(solver.Unknowns, 'DFDt', None)
+            if ddt is not None and ddt.order < value:
+                import warnings
+                warnings.warn(
+                    f"Setting order={value} but DFDt was created with order={ddt.order}. "
+                    f"Create the model with the desired order before assigning to the solver.",
+                    UserWarning, stacklevel=2,
+                )
+            elif ddt is not None:
+                solver._order = value
+        return
+
+    @property
+    def effective_order(self):
+        """Effective order accounting for DDt history startup."""
+        if self.Unknowns is not None and self.Unknowns.DFDt is not None:
+            ddt_eff = self.Unknowns.DFDt.effective_order
+            return min(self._order, ddt_eff)
+        return self._order
+
+    def _update_bdf_coefficients(self):
+        """Update BDF coefficient UWexpressions with blending."""
+        order = self.effective_order
+
+        if self.Unknowns is not None and self.Unknowns.DFDt is not None:
+            dt_current = self.Parameters.dt_elastic
+            if hasattr(dt_current, 'sym'):
+                dt_current = dt_current.sym
+
+            dt_history = self.Unknowns.DFDt._dt_history
+            if order >= 2 and len(dt_history) > 0 and dt_history[0] is not None:
+                try:
+                    ratio = float(dt_current) / float(dt_history[0])
+                    if ratio > self._max_dt_ratio_for_higher_order:
+                        order = 1
+                except (TypeError, ZeroDivisionError):
+                    pass
+
+            coeffs = _bdf_coefficients(order, dt_current, dt_history)
+
+            alpha = self._bdf_blend
+            if 0 < alpha < 1 and order >= 2:
+                coeffs_o1 = _bdf_coefficients(1, dt_current, dt_history)
+                while len(coeffs_o1) < len(coeffs):
+                    coeffs_o1.append(sympy.Integer(0))
+                coeffs = [
+                    (1 - alpha) * c1 + alpha * ck
+                    for c1, ck in zip(coeffs_o1, coeffs)
+                ]
+        else:
+            coeffs = _bdf_coefficients(order, None, [])
+
+        while len(coeffs) < 4:
+            coeffs.append(sympy.Integer(0))
+
+        self._bdf_c0.sym = coeffs[0]
+        self._bdf_c1.sym = coeffs[1]
+        self._bdf_c2.sym = coeffs[2]
+        self._bdf_c3.sym = coeffs[3]
+
+    @property
+    def stress_star(self):
+        r"""Previous timestep stress from history."""
+        if self.Unknowns.DFDt is not None:
+            self._stress_star.sym = self.Unknowns.DFDt.psi_star[0].sym
+        return self._stress_star
+
+    @property
+    def E_eff(self):
+        r"""Effective strain rate including elastic history."""
+        E = self.Unknowns.E
+
+        if self.Unknowns.DFDt is not None and self.is_elastic:
+            mu_dt = self.Parameters.dt_elastic * self.Parameters.shear_modulus
+            bdf_cs = [self._bdf_c1, self._bdf_c2, self._bdf_c3]
+            for i in range(self.Unknowns.DFDt.order):
+                E += -bdf_cs[i] * self.Unknowns.DFDt.psi_star[i].sym / (2 * mu_dt)
+
+        self._E_eff.sym = E
+        return self._E_eff
+
+    @property
+    def E_eff_inv_II(self):
+        r"""Second invariant of effective strain rate."""
+        E_eff = self.E_eff.sym
+        self._E_eff_inv_II.sym = sympy.sqrt((E_eff**2).trace() / 2)
+        return self._E_eff_inv_II
+
+    @property
+    def viscosity(self):
+        r"""Effective viscosity for the fault-plane shear component.
+
+        Applies the yield mode (smooth/softmin/min/harmonic) to η₁,
+        leaving η₀ (bulk) unchanged. The anisotropic tensor handles
+        the directional dependence.
+        """
+        inner_self = self.Parameters
+
+        if inner_self.yield_stress.sym == sympy.oo:
+            return inner_self.shear_viscosity_0
+
+        # η₁ is the fault-plane viscosity that gets yield-limited
+        eta_1_eff = inner_self.ve_effective_viscosity
+
+        if self.is_viscoplastic:
+            vp_eff = self._plastic_effective_viscosity
+            if self._yield_mode == "harmonic":
+                eta_1_eff = 1 / (1 / eta_1_eff + 1 / vp_eff)
+            elif self._yield_mode == "smooth":
+                f = eta_1_eff / vp_eff
+                eta_1_eff = eta_1_eff * (1 + f) / (1 + f + f**2)
+            elif self._yield_mode == "softmin":
+                delta = self._yield_softness
+                f = eta_1_eff / vp_eff
+                g = (1 + f) / 2 + sympy.sqrt((f - 1)**2 + delta**2) / 2
+                eta_1_eff = eta_1_eff / g
+            else:
+                eta_1_eff = sympy.Min(eta_1_eff, vp_eff)
+
+        return inner_self.shear_viscosity_0
+
+    @property
+    def K(self):
+        """Effective stiffness for preconditioner."""
+        return self.Parameters.shear_viscosity_0
+
+    @property
+    def _plastic_effective_viscosity(self):
+        """Plastic viscosity based on resolved shear strain rate."""
+        parameters = self.Parameters
+
+        if parameters.yield_stress == sympy.oo:
+            return sympy.oo
+
+        Edot = self.E_eff.sym
+        strainrate_inv_II = expression(
+            R"{\dot\varepsilon_{II}'}",
+            sympy.sqrt((Edot**2).trace() / 2),
+            "Strain rate 2nd Invariant including elastic strain rate term",
+        )
+
+        tau_y = parameters.yield_stress
+        if parameters.yield_stress_min.sym != 0:
+            tau_y = sympy.Max(parameters.yield_stress_min, tau_y)
+
+        if parameters.strainrate_inv_II_min.sym != 0:
+            viscosity_yield = tau_y / (
+                2 * (strainrate_inv_II + parameters.strainrate_inv_II_min)
+            )
+        else:
+            viscosity_yield = tau_y / (2 * strainrate_inv_II)
+
+        return viscosity_yield
+
+    def _build_c_tensor(self):
+        """Build the anisotropic tensor with yield-limited η₁."""
+
+        if self._is_setup:
+            return
+
+        d = self.dim
+        eta_0 = self.Parameters.shear_viscosity_0.sym
+
+        # η₁ effective: VE + yield limited
+        eta_1_eff = self.Parameters.ve_effective_viscosity
+
+        if self.is_viscoplastic:
+            vp_eff = self._plastic_effective_viscosity
+            if self._yield_mode == "harmonic":
+                eta_1_eff = 1 / (1 / eta_1_eff + 1 / vp_eff)
+            elif self._yield_mode == "smooth":
+                f = eta_1_eff / vp_eff
+                eta_1_eff = eta_1_eff * (1 + f) / (1 + f + f**2)
+            elif self._yield_mode == "softmin":
+                delta = self._yield_softness
+                f = eta_1_eff / vp_eff
+                g = (1 + f) / 2 + sympy.sqrt((f - 1)**2 + delta**2) / 2
+                eta_1_eff = eta_1_eff / g
+            else:
+                eta_1_eff = sympy.Min(eta_1_eff, vp_eff)
+
+        n = self.Parameters.director.sym
+        Delta = eta_0 - eta_1_eff
+
+        identity = uw.maths.tensor.rank4_identity(d)
+        lambda_mat = sympy.MutableDenseNDimArray.zeros(d, d, d, d)
+
+        for i in range(d):
+            for j in range(d):
+                for k in range(d):
+                    for l in range(d):
+                        base_val = 2 * identity[i, j, k, l] * eta_0
+                        aniso_correction = (
+                            2 * Delta * (
+                                (n[i] * n[k] * int(j == l)
+                                 + n[j] * n[k] * int(l == i)
+                                 + n[i] * n[l] * int(j == k)
+                                 + n[j] * n[l] * int(k == i)) / 2
+                                - 2 * n[i] * n[j] * n[k] * n[l]
+                            )
+                        )
+                        val = base_val - aniso_correction
+                        if hasattr(val, '__getitem__') and not isinstance(val, (sympy.MatrixBase, sympy.NDimArray)):
+                            val = sympy.Mul(sympy.S.One, val, evaluate=False)
+                        lambda_mat[i, j, k, l] = val
+
+        lambda_mat = sympy.simplify(uw.maths.tensor.rank4_to_mandel(lambda_mat, d))
+        self._c = uw.maths.tensor.mandel_to_rank4(lambda_mat, d)
+
+        self._is_setup = True
+        self._solver_is_setup = False
+        return
+
+    @property
+    def flux(self):
+        """Stress flux for the weak form."""
+        # Guard: if director not set yet, return simple viscous flux
+        n = self.Parameters.director.sym
+        if not hasattr(n, '__len__') or isinstance(n, (int, float, sympy.Basic)) and not isinstance(n, sympy.MatrixBase):
+            edot = self.grad_u
+            return 2 * self.Parameters.shear_viscosity_0 * edot
+        return self.stress()
+
+    def stress_projection(self):
+        """VE stress without plastic correction (for history storage)."""
+        edot = self.grad_u
+        # Use the full anisotropic tensor but without yield
+        self._build_c_tensor_ve()
+        return self._q(edot)
+
+    def _build_c_tensor_ve(self):
+        """Build anisotropic tensor with VE η₁ only (no yield)."""
+        d = self.dim
+        eta_0 = self.Parameters.shear_viscosity_0.sym
+        eta_1_ve = self.Parameters.ve_effective_viscosity
+        n = self.Parameters.director.sym
+        Delta = eta_0 - eta_1_ve
+
+        identity = uw.maths.tensor.rank4_identity(d)
+        lambda_mat = sympy.MutableDenseNDimArray.zeros(d, d, d, d)
+
+        for i in range(d):
+            for j in range(d):
+                for k in range(d):
+                    for l in range(d):
+                        base_val = 2 * identity[i, j, k, l] * eta_0
+                        aniso_correction = (
+                            2 * Delta * (
+                                (n[i] * n[k] * int(j == l)
+                                 + n[j] * n[k] * int(l == i)
+                                 + n[i] * n[l] * int(j == k)
+                                 + n[j] * n[l] * int(k == i)) / 2
+                                - 2 * n[i] * n[j] * n[k] * n[l]
+                            )
+                        )
+                        val = base_val - aniso_correction
+                        if hasattr(val, '__getitem__') and not isinstance(val, (sympy.MatrixBase, sympy.NDimArray)):
+                            val = sympy.Mul(sympy.S.One, val, evaluate=False)
+                        lambda_mat[i, j, k, l] = val
+
+        lambda_mat = sympy.simplify(uw.maths.tensor.rank4_to_mandel(lambda_mat, d))
+        self._c_ve = uw.maths.tensor.mandel_to_rank4(lambda_mat, d)
+
+    def stress(self):
+        """Viscoelastic-plastic anisotropic stress for the weak form.
+
+        Uses the anisotropic tensor with yield-limited η₁ and adds
+        BDF stress history terms.
+        """
+        self._build_c_tensor()
+        edot = self.grad_u
+        stress = self._q(edot)
+
+        if self.Unknowns.DFDt is not None and self.is_elastic:
+            mu_dt = self.Parameters.dt_elastic * self.Parameters.shear_modulus
+            bdf_cs = [self._bdf_c1, self._bdf_c2, self._bdf_c3]
+
+            # History uses the yield-limited tensor applied to stored stress
+            for i in range(self.Unknowns.DFDt.order):
+                # The history contribution: apply C tensor to (-cᵢ·σ*/2μdt)
+                # But σ* is already the full stress tensor, so we scale it
+                # by the ratio of current to VE viscosity
+                eta_ve = self.Parameters.ve_effective_viscosity
+                eta_0 = self.Parameters.shear_viscosity_0
+                # Simple scaling: history contribution proportional to VE viscosity
+                stress += 2 * eta_ve * (
+                    -bdf_cs[i] * self.Unknowns.DFDt.psi_star[i].sym / (2 * mu_dt)
+                )
+
+        return stress
+
+    @property
+    def yield_mode(self):
+        r"""How to apply yield limiting to the fault-plane viscosity.
+
+        Same options as :class:`ViscoElasticPlasticFlowModel`:
+        ``"smooth"`` (default), ``"softmin"``, ``"harmonic"``, ``"min"``.
+        """
+        return self._yield_mode
+
+    @yield_mode.setter
+    def yield_mode(self, value):
+        if value not in ("min", "harmonic", "smooth", "softmin"):
+            raise ValueError(f"yield_mode must be 'min', 'harmonic', 'smooth', or 'softmin', got '{value}'")
+        self._yield_mode = value
+        self._reset()
+
+    @property
+    def yield_softness(self):
+        """Regularisation parameter δ for softmin mode."""
+        return self._yield_softness
+
+    @yield_softness.setter
+    def yield_softness(self, value):
+        self._yield_softness = value
+        self._reset()
+
+    @property
+    def bdf_blend(self):
+        """BDF coefficient blending: 0=pure O1, 0.5=default, 1=pure O2."""
+        return self._bdf_blend
+
+    @bdf_blend.setter
+    def bdf_blend(self, value):
+        self._bdf_blend = value
+
+    @property
+    def requires_stress_history(self):
+        """Transverse isotropic VEP requires stress history tracking."""
+        return True
+
+    @property
+    def plastic_fraction(self):
+        """Fraction of strain rate that is plastic."""
+        eta_1_ve = self.Parameters.ve_effective_viscosity
+        eta_1_eff = self.viscosity
+        # viscosity property returns η₀, need to compare η₁ effective vs η₁ ve
+        # This is approximate for the anisotropic case
+        return sympy.Max(0, 1 - eta_1_eff / eta_1_ve.sym if hasattr(eta_1_ve, 'sym') else 0)
+
+
 class MultiMaterialConstitutiveModel(Constitutive_Model):
     r"""
     Multi-material constitutive model using level-set weighted flux averaging.
