@@ -224,7 +224,7 @@ class SNES_Poisson(SNES_Scalar):
 
     F1 = Template(
         r"\mathbf{F}_1\left( \mathbf{u} \right)",
-        lambda self: sympy.simplify(self.constitutive_model.flux.T),
+        lambda self: self.constitutive_model.flux.T,
         r"""Diffusive flux term for the Poisson equation (pointwise).
 
         The $\mathbf{F}_1$ vector represents the flux $k \nabla u$
@@ -868,7 +868,7 @@ class SNES_Stokes(SNES_Stokes_SaddlePt):
 
     F1 = Template(
         r"\mathbf{F}_1\left( \mathbf{u} \right)",
-        lambda self: sympy.simplify(
+        lambda self: (
             self.stress + self.penalty * self.div_u * sympy.eye(self.mesh.dim)
         ),
         r"""Velocity equation flux/stress term (pointwise).
@@ -881,7 +881,7 @@ class SNES_Stokes(SNES_Stokes_SaddlePt):
 
     PF0 = Template(
         r"\mathbf{h}_0\left( \mathbf{p} \right)",
-        lambda self: sympy.simplify(sympy.Matrix((self.constraints))),
+        lambda self: sympy.Matrix((self.constraints)),
         r"""Pressure equation constraint term (continuity).
 
         The $h_0$ term enforces the incompressibility constraint
@@ -2424,7 +2424,7 @@ class SNES_Diffusion(SNES_Scalar):
         """Pointwise source term including time derivative."""
         f0 = expression(
             r"f_0 \left( \mathbf{u} \right)",
-            -self.f + sympy.simplify(self.DuDt.bdf()) / self.delta_t,
+            -self.f + self.DuDt.bdf() / self.delta_t,
             "Diffusion pointwise force term: f_0(u)",
         )
 
@@ -2864,7 +2864,7 @@ class SNES_NavierStokes(SNES_Stokes_SaddlePt):
 
         f0 = expression(
             r"\mathbf{F}_1\left( \mathbf{p} \right)",
-            sympy.simplify(sympy.Matrix((self.constraints))),
+            sympy.Matrix((self.constraints)),
             "NStokes pointwise flux term: f_0(p)",
         )
 

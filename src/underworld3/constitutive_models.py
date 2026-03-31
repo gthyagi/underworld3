@@ -2376,7 +2376,7 @@ class TransverseIsotropicFlowModel(ViscousFlowModel):
 
                         lambda_mat[i, j, k, l] = val
 
-        lambda_mat = sympy.simplify(uw.maths.tensor.rank4_to_mandel(lambda_mat, d))
+        lambda_mat = uw.maths.tensor.rank4_to_mandel(lambda_mat, d)
 
         self._c = uw.maths.tensor.mandel_to_rank4(lambda_mat, d)
 
