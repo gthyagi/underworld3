@@ -94,7 +94,7 @@ def _run_ve_shear(order, n_steps, dt_over_tr):
 
     time = 0.0
     for step in range(n_steps):
-        stokes.solve(zero_init_guess=False, evalf=False)
+        stokes.solve(timestep=dt, zero_init_guess=False, evalf=False)
         time += dt
 
         # Read stress from solver.tau — the actual projected stress
