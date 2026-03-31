@@ -1,4 +1,6 @@
 from typing import Optional
+import os
+import shutil
 import subprocess
 from xmlrpc.client import boolean
 import sympy
@@ -6,6 +8,99 @@ import underworld3
 import underworld3.timing as timing
 from collections import namedtuple
 from dataclasses import dataclass
+from pathlib import Path
+
+
+def _petsc_build_env():
+    """Return a subprocess environment with PETSc's C/C++ compilers set.
+
+    Underworld's runtime JIT path shells out to a temporary ``setup.py``
+    build. On some platforms the default compiler discovered by setuptools
+    is not the same compiler family / wrapper PETSc was built with. Reuse
+    PETSc's recorded ``CC`` and ``CXX`` from ``petscvariables`` so the JIT
+    build follows the same toolchain as the main package build.
+    """
+
+    env = os.environ.copy()
+
+    try:
+        import petsc4py
+
+        petsc_info = petsc4py.get_config()
+        petsc_dir = petsc_info.get("PETSC_DIR", "")
+        petsc_arch = petsc_info.get("PETSC_ARCH", "")
+    except Exception:
+        return env
+
+    if not petsc_dir:
+        return env
+
+    candidate_paths = []
+    if petsc_arch:
+        candidate_paths.append(
+            Path(petsc_dir) / petsc_arch / "lib" / "petsc" / "conf" / "petscvariables"
+        )
+    candidate_paths.append(Path(petsc_dir) / "lib" / "petsc" / "conf" / "petscvariables")
+
+    petscvars = next((path for path in candidate_paths if path.exists()), None)
+    if petscvars is None:
+        return env
+
+    cc = ""
+    cxx = ""
+    with petscvars.open("r") as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith("CC ="):
+                cc = line.split("=", 1)[1].strip()
+            elif line.startswith("CXX ="):
+                cxx = line.split("=", 1)[1].strip()
+
+    if cc:
+        env["CC"] = cc
+    if cxx:
+        env["CXX"] = cxx
+
+    def _openmpi_wrapper_fallback(wrapper, env_key):
+        try:
+            wrapped = subprocess.check_output(
+                [wrapper, "--showme:command"],
+                text=True,
+                stderr=subprocess.STDOUT,
+            ).strip()
+        except Exception:
+            return
+
+        if not wrapped:
+            return
+
+        compiler = wrapped.split()[0]
+        if shutil.which(compiler):
+            return
+
+        fallback_name = None
+        if "clang++" in compiler:
+            fallback_name = "clang++"
+        elif "clang" in compiler:
+            fallback_name = "clang"
+        elif "g++" in compiler or compiler.endswith("c++"):
+            fallback_name = "g++"
+        elif "gcc" in compiler or compiler.endswith("cc"):
+            fallback_name = "cc"
+
+        if not fallback_name:
+            return
+
+        fallback = shutil.which(fallback_name)
+        if fallback:
+            env[env_key] = fallback
+
+    if cc:
+        _openmpi_wrapper_fallback(cc, "OMPI_CC")
+    if cxx:
+        _openmpi_wrapper_fallback(cxx, "OMPI_CXX")
+
+    return env
 
 
 ## This is not required in sympy >= 1.9
@@ -1159,6 +1254,7 @@ cpdef PtrContainer getptrobj():
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         cwd=tmpdir,
+        env=_petsc_build_env(),
     )
     stdout, stderr = process.communicate()
 
