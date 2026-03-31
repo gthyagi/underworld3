@@ -2728,7 +2728,16 @@ class TransverseIsotropicVEPFlowModel(TransverseIsotropicFlowModel):
 
     @property
     def _plastic_effective_viscosity(self):
-        """Plastic viscosity based on resolved shear strain rate."""
+        """Plastic viscosity from resolved fault-plane shear strain rate.
+
+        Uses γ̇ = t · ε̇_eff · n (shear strain rate resolved on the fault
+        plane) rather than the global invariant ε̇_II. This ensures yield
+        activates when the fault-plane shear exceeds τ_y, regardless of
+        fault orientation.
+
+        The formula 2η₁_pl = τ_y / γ̇ is the same pattern as isotropic
+        Drucker-Prager but projected onto the fault plane.
+        """
         parameters = self.Parameters
 
         ty_val = parameters.yield_stress.sym if hasattr(parameters.yield_stress, 'sym') else parameters.yield_stress
@@ -2736,11 +2745,16 @@ class TransverseIsotropicVEPFlowModel(TransverseIsotropicFlowModel):
             return sympy.oo
 
         Edot = self.E_eff.sym
-        strainrate_inv_II = expression(
-            R"{\dot\varepsilon_{II}'}",
-            sympy.sqrt((Edot**2).trace() / 2),
-            "Strain rate 2nd Invariant including elastic strain rate term",
-        )
+
+        # Resolve strain rate onto fault plane: γ̇ = t · ε̇ · n
+        n = parameters.director.sym
+        # Fault-parallel direction (2D: rotate normal 90° clockwise)
+        t_fault = sympy.Matrix([n[1], -n[0]])
+
+        gamma_dot = (t_fault.T * Edot * n)[0, 0]
+
+        # Use absolute value — shear can be in either sense
+        gamma_dot_abs = sympy.sqrt(gamma_dot**2)
 
         tau_y = parameters.yield_stress
         if parameters.yield_stress_min.sym != 0:
@@ -2748,23 +2762,41 @@ class TransverseIsotropicVEPFlowModel(TransverseIsotropicFlowModel):
 
         if parameters.strainrate_inv_II_min.sym != 0:
             viscosity_yield = tau_y / (
-                2 * (strainrate_inv_II + parameters.strainrate_inv_II_min)
+                2 * (gamma_dot_abs + parameters.strainrate_inv_II_min)
             )
         else:
-            viscosity_yield = tau_y / (2 * strainrate_inv_II)
+            viscosity_yield = tau_y / (2 * gamma_dot_abs)
 
         return viscosity_yield
 
     def _build_c_tensor(self):
-        """Build the anisotropic tensor with yield-limited η₁."""
+        """Build the anisotropic tensor with VE effective viscosities.
+
+        Both η₀ and η₁ are replaced by their VE effective values:
+          η₀_ve = η₀·μ·dt / (c₀·η₀ + μ·dt)
+          η₁_ve = η₁·μ·dt / (c₀·η₁ + μ·dt)
+        Then η₁_ve is further yield-limited to η₁_eff. This ensures
+        Δ = η₀_ve - η₁_eff = 0 when η₁ = η₀ and yield is inactive.
+        """
 
         if self._is_setup:
             return
 
         d = self.dim
-        eta_0 = self.Parameters.shear_viscosity_0.sym
 
-        # η₁ effective: VE + yield limited
+        # η₀: VE effective (no yield)
+        eta_0_raw = self.Parameters.shear_viscosity_0
+        mu = self.Parameters.shear_modulus
+        dt_e = self.Parameters.dt_elastic
+        c0 = self._bdf_c0
+
+        mu_val = mu.sym if hasattr(mu, 'sym') else mu
+        if mu_val is sympy.oo:
+            eta_0 = eta_0_raw.sym if hasattr(eta_0_raw, 'sym') else eta_0_raw
+        else:
+            eta_0 = eta_0_raw * mu * dt_e / (c0 * eta_0_raw + mu * dt_e)
+
+        # η₁: VE effective + yield limited
         eta_1_eff = self.Parameters.ve_effective_viscosity
 
         if self.is_viscoplastic:
@@ -2869,36 +2901,13 @@ class TransverseIsotropicVEPFlowModel(TransverseIsotropicFlowModel):
         self.viscosity for both).
         """
         self._build_c_tensor()
-        edot = self.grad_u
-        stress = self._q(edot)
 
-        if self.Unknowns.DFDt is not None and self.is_elastic:
-            mu_dt = self.Parameters.dt_elastic * self.Parameters.shear_modulus
-            bdf_cs = [self._bdf_c1, self._bdf_c2, self._bdf_c3]
-
-            # Compute yield-limited η₁ — same expression used in tensor
-            eta_1_eff = self.Parameters.ve_effective_viscosity
-            if self.is_viscoplastic:
-                vp_eff = self._plastic_effective_viscosity
-                if self._yield_mode == "harmonic":
-                    eta_1_eff = 1 / (1 / eta_1_eff + 1 / vp_eff)
-                elif self._yield_mode == "smooth":
-                    f = eta_1_eff / vp_eff
-                    eta_1_eff = eta_1_eff * (1 + f) / (1 + f + f**2)
-                elif self._yield_mode == "softmin":
-                    delta = self._yield_softness
-                    f = eta_1_eff / vp_eff
-                    g = (1 + f) / 2 + sympy.sqrt((f - 1)**2 + delta**2) / 2
-                    eta_1_eff = eta_1_eff / g
-                else:
-                    eta_1_eff = sympy.Min(eta_1_eff, vp_eff)
-
-            for i in range(self.Unknowns.DFDt.order):
-                # History terms use yield-limited viscosity as scalar,
-                # matching isotropic VEP: 2 * viscosity * (-c_i * σ* / 2μdt)
-                stress += 2 * eta_1_eff * (
-                    -bdf_cs[i] * self.Unknowns.DFDt.psi_star[i].sym / (2 * mu_dt)
-                )
+        # Apply the anisotropic tensor to the effective strain rate
+        # (current + VE history): σ = C(η₀_ve, η₁_eff) : ε̇_eff
+        # This is the correct VE formula — the tensor handles anisotropy
+        # for both current and history contributions uniformly.
+        edot_eff = self.E_eff.sym if hasattr(self.E_eff, 'sym') else self.E_eff
+        stress = self._q(edot_eff)
 
         return stress
 
