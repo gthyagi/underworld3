@@ -2730,12 +2730,13 @@ class TransverseIsotropicVEPFlowModel(TransverseIsotropicFlowModel):
     def _plastic_effective_viscosity(self):
         """Plastic viscosity from resolved fault-plane shear strain rate.
 
-        Uses γ̇ = t · ε̇_eff · n (shear strain rate resolved on the fault
-        plane) rather than the global invariant ε̇_II. This ensures yield
-        activates when the fault-plane shear exceeds τ_y, regardless of
-        fault orientation.
+        Computes the in-plane shear magnitude using Pythagoras:
+          T = ε̇_eff · n       (traction-like vector on fault)
+          ε̇_n = T · n          (normal component)
+          |γ̇| = √(|T|² - ε̇_n²) (in-plane shear magnitude)
 
-        The formula 2η₁_pl = τ_y / γ̇ is the same pattern as isotropic
+        This works in both 2D and 3D — no explicit tangent vector needed.
+        The formula 2η₁_pl = τ_y / |γ̇| is the same pattern as isotropic
         Drucker-Prager but projected onto the fault plane.
         """
         parameters = self.Parameters
@@ -2746,15 +2747,13 @@ class TransverseIsotropicVEPFlowModel(TransverseIsotropicFlowModel):
 
         Edot = self.E_eff.sym
 
-        # Resolve strain rate onto fault plane: γ̇ = t · ε̇ · n
+        # Resolve strain rate onto fault plane via Pythagoras
         n = parameters.director.sym
-        # Fault-parallel direction (2D: rotate normal 90° clockwise)
-        t_fault = sympy.Matrix([n[1], -n[0]])
-
-        gamma_dot = (t_fault.T * Edot * n)[0, 0]
-
-        # Use absolute value — shear can be in either sense
-        gamma_dot_abs = sympy.sqrt(gamma_dot**2)
+        T = Edot * n                        # "traction" vector on fault
+        edot_n = (n.T * T)[0, 0]            # normal component
+        T_sq = (T.T * T)[0, 0]              # |T|²
+        gamma_dot_sq = T_sq - edot_n**2     # in-plane shear²
+        gamma_dot_abs = sympy.sqrt(sympy.Max(gamma_dot_sq, 0))
 
         tau_y = parameters.yield_stress
         if parameters.yield_stress_min.sym != 0:
