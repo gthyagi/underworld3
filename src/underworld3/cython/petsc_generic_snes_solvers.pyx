@@ -689,8 +689,8 @@ class SolverBaseClass(uw_object):
 
         from collections import namedtuple
         if c_type == 'neumann':
-            BC = namedtuple('NaturalBC', ['f_id', 'components', 'fn_f', 'boundary', 'boundary_label_val', 'type', 'PETScID', 'fns'])
-            self.natural_bcs.append(BC(f_id, components, sympy_fn, label, -1, "natural", -1, {}))
+            BC = namedtuple('NaturalBC', ['f_id', 'components', 'fn_f', 'fn_F', 'boundary', 'boundary_label_val', 'type', 'PETScID', 'fns'])
+            self.natural_bcs.append(BC(f_id, components, sympy_fn, None, label, -1, "natural", -1, {}))
         elif c_type == 'dirichlet':
             BC = namedtuple('EssentialBC', ['f_id', 'components', 'fn', 'boundary', 'boundary_label_val', 'type', 'PETScID'])
             self.essential_bcs.append(BC(f_id, components,sympy_fn, label, -1,  'essential', -1))
@@ -3770,32 +3770,35 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
                 G0 = sympy.derive_by_array(bc.fns["u_f0"], P)
                 G1 = sympy.derive_by_array(bc.fns["u_f0"], self._G)
 
-                bc.fns["up_G0"] = sympy.ImmutableMatrix(G0.reshape(dim)) # sympy.ImmutableMatrix(sympy.permutedims(G0, permutation).reshape(dim,dim))
-                bc.fns["up_G1"] = sympy.ImmutableMatrix(sympy.permutedims(G1, permutation).reshape(dim,dim)) # sympy.ImmutableMatrix(sympy.permutedims(G1, permutation).reshape(dim,dim*dim))
+                bc.fns["up_G0"] = sympy.ImmutableMatrix(G0.reshape(dim))
+                bc.fns["up_G1"] = sympy.ImmutableMatrix(sympy.permutedims(G1, permutation).reshape(dim,dim))
                 fns_bd_jacobian += [bc.fns["up_G0"], bc.fns["up_G1"]]
 
-                # bc.fns["pu_G0"] = sympy.ImmutableMatrix(sympy.ImmutableMatrix(sympy.Matrix.zeros(rows=1,cols=dim))) # sympy.ImmutableMatrix(sympy.permutedims(G2, permutation).reshape(dim*dim,dim))
-                # bc.fns["pu_G1"] = sympy.ImmutableMatrix(sympy.ImmutableMatrix(sympy.Matrix.zeros(rows=dim,cols=dim))) # sympy.ImmutableMatrix(sympy.permutedims(G3, permutation).reshape(dim*dim,dim*dim))
-                # fns_bd_jacobian += [bc.fns["pu_G0"], bc.fns["pu_G1"],]
+                # Gradient boundary residual (f1_bd) and its Jacobians (g2, g3)
+                # Used by Nitsche-type BCs; None for standard natural BCs.
+                if bc.fn_F is not None:
+                    bd_F1 = sympy.Array(bc.fn_F).reshape(dim, dim)
+                    bc.fns["u_F1"] = sympy.ImmutableDenseMatrix(bd_F1)
+                    fns_bd_residual += [bc.fns["u_F1"]]
 
-                # Set this explicitly to zero initially
-                # fn_F = sympy.Matrix([[0,0],[0,0]])
+                    G2 = sympy.derive_by_array(bd_F1, self.Unknowns.u.sym)
+                    G3 = sympy.derive_by_array(bd_F1, self.Unknowns.L)
+                    bc.fns["uu_G2"] = sympy.ImmutableMatrix(sympy.permutedims(G2, permutation).reshape(dim*dim, dim))
+                    bc.fns["uu_G3"] = sympy.ImmutableMatrix(sympy.permutedims(G3, permutation).reshape(dim*dim, dim*dim))
+                    fns_bd_jacobian += [bc.fns["uu_G2"], bc.fns["uu_G3"]]
 
-                # bd_F1  = sympy.Array(fn_F).reshape(dim,dim)
-                # bc.fns["u_F1"] = sympy.ImmutableDenseMatrix(bd_F1)
-                # fns_bd_residual += [bc.fns["u_F1"]]
+                    G2 = sympy.derive_by_array(bc.fns["u_F1"], P)
+                    G3 = sympy.derive_by_array(bc.fns["u_F1"], self._G)
+                    bc.fns["up_G2"] = sympy.ImmutableMatrix(G2.reshape(dim, dim))
+                    bc.fns["up_G3"] = sympy.ImmutableMatrix(G3.reshape(dim, dim*dim))
+                    fns_bd_jacobian += [bc.fns["up_G2"], bc.fns["up_G3"]]
 
-                # G2 = bc.fns["u_F1"].diff(self.Unknowns.u.sym)
-                # G3 = bc.fns["u_F1"].diff(self.Unknowns.L)
-                # bc.fns["uu_G2"] = sympy.ImmutableMatrix(sympy.permutedims(G2, permutation).reshape(dim*dim,dim)) # sympy.ImmutableMatrix(sympy.permutedims(G2, permutation).reshape(dim*dim,dim))
-                # bc.fns["uu_G3"] = sympy.ImmutableMatrix(sympy.permutedims(G3, permutation).reshape(dim*dim,dim*dim)) # sympy.ImmutableMatrix(sympy.permutedims(G3, permutation).reshape(dim*dim,dim*dim))
-                # fns_bd_jacobian += [bc.fns["uu_G2"], bc.fns["uu_G3"]]
-
-                # G2 = sympy.derive_by_array(bc.fns["u_F1"], P)
-                # G3 = sympy.derive_by_array(bc.fns["u_F1"], self._G)
-                # bc.fns["up_G2"] = sympy.ImmutableMatrix(G2.reshape(dim,dim)) # sympy.ImmutableMatrix(sympy.permutedims(G2, permutation).reshape(dim*dim,dim))
-                # bc.fns["up_G3"] = sympy.ImmutableMatrix(G3.reshape(dim,dim*dim)) # sympy.ImmutableMatrix(sympy.permutedims(G3, permutation).reshape(dim*dim,dim*dim))
-                # fns_bd_jacobian += [bc.fns["up_G2"], bc.fns["up_G3"],]
+                # Pressure-velocity boundary Jacobian block (pu)
+                # Required for Nitsche free-slip; populated when bc provides
+                # a pressure boundary residual (fn_p). For now, zeros.
+                bc.fns["pu_G0"] = sympy.ImmutableMatrix(sympy.Matrix.zeros(rows=1, cols=dim))
+                bc.fns["pu_G1"] = sympy.ImmutableMatrix(sympy.Matrix.zeros(rows=dim, cols=dim))
+                fns_bd_jacobian += [bc.fns["pu_G0"], bc.fns["pu_G1"]]
 
                 bc.fns["pp_G0"] = sympy.ImmutableMatrix([0])
                 fns_bd_jacobian += [bc.fns["pp_G0"]]
@@ -4062,66 +4065,113 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
 
                 if bc.fn_f is not None:
 
-                    UW_PetscDSSetBdResidual(ds.ds, c_label.dmlabel, label_val, boundary_id,
-                                    0, 0,
-                                    ext.fns_bd_residual[i_bd_res[bc.fns["u_f0"]]],
-                                    NULL, # ext.fns_bd_residual[i_bd_res[bc.fns["u_F1"]]],
-                                    )
+                    _has_f1 = "u_F1" in bc.fns
 
+                    # Velocity boundary residual: f0 (value) + f1 (gradient, if present)
+                    if _has_f1:
+                        UW_PetscDSSetBdResidual(ds.ds, c_label.dmlabel, label_val, boundary_id,
+                                        0, 0,
+                                        ext.fns_bd_residual[i_bd_res[bc.fns["u_f0"]]],
+                                        ext.fns_bd_residual[i_bd_res[bc.fns["u_F1"]]],
+                                        )
+                    else:
+                        UW_PetscDSSetBdResidual(ds.ds, c_label.dmlabel, label_val, boundary_id,
+                                        0, 0,
+                                        ext.fns_bd_residual[i_bd_res[bc.fns["u_f0"]]],
+                                        NULL,
+                                        )
+
+                    # Pressure boundary residual (for Nitsche: f0_p = u.n)
                     UW_PetscDSSetBdResidual(ds.ds, c_label.dmlabel, label_val, boundary_id, 1, 0, NULL, NULL)
 
+                    # Velocity-velocity boundary Jacobian: g0, g1 always; g2, g3 if f1_bd present
+                    if _has_f1:
+                        UW_PetscDSSetBdJacobian(ds.ds, c_label.dmlabel, label_val, boundary_id,
+                                        0, 0, 0,
+                                        ext.fns_bd_jacobian[i_bd_jac[bc.fns["uu_G0"]]],
+                                        ext.fns_bd_jacobian[i_bd_jac[bc.fns["uu_G1"]]],
+                                        ext.fns_bd_jacobian[i_bd_jac[bc.fns["uu_G2"]]],
+                                        ext.fns_bd_jacobian[i_bd_jac[bc.fns["uu_G3"]]],
+                                        )
+                    else:
+                        UW_PetscDSSetBdJacobian(ds.ds, c_label.dmlabel, label_val, boundary_id,
+                                        0, 0, 0,
+                                        ext.fns_bd_jacobian[i_bd_jac[bc.fns["uu_G0"]]],
+                                        ext.fns_bd_jacobian[i_bd_jac[bc.fns["uu_G1"]]],
+                                        NULL, NULL,
+                                        )
 
-                    UW_PetscDSSetBdJacobian(ds.ds, c_label.dmlabel, label_val, boundary_id,
-                                    0, 0, 0,
-                                    ext.fns_bd_jacobian[i_bd_jac[bc.fns["uu_G0"]]],
-                                    ext.fns_bd_jacobian[i_bd_jac[bc.fns["uu_G1"]]],
-                                    NULL, # ext.fns_bd_jacobian[i_bd_jac[bc.fns["uu_G2"]]],
-                                    NULL, # ext.fns_bd_jacobian[i_bd_jac[bc.fns["uu_G3"]]]
-                                    )
+                    # Velocity-pressure boundary Jacobian
+                    if _has_f1:
+                        UW_PetscDSSetBdJacobian(ds.ds, c_label.dmlabel, label_val, boundary_id,
+                                        0, 1, 0,
+                                        ext.fns_bd_jacobian[i_bd_jac[bc.fns["up_G0"]]],
+                                        ext.fns_bd_jacobian[i_bd_jac[bc.fns["up_G1"]]],
+                                        ext.fns_bd_jacobian[i_bd_jac[bc.fns["up_G2"]]],
+                                        ext.fns_bd_jacobian[i_bd_jac[bc.fns["up_G3"]]],
+                                        )
+                    else:
+                        UW_PetscDSSetBdJacobian(ds.ds, c_label.dmlabel, label_val, boundary_id,
+                                        0, 1, 0,
+                                        ext.fns_bd_jacobian[i_bd_jac[bc.fns["up_G0"]]],
+                                        ext.fns_bd_jacobian[i_bd_jac[bc.fns["up_G1"]]],
+                                        NULL, NULL)
 
+                    # Pressure-velocity boundary Jacobian (pu block)
                     UW_PetscDSSetBdJacobian(ds.ds, c_label.dmlabel, label_val, boundary_id,
-                                    0, 1, 0,
-                                    ext.fns_bd_jacobian[i_bd_jac[bc.fns["up_G0"]]],
-                                    ext.fns_bd_jacobian[i_bd_jac[bc.fns["up_G1"]]],
+                                    1, 0, 0,
+                                    ext.fns_bd_jacobian[i_bd_jac[bc.fns["pu_G0"]]],
+                                    ext.fns_bd_jacobian[i_bd_jac[bc.fns["pu_G1"]]],
                                     NULL, NULL)
 
-                    # UW_PetscDSSetBdJacobian(ds.ds, c_label.dmlabel, label_val, boundary_id,
-                    #                 1, 0, 0,
-                    #                 NULL, # ext.fns_bd_jacobian[i_bd_jac[bc.fns["pu_G0"]]],
-                    #                 NULL, # ext.fns_bd_jacobian[i_bd_jac[bc.fns["pu_G1"]]],
-                    #                 NULL, NULL)
+                    # Pressure-pressure boundary Jacobian (pp block)
+                    UW_PetscDSSetBdJacobian(ds.ds, c_label.dmlabel, label_val, boundary_id,
+                                    1, 1, 0,
+                                    ext.fns_bd_jacobian[i_bd_jac[bc.fns["pp_G0"]]],
+                                    NULL, NULL, NULL)
 
-                    # UW_PetscDSSetBdJacobian(ds.ds, c_label.dmlabel, label_val, boundary_id,
-                    #                 1, 1, 0,
-                    #                 ext.fns_bd_jacobian[i_bd_jac[bc.fns["pp_G0"]]],
-                    #                 NULL, NULL, NULL)
+                    # Preconditioner: mirror the Jacobian structure
+                    if _has_f1:
+                        UW_PetscDSSetBdJacobianPreconditioner(ds.ds, c_label.dmlabel, label_val, boundary_id,
+                                        0, 0, 0,
+                                        ext.fns_bd_jacobian[i_bd_jac[bc.fns["uu_G0"]]],
+                                        ext.fns_bd_jacobian[i_bd_jac[bc.fns["uu_G1"]]],
+                                        ext.fns_bd_jacobian[i_bd_jac[bc.fns["uu_G2"]]],
+                                        ext.fns_bd_jacobian[i_bd_jac[bc.fns["uu_G3"]]],
+                                        )
+                    else:
+                        UW_PetscDSSetBdJacobianPreconditioner(ds.ds, c_label.dmlabel, label_val, boundary_id,
+                                        0, 0, 0,
+                                        ext.fns_bd_jacobian[i_bd_jac[bc.fns["uu_G0"]]],
+                                        ext.fns_bd_jacobian[i_bd_jac[bc.fns["uu_G1"]]],
+                                        NULL, NULL,
+                                        )
+
+                    if _has_f1:
+                        UW_PetscDSSetBdJacobianPreconditioner(ds.ds, c_label.dmlabel, label_val, boundary_id,
+                                        0, 1, 0,
+                                        ext.fns_bd_jacobian[i_bd_jac[bc.fns["up_G0"]]],
+                                        ext.fns_bd_jacobian[i_bd_jac[bc.fns["up_G1"]]],
+                                        ext.fns_bd_jacobian[i_bd_jac[bc.fns["up_G2"]]],
+                                        ext.fns_bd_jacobian[i_bd_jac[bc.fns["up_G3"]]],
+                                        )
+                    else:
+                        UW_PetscDSSetBdJacobianPreconditioner(ds.ds, c_label.dmlabel, label_val, boundary_id,
+                                        0, 1, 0,
+                                        ext.fns_bd_jacobian[i_bd_jac[bc.fns["up_G0"]]],
+                                        ext.fns_bd_jacobian[i_bd_jac[bc.fns["up_G1"]]],
+                                        NULL, NULL)
 
                     UW_PetscDSSetBdJacobianPreconditioner(ds.ds, c_label.dmlabel, label_val, boundary_id,
-                                    0, 0, 0,
-                                    ext.fns_bd_jacobian[i_bd_jac[bc.fns["uu_G0"]]],
-                                    ext.fns_bd_jacobian[i_bd_jac[bc.fns["uu_G1"]]],
-                                    NULL, # ext.fns_bd_jacobian[i_bd_jac[bc.fns["uu_G2"]]],
-                                    NULL, # ext.fns_bd_jacobian[i_bd_jac[bc.fns["uu_G3"]]]
-                                    )
-
-                    UW_PetscDSSetBdJacobianPreconditioner(ds.ds, c_label.dmlabel, label_val, boundary_id,
-                                    0, 1, 0,
-                                    ext.fns_bd_jacobian[i_bd_jac[bc.fns["up_G0"]]],
-                                    ext.fns_bd_jacobian[i_bd_jac[bc.fns["up_G1"]]],
+                                    1, 0, 0,
+                                    ext.fns_bd_jacobian[i_bd_jac[bc.fns["pu_G0"]]],
+                                    ext.fns_bd_jacobian[i_bd_jac[bc.fns["pu_G1"]]],
                                     NULL, NULL)
 
-                    # UW_PetscDSSetBdJacobianPreconditioner(ds.ds, c_label.dmlabel, label_val, boundary_id,
-                    #                 1, 0, 0,
-                    #                 NULL, # ext.fns_bd_jacobian[i_bd_jac[bc.fns["pu_G0"]]],
-                    #                 NULL, # ext.fns_bd_jacobian[i_bd_jac[bc.fns["pu_G1"]]],
-                    #                 NULL, NULL)
-
-                    # UW_PetscDSSetBdJacobianPreconditioner(ds.ds, c_label.dmlabel, label_val, boundary_id,
-                    #                 1, 1, 0,
-                    #                 ext.fns_bd_jacobian[i_bd_jac[bc.fns["pp_G0"]]],
-                    #                 NULL,
-                    #                 NULL,
-                    #                 NULL)
+                    UW_PetscDSSetBdJacobianPreconditioner(ds.ds, c_label.dmlabel, label_val, boundary_id,
+                                    1, 1, 0,
+                                    ext.fns_bd_jacobian[i_bd_jac[bc.fns["pp_G0"]]],
+                                    NULL, NULL, NULL)
 
         if verbose:
             print(f"Weak form (DS)", flush=True)
