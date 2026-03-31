@@ -2553,7 +2553,8 @@ class TransverseIsotropicVEPFlowModel(TransverseIsotropicFlowModel):
         @property
         def ve_effective_viscosity(inner_self):
             r"""VE effective viscosity using η₁ (fault-plane viscosity)."""
-            if inner_self.shear_modulus == sympy.oo:
+            mu_val = inner_self.shear_modulus.sym if hasattr(inner_self.shear_modulus, 'sym') else inner_self.shear_modulus
+            if mu_val is sympy.oo:
                 return inner_self.shear_viscosity_1
 
             eta = inner_self.shear_viscosity_1
@@ -2575,11 +2576,17 @@ class TransverseIsotropicVEPFlowModel(TransverseIsotropicFlowModel):
 
     @property
     def is_elastic(self):
-        return self.Parameters.shear_modulus != sympy.oo
+        """True if elastic behavior is active (finite shear_modulus)."""
+        if self.Parameters.shear_modulus.sym is sympy.oo:
+            return False
+        return True
 
     @property
     def is_viscoplastic(self):
-        return self.Parameters.yield_stress.sym != sympy.oo
+        """True if plastic yielding is active (finite yield_stress)."""
+        if self.Parameters.yield_stress.sym is sympy.oo:
+            return False
+        return True
 
     @property
     def order(self):
@@ -2724,7 +2731,8 @@ class TransverseIsotropicVEPFlowModel(TransverseIsotropicFlowModel):
         """Plastic viscosity based on resolved shear strain rate."""
         parameters = self.Parameters
 
-        if parameters.yield_stress == sympy.oo:
+        ty_val = parameters.yield_stress.sym if hasattr(parameters.yield_stress, 'sym') else parameters.yield_stress
+        if ty_val is sympy.oo:
             return sympy.oo
 
         Edot = self.E_eff.sym
@@ -2854,8 +2862,11 @@ class TransverseIsotropicVEPFlowModel(TransverseIsotropicFlowModel):
     def stress(self):
         """Viscoelastic-plastic anisotropic stress for the weak form.
 
-        Uses the anisotropic tensor with yield-limited η₁ and adds
-        BDF stress history terms.
+        Matches isotropic VEP pattern: tensor contraction for current strain
+        rate, scalar yield-limited viscosity for VE history terms. The tensor
+        C(η₁_eff) handles anisotropy; the history uses the same η₁_eff as
+        a scalar multiplier (consistent with how isotropic VEP uses
+        self.viscosity for both).
         """
         self._build_c_tensor()
         edot = self.grad_u
@@ -2865,15 +2876,27 @@ class TransverseIsotropicVEPFlowModel(TransverseIsotropicFlowModel):
             mu_dt = self.Parameters.dt_elastic * self.Parameters.shear_modulus
             bdf_cs = [self._bdf_c1, self._bdf_c2, self._bdf_c3]
 
-            # History uses the yield-limited tensor applied to stored stress
+            # Compute yield-limited η₁ — same expression used in tensor
+            eta_1_eff = self.Parameters.ve_effective_viscosity
+            if self.is_viscoplastic:
+                vp_eff = self._plastic_effective_viscosity
+                if self._yield_mode == "harmonic":
+                    eta_1_eff = 1 / (1 / eta_1_eff + 1 / vp_eff)
+                elif self._yield_mode == "smooth":
+                    f = eta_1_eff / vp_eff
+                    eta_1_eff = eta_1_eff * (1 + f) / (1 + f + f**2)
+                elif self._yield_mode == "softmin":
+                    delta = self._yield_softness
+                    f = eta_1_eff / vp_eff
+                    g = (1 + f) / 2 + sympy.sqrt((f - 1)**2 + delta**2) / 2
+                    eta_1_eff = eta_1_eff / g
+                else:
+                    eta_1_eff = sympy.Min(eta_1_eff, vp_eff)
+
             for i in range(self.Unknowns.DFDt.order):
-                # The history contribution: apply C tensor to (-cᵢ·σ*/2μdt)
-                # But σ* is already the full stress tensor, so we scale it
-                # by the ratio of current to VE viscosity
-                eta_ve = self.Parameters.ve_effective_viscosity
-                eta_0 = self.Parameters.shear_viscosity_0
-                # Simple scaling: history contribution proportional to VE viscosity
-                stress += 2 * eta_ve * (
+                # History terms use yield-limited viscosity as scalar,
+                # matching isotropic VEP: 2 * viscosity * (-c_i * σ* / 2μdt)
+                stress += 2 * eta_1_eff * (
                     -bdf_cs[i] * self.Unknowns.DFDt.psi_star[i].sym / (2 * mu_dt)
                 )
 
