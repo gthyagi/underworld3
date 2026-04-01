@@ -3022,7 +3022,7 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
     #     BC = namedtuple('EssentialBC', ['components', 'fn', 'boundary', 'boundary_label_val', 'type', 'PETScID'])
     #     self.essential_p_bcs.append(BC(components, sympy_fn, boundary, -1,  'essential', -1))
 
-    def add_nitsche_bc(self, boundary, g=None, gamma=10.0, theta=-1):
+    def add_nitsche_bc(self, boundary, g=None, gamma=10.0, theta=1):
         r"""Add Nitsche weak enforcement of a normal velocity constraint.
 
         Nitsche's method provides a variationally consistent alternative to
@@ -3045,11 +3045,11 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
         gamma : float, default=10.0
             Dimensionless stabilisation parameter. Typical values 5--20
             for P2 elements.
-        theta : {-1, 0, 1}, default=-1
+        theta : {-1, 0, 1}, default=1
             Symmetry parameter:
-            -1: skew-symmetric (unconditionally stable for any gamma > 0)
+             1: symmetric (default — optimal convergence and solver efficiency)
              0: incomplete (no symmetry term)
-             1: symmetric (optimal convergence, requires gamma large enough)
+            -1: skew-symmetric (unconditionally stable but slower convergence)
 
         References
         ----------
