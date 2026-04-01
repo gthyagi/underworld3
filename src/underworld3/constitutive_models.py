@@ -1112,7 +1112,7 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
         self._order = order
         self._yield_mode = "smooth"  # "min", "harmonic", "smooth", or "softmin"
         self._yield_softness = 0.5  # δ parameter for "softmin" mode
-        self._bdf_blend = 0.5  # blend O1/O2 coefficients: 0=pure O1, 1=pure O2
+        self._bdf_blend = None  # auto: 1.0 for VE, 0.75 for VEP
 
         # Timestep — set by the solver before each solve(). Not a user parameter.
         # Initialised to oo (viscous limit). The solver overwrites this with the
@@ -1363,7 +1363,7 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
 
             # Blend with O1 coefficients for stability
             # 0 = pure O1, 0.5 = balanced (default), 1 = pure requested order
-            alpha = self._bdf_blend
+            alpha = self.bdf_blend  # property resolves None → auto-detect
             if 0 < alpha < 1 and order >= 2:
                 coeffs_o1 = _bdf_coefficients(1, dt_current, dt_history)
                 while len(coeffs_o1) < len(coeffs):
@@ -1761,9 +1761,12 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
         Blends O1 and O2 BDF coefficients: ``c = (1-α)·c_O1 + α·c_O2``.
 
         - ``α = 0``: pure BDF-1 (most stable, first-order accurate)
-        - ``α = 0.5`` (default): balanced blend (stable, improved accuracy)
-        - ``α = 1``: pure BDF-2 (second-order, can be unstable for VEP)
+        - ``α = 0.75``: default for VEP (stable, near-optimal accuracy)
+        - ``α = 1``: pure BDF-2 (default for pure VE, second-order accurate)
+        - ``None`` (default): auto-detect — 1.0 for VE, 0.75 for VEP
         """
+        if self._bdf_blend is None:
+            return 0.75 if self.is_viscoplastic else 1.0
         return self._bdf_blend
 
     @bdf_blend.setter
