@@ -3023,7 +3023,7 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
     #     BC = namedtuple('EssentialBC', ['components', 'fn', 'boundary', 'boundary_label_val', 'type', 'PETScID'])
     #     self.essential_p_bcs.append(BC(components, sympy_fn, boundary, -1,  'essential', -1))
 
-    def add_nitsche_bc(self, boundary, g=None, direction=None, gamma=10.0, theta=1):
+    def add_nitsche_bc(self, boundary, g=None, direction=None, normal=None, gamma=10.0, theta=1):
         r"""Add Nitsche weak enforcement of a velocity constraint along a direction.
 
         Nitsche's method provides a variationally consistent alternative to
@@ -3055,6 +3055,10 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
             Constraint direction vector. Default ``None`` uses the boundary
             surface normal (free-slip). Can be spatially varying (e.g.,
             a fault orientation field).
+        normal : sympy.Matrix or list, optional
+            Boundary unit normal used in the Nitsche consistency, symmetry,
+            and pressure-coupling terms. Default ``None`` uses the PETSc
+            boundary facet normal ``mesh.Gamma_N``.
         gamma : float, default=10.0
             Dimensionless stabilisation parameter. Typical values 5--20
             for P2 elements.
@@ -3089,10 +3093,16 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
         mesh = self.mesh
         dim = mesh.dim
 
-        # Surface normal components (compile to petsc_n[])
-        n = [mesh.Gamma_N.x, mesh.Gamma_N.y]
-        if dim == 3:
-            n.append(mesh.Gamma_N.z)
+        # Surface normal components. By default use PETSc's facet normal.
+        if normal is not None:
+            if isinstance(normal, sympy.MatrixBase):
+                n = [normal[i] for i in range(dim)]
+            else:
+                n = list(normal)
+        else:
+            n = [mesh.Gamma_N.x, mesh.Gamma_N.y]
+            if dim == 3:
+                n.append(mesh.Gamma_N.z)
 
         # Constraint direction: defaults to surface normal
         if direction is not None:
