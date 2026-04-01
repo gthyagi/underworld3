@@ -786,13 +786,14 @@ class SolverBaseClass(uw_object):
         For Stokes problems, natural BCs represent tractions
         :math:`\\mathbf{t} = \\boldsymbol{\\sigma} \\cdot \\mathbf{n}`.
 
-        The free-slip penalty method is particularly useful for spherical
-        geometries where the normal direction varies along the boundary.
-        The penalty term enforces :math:`\\mathbf{v} \\cdot \\mathbf{n} = 0`
-        weakly while allowing tangential flow.
+        For free-slip boundary conditions, consider using
+        :meth:`add_nitsche_bc` instead of the penalty approach shown
+        above. Nitsche provides variationally consistent enforcement
+        without penalty tuning and is more robust on spherical shells.
 
         See Also
         --------
+        add_nitsche_bc : Nitsche free-slip (recommended for curved boundaries).
         add_dirichlet_bc : For fixed-value boundary conditions.
         """
         self.add_condition(0, 'neumann', conds, boundary, components)
