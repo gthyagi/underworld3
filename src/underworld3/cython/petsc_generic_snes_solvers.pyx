@@ -3022,26 +3022,38 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
     #     BC = namedtuple('EssentialBC', ['components', 'fn', 'boundary', 'boundary_label_val', 'type', 'PETScID'])
     #     self.essential_p_bcs.append(BC(components, sympy_fn, boundary, -1,  'essential', -1))
 
-    def add_nitsche_bc(self, boundary, g=None, gamma=10.0, theta=1):
-        r"""Add Nitsche weak enforcement of a normal velocity constraint.
+    def add_nitsche_bc(self, boundary, g=None, direction=None, gamma=10.0, theta=1):
+        r"""Add Nitsche weak enforcement of a velocity constraint along a direction.
 
         Nitsche's method provides a variationally consistent alternative to
         penalty-based free-slip that is less sensitive to the penalty magnitude
         and gives optimal convergence rates.
 
+        By default, constrains the normal velocity component
+        :math:`\mathbf{u} \cdot \mathbf{n} = g` (free-slip when *g* = 0).
+        When *direction* is provided, constrains
+        :math:`\mathbf{u} \cdot \mathbf{d} = g` along that direction instead.
+
         The method constructs boundary residuals and Jacobians for:
-        - Penalty/stabilisation: :math:`(\gamma \mu / h)(u \cdot n - g) n`
-        - Consistency: :math:`-(\sigma \cdot n \cdot n) n` (stress flux)
+
+        - Penalty/stabilisation: :math:`(\gamma \mu / h)(\mathbf{u} \cdot \mathbf{d} - g) \, \mathbf{d}`
+        - Consistency: :math:`-(\boldsymbol{\sigma} \cdot \mathbf{n} \cdot \mathbf{d}) \, \mathbf{d}`
+          (boundary traction projected onto constraint direction)
         - Symmetry: :math:`-\theta \mu` adjoint consistency term
-        - Pressure: :math:`p \, n` on velocity and :math:`u \cdot n - g` on pressure
+        - Pressure: :math:`p \, (\mathbf{n} \cdot \mathbf{d}) \, \mathbf{d}` on velocity
+          and :math:`(\mathbf{n} \cdot \mathbf{d})(\mathbf{u} \cdot \mathbf{d} - g)` on pressure
 
         Parameters
         ----------
         boundary : str
             Boundary label (e.g., ``"Upper"``, ``"Lower"``).
         g : sympy expression or float, optional
-            Prescribed normal velocity. Default ``None`` means free-slip
-            (:math:`u \cdot n = 0`).
+            Prescribed velocity along the constraint direction. Default
+            ``None`` means zero (:math:`\mathbf{u} \cdot \mathbf{d} = 0`).
+        direction : sympy.Matrix or list, optional
+            Constraint direction vector. Default ``None`` uses the boundary
+            surface normal (free-slip). Can be spatially varying (e.g.,
+            a fault orientation field).
         gamma : float, default=10.0
             Dimensionless stabilisation parameter. Typical values 5--20
             for P2 elements.
@@ -3050,6 +3062,18 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
              1: symmetric (default — optimal convergence and solver efficiency)
              0: incomplete (no symmetry term)
             -1: skew-symmetric (unconditionally stable but slower convergence)
+
+        Examples
+        --------
+        >>> # Free-slip (u.n = 0)
+        >>> stokes.add_nitsche_bc("Upper", gamma=10)
+
+        >>> # Prescribed normal inflow
+        >>> stokes.add_nitsche_bc("Left", g=1.0, gamma=10)
+
+        >>> # Constrain along a specific direction (e.g. fault normal)
+        >>> fault_normal = sympy.Matrix([0.6, 0.8])
+        >>> stokes.add_nitsche_bc("Fault", direction=fault_normal, gamma=10)
 
         References
         ----------
@@ -3064,20 +3088,33 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
         mesh = self.mesh
         dim = mesh.dim
 
-        # Normal vector components (compile to petsc_n[])
+        # Surface normal components (compile to petsc_n[])
         n = [mesh.Gamma_N.x, mesh.Gamma_N.y]
         if dim == 3:
             n.append(mesh.Gamma_N.z)
+
+        # Constraint direction: defaults to surface normal
+        if direction is not None:
+            if isinstance(direction, sympy.MatrixBase):
+                d = [direction[i] for i in range(dim)]
+            else:
+                d = list(direction)
+        else:
+            d = n  # free-slip: constrain along surface normal
 
         # Velocity and pressure symbols
         u = self.u.sym   # Matrix (dim, 1)
         p_sym = self.p.sym[0]  # scalar
 
-        # Constraint residual: c = u.n - g
-        u_dot_n = sum(u[i] * n[i] for i in range(dim))
+        # Constraint residual: c = u.d - g
+        u_dot_d = sum(u[i] * d[i] for i in range(dim))
         if g is None:
             g = sympy.Integer(0)
-        constraint = u_dot_n - g
+        constraint = u_dot_d - g
+
+        # n.d — how much of the constraint direction is normal to the surface
+        # Controls pressure coupling (vanishes when d is purely tangential)
+        n_dot_d = sum(n[i] * d[i] for i in range(dim))
 
         # Mesh size (global estimate via UWexpression constant)
         h = uw.function.expression(
@@ -3092,10 +3129,10 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
         # Constitutive flux (stress tensor) — includes VE history if active
         flux = self._constitutive_model.flux  # dim x dim Matrix
 
-        # Normal traction: t_n[c] = sum_d flux[c,d] * n[d]
-        # Normal-normal traction: t_nn = sum_c t_n[c] * n[c]
-        t_nn = sum(
-            flux[i, j] * n[i] * n[j]
+        # Traction projected onto constraint direction:
+        # t_d = (σ·n)·d = sum_{ij} flux[i,j] * n[j] * d[i]
+        t_d = sum(
+            flux[i, j] * n[j] * d[i]
             for i in range(dim) for j in range(dim)
         )
 
@@ -3103,9 +3140,9 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
         # = penalty + consistency + pressure flux
         f0_components = []
         for c in range(dim):
-            f0_c = (gamma * mu / h.sym) * constraint * n[c]   # penalty
-            f0_c -= t_nn * n[c]                                 # consistency
-            f0_c += p_sym * n[c]                                # pressure flux
+            f0_c = (gamma * mu / h.sym) * constraint * d[c]    # penalty
+            f0_c -= t_d * d[c]                                   # consistency
+            f0_c += p_sym * n_dot_d * d[c]                       # pressure flux
             f0_components.append(f0_c)
 
         fn_f = sympy.Matrix(f0_components).as_immutable()
@@ -3115,15 +3152,16 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
         if theta != 0:
             f1_components = sympy.zeros(dim, dim)
             for c in range(dim):
-                for d in range(dim):
-                    f1_components[c, d] = -theta * mu * (
-                        n[d] * constraint * n[c] + n[c] * constraint * n[d]
+                for dd in range(dim):
+                    f1_components[c, dd] = -theta * mu * (
+                        n[dd] * constraint * d[c] + d[c] * constraint * n[dd]
                     )
             fn_F = sympy.Matrix(f1_components).as_immutable()
 
         # fn_p: pressure boundary residual
-        # Enforces continuity constraint u.n = g on the boundary
-        fn_p = sympy.Matrix([constraint]).as_immutable()
+        # Enforces continuity: (n.d)(u.d - g) on boundary
+        # Vanishes when constraint direction is purely tangential
+        fn_p = sympy.Matrix([n_dot_d * constraint]).as_immutable()
 
         # Create the NaturalBC with all terms populated
         BC = namedtuple('NaturalBC', [
