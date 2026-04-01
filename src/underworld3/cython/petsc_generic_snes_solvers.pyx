@@ -689,8 +689,8 @@ class SolverBaseClass(uw_object):
 
         from collections import namedtuple
         if c_type == 'neumann':
-            BC = namedtuple('NaturalBC', ['f_id', 'components', 'fn_f', 'fn_F', 'boundary', 'boundary_label_val', 'type', 'PETScID', 'fns'])
-            self.natural_bcs.append(BC(f_id, components, sympy_fn, None, label, -1, "natural", -1, {}))
+            BC = namedtuple('NaturalBC', ['f_id', 'components', 'fn_f', 'fn_F', 'fn_p', 'boundary', 'boundary_label_val', 'type', 'PETScID', 'fns'])
+            self.natural_bcs.append(BC(f_id, components, sympy_fn, None, None, label, -1, "natural", -1, {}))
         elif c_type == 'dirichlet':
             BC = namedtuple('EssentialBC', ['f_id', 'components', 'fn', 'boundary', 'boundary_label_val', 'type', 'PETScID'])
             self.essential_bcs.append(BC(f_id, components,sympy_fn, label, -1,  'essential', -1))
@@ -3022,6 +3022,123 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
     #     BC = namedtuple('EssentialBC', ['components', 'fn', 'boundary', 'boundary_label_val', 'type', 'PETScID'])
     #     self.essential_p_bcs.append(BC(components, sympy_fn, boundary, -1,  'essential', -1))
 
+    def add_nitsche_bc(self, boundary, g=None, gamma=10.0, theta=-1):
+        r"""Add Nitsche weak enforcement of a normal velocity constraint.
+
+        Nitsche's method provides a variationally consistent alternative to
+        penalty-based free-slip that is less sensitive to the penalty magnitude
+        and gives optimal convergence rates.
+
+        The method constructs boundary residuals and Jacobians for:
+        - Penalty/stabilisation: :math:`(\gamma \mu / h)(u \cdot n - g) n`
+        - Consistency: :math:`-(\sigma \cdot n \cdot n) n` (stress flux)
+        - Symmetry: :math:`-\theta \mu` adjoint consistency term
+        - Pressure: :math:`p \, n` on velocity and :math:`u \cdot n - g` on pressure
+
+        Parameters
+        ----------
+        boundary : str
+            Boundary label (e.g., ``"Upper"``, ``"Lower"``).
+        g : sympy expression or float, optional
+            Prescribed normal velocity. Default ``None`` means free-slip
+            (:math:`u \cdot n = 0`).
+        gamma : float, default=10.0
+            Dimensionless stabilisation parameter. Typical values 5--20
+            for P2 elements.
+        theta : {-1, 0, 1}, default=-1
+            Symmetry parameter:
+            -1: skew-symmetric (unconditionally stable for any gamma > 0)
+             0: incomplete (no symmetry term)
+             1: symmetric (optimal convergence, requires gamma large enough)
+
+        References
+        ----------
+        Sime & Wilson (2020), arXiv:2001.10639 — Nitsche free-slip for geodynamics.
+        PETSc ``snes/tutorials/ex62.c`` — Nitsche Stokes implementation.
+        """
+        import sympy
+        from collections import namedtuple
+
+        self.is_setup = False
+
+        mesh = self.mesh
+        dim = mesh.dim
+
+        # Normal vector components (compile to petsc_n[])
+        n = [mesh.Gamma_N.x, mesh.Gamma_N.y]
+        if dim == 3:
+            n.append(mesh.Gamma_N.z)
+
+        # Velocity and pressure symbols
+        u = self.u.sym   # Matrix (dim, 1)
+        p_sym = self.p.sym[0]  # scalar
+
+        # Constraint residual: c = u.n - g
+        u_dot_n = sum(u[i] * n[i] for i in range(dim))
+        if g is None:
+            g = sympy.Integer(0)
+        constraint = u_dot_n - g
+
+        # Mesh size (global estimate via UWexpression constant)
+        h = uw.function.expression(
+            r"h_{\mathrm{Nitsche}}",
+            mesh.get_min_radius(),
+            "Nitsche mesh size parameter",
+        )
+
+        # Viscosity from constitutive model
+        mu = self.constitutive_model.viscosity
+
+        # Constitutive flux (stress tensor) — includes VE history if active
+        flux = self._constitutive_model.flux  # dim x dim Matrix
+
+        # Normal traction: t_n[c] = sum_d flux[c,d] * n[d]
+        # Normal-normal traction: t_nn = sum_c t_n[c] * n[c]
+        t_nn = sum(
+            flux[i, j] * n[i] * n[j]
+            for i in range(dim) for j in range(dim)
+        )
+
+        # f0_bd: velocity boundary residual (value term)
+        # = penalty + consistency + pressure flux
+        f0_components = []
+        for c in range(dim):
+            f0_c = (gamma * mu / h.sym) * constraint * n[c]   # penalty
+            f0_c -= t_nn * n[c]                                 # consistency
+            f0_c += p_sym * n[c]                                # pressure flux
+            f0_components.append(f0_c)
+
+        fn_f = sympy.Matrix(f0_components).as_immutable()
+
+        # f1_bd: velocity boundary residual (gradient term) — symmetry
+        fn_F = None
+        if theta != 0:
+            f1_components = sympy.zeros(dim, dim)
+            for c in range(dim):
+                for d in range(dim):
+                    f1_components[c, d] = -theta * mu * (
+                        n[d] * constraint * n[c] + n[c] * constraint * n[d]
+                    )
+            fn_F = sympy.Matrix(f1_components).as_immutable()
+
+        # fn_p: pressure boundary residual
+        # Enforces continuity constraint u.n = g on the boundary
+        fn_p = sympy.Matrix([constraint]).as_immutable()
+
+        # Create the NaturalBC with all terms populated
+        BC = namedtuple('NaturalBC', [
+            'f_id', 'components', 'fn_f', 'fn_F', 'fn_p',
+            'boundary', 'boundary_label_val', 'type', 'PETScID', 'fns',
+        ])
+
+        import numpy as np
+        components = np.arange(dim, dtype=np.int32)
+
+        self.natural_bcs.append(BC(
+            0, components, fn_f, fn_F, fn_p,
+            boundary, -1, "nitsche", -1, {},
+        ))
+
     ## Why is this here - this is not "generic" at all ??
 
     def _setup_history_terms(self):
@@ -3793,12 +3910,23 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
                     bc.fns["up_G3"] = sympy.ImmutableMatrix(G3.reshape(dim, dim*dim))
                     fns_bd_jacobian += [bc.fns["up_G2"], bc.fns["up_G3"]]
 
-                # Pressure-velocity boundary Jacobian block (pu)
-                # Required for Nitsche free-slip; populated when bc provides
-                # a pressure boundary residual (fn_p). For now, zeros.
-                bc.fns["pu_G0"] = sympy.ImmutableMatrix(sympy.Matrix.zeros(rows=1, cols=dim))
-                bc.fns["pu_G1"] = sympy.ImmutableMatrix(sympy.Matrix.zeros(rows=dim, cols=dim))
-                fns_bd_jacobian += [bc.fns["pu_G0"], bc.fns["pu_G1"]]
+                # Pressure boundary residual and Jacobians (pu, pp blocks)
+                # Nitsche BCs provide fn_p (pressure boundary residual = u.n - g);
+                # standard natural BCs have fn_p = None → zeros.
+                if hasattr(bc, 'fn_p') and bc.fn_p is not None:
+                    bd_PF0 = sympy.Array(bc.fn_p).reshape(1)
+                    bc.fns["p_f0"] = sympy.ImmutableDenseMatrix(bd_PF0)
+                    fns_bd_residual += [bc.fns["p_f0"]]
+
+                    G0 = sympy.derive_by_array(bd_PF0, self.Unknowns.u.sym)
+                    G1 = sympy.derive_by_array(bd_PF0, self.Unknowns.L)
+                    bc.fns["pu_G0"] = sympy.ImmutableMatrix(G0.reshape(dim))
+                    bc.fns["pu_G1"] = sympy.ImmutableMatrix(G1.reshape(dim*dim))
+                    fns_bd_jacobian += [bc.fns["pu_G0"], bc.fns["pu_G1"]]
+                else:
+                    bc.fns["pu_G0"] = sympy.ImmutableMatrix(sympy.Matrix.zeros(rows=1, cols=dim))
+                    bc.fns["pu_G1"] = sympy.ImmutableMatrix(sympy.Matrix.zeros(rows=dim, cols=dim))
+                    fns_bd_jacobian += [bc.fns["pu_G0"], bc.fns["pu_G1"]]
 
                 bc.fns["pp_G0"] = sympy.ImmutableMatrix([0])
                 fns_bd_jacobian += [bc.fns["pp_G0"]]
@@ -4081,8 +4209,14 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
                                         NULL,
                                         )
 
-                    # Pressure boundary residual (for Nitsche: f0_p = u.n)
-                    UW_PetscDSSetBdResidual(ds.ds, c_label.dmlabel, label_val, boundary_id, 1, 0, NULL, NULL)
+                    # Pressure boundary residual (Nitsche: f0_p = u.n - g)
+                    if "p_f0" in bc.fns:
+                        UW_PetscDSSetBdResidual(ds.ds, c_label.dmlabel, label_val, boundary_id,
+                                        1, 0,
+                                        ext.fns_bd_residual[i_bd_res[bc.fns["p_f0"]]],
+                                        NULL)
+                    else:
+                        UW_PetscDSSetBdResidual(ds.ds, c_label.dmlabel, label_val, boundary_id, 1, 0, NULL, NULL)
 
                     # Velocity-velocity boundary Jacobian: g0, g1 always; g2, g3 if f1_bd present
                     if _has_f1:
