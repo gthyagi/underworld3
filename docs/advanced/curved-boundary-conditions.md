@@ -263,6 +263,41 @@ For complex geometries where the orientation varies spatially, the projection ap
 
 ---
 
+## Internal Boundaries
+
+```{warning}
+Nitsche BCs are designed for **exterior** boundaries only. Do not use
+`add_nitsche_bc` on internal boundary labels (e.g., `"Internal"` from
+`BoxInternalBoundary` or `AnnulusInternalBoundary`).
+```
+
+On an internal surface, PETSc evaluates boundary residuals from **both**
+adjacent cells with opposite normals. The Nitsche consistency and pressure
+terms flip sign between the two sides and partially cancel, injecting
+a spurious residual that degrades the solution. Testing on an annulus
+with an internal boundary showed that Nitsche produced *worse* constraint
+enforcement than no constraint at all.
+
+**For internal boundary constraints, continue using the penalty approach:**
+
+```python
+Gamma = mesh.Gamma
+stokes.add_natural_bc(penalty * Gamma.dot(v.sym) * Gamma, "Internal")
+```
+
+The penalty term is quadratic in the normal (`n × n`), so both sides
+reinforce correctly regardless of normal orientation.
+
+A proper Nitsche formulation for internal surfaces would require an
+interior penalty (IP/SIP) method with explicit jump and average operators
+across the interface — accessing the solution from both adjacent cells.
+PETSc's current pointwise callbacks do not provide cross-cell access,
+so this would require a different assembly strategy. This is an area
+for future development, particularly for embedded impermeable surfaces
+in 3D spherical models where penalty sensitivity becomes problematic.
+
+---
+
 ## Tips for Success
 
 1. **Start with Nitsche**: `stokes.add_nitsche_bc("Upper", gamma=10)` — no penalty tuning needed

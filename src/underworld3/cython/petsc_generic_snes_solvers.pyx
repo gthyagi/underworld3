@@ -2176,6 +2176,11 @@ class SNES_Vector(SolverBaseClass):
         theta : {-1, 0, 1}, default=1
             Symmetry parameter (1=symmetric, -1=skew-symmetric).
 
+        Warnings
+        --------
+        Exterior boundaries only. See ``SNES_Stokes_SaddlePt.add_nitsche_bc``
+        for details on why internal boundaries are not supported.
+
         See Also
         --------
         SNES_Stokes_SaddlePt.add_nitsche_bc : Stokes version with pressure coupling.
@@ -3206,6 +3211,14 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
         >>> # Constrain along a specific direction (e.g. fault normal)
         >>> fault_normal = sympy.Matrix([0.6, 0.8])
         >>> stokes.add_nitsche_bc("Fault", direction=fault_normal, gamma=10)
+
+        Warnings
+        --------
+        This method is for **exterior** boundaries only. On internal
+        boundaries (e.g., ``"Internal"`` from ``AnnulusInternalBoundary``),
+        the consistency terms cancel between the two adjacent cells,
+        producing worse results than no constraint. Use the penalty
+        approach (``add_natural_bc``) for internal boundary constraints.
 
         References
         ----------
