@@ -3564,17 +3564,20 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
         ``petsc_velocity_nullspace_basis`` separately.
         """
         return (self._petsc_use_pressure_nullspace
-                and len(self._petsc_velocity_nullspace_basis) > 0)
+                or len(self._petsc_velocity_nullspace_basis) > 0)
 
     @petsc_use_nullspace.setter
     def petsc_use_nullspace(self, value):
         value = bool(value)
         self._petsc_use_pressure_nullspace = value
-        if value and hasattr(self.mesh, 'nullspace_rotations'):
-            modes = self.mesh.nullspace_rotations
-            if modes:
-                self.petsc_velocity_nullspace_basis = modes
-        elif not value:
+        if value:
+            # Sync velocity nullspace basis to mesh rotations (even if empty)
+            # to avoid stale modes carrying over between meshes/runs
+            if hasattr(self.mesh, 'nullspace_rotations'):
+                self.petsc_velocity_nullspace_basis = self.mesh.nullspace_rotations or ()
+            else:
+                self._petsc_velocity_nullspace_basis = ()
+        else:
             self._petsc_velocity_nullspace_basis = ()
         self._reset_stokes_nullspace()
         self.is_setup = False
