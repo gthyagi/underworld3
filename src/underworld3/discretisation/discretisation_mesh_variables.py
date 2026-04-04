@@ -1039,6 +1039,11 @@ class _BaseMeshVariable(Stateful, uw_object):
         Write variable data to the specified mesh hdf5
         data file. The file will be over-written.
 
+        Note: This is a low-level method intended to be called by wrapper
+        functions such as ``mesh.write_timestep()`` which handle output paths,
+        XDMF generation, and multi-variable coordination. Prefer using
+        ``mesh.write_timestep()`` for normal checkpoint and visualisation output.
+
         Note: This is a COLLECTIVE operation - all MPI ranks must call it.
 
         Parameters

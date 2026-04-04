@@ -20,6 +20,7 @@ import underworld3 as uw
 from underworld3.systems import Stokes
 import numpy as np
 import sympy
+import os
 
 # --- Parameters ---
 
@@ -32,6 +33,10 @@ k = 1
 vel_penalty = 1.0e4
 stokes_tol = 1.0e-4
 eta_air = 1.0e-3     # Low viscosity for air layer
+
+output_dir = "./output/region_ds_air_layer/"
+if uw.mpi.rank == 0:
+    os.makedirs(output_dir, exist_ok=True)
 
 # --- Mesh ---
 
@@ -94,10 +99,13 @@ rho = ((r / r_internal) ** k) * sympy.cos(n * th)
 gravity_fn = -1.0 * unit_rvec
 stokes.bodyforce = bf_mask_var.sym[0, 0] * rho * gravity_fn
 
-# Free-slip on outer, inner, and internal boundaries
+# Free-slip on outer and inner boundaries (Gamma-based)
 stokes.add_natural_bc(vel_penalty * Gamma.dot(v.sym) * Gamma, "Upper")
 stokes.add_natural_bc(vel_penalty * Gamma.dot(v.sym) * Gamma, "Lower")
-stokes.add_natural_bc(vel_penalty * Gamma.dot(v.sym) * Gamma, "Internal")
+
+# Penalty on radial velocity at internal boundary (analytical radial direction
+# avoids Gamma support-ordering ambiguity on internal faces)
+stokes.add_natural_bc(vel_penalty * v.sym.dot(unit_rvec) * unit_rvec, "Internal")
 
 # --- Solver options ---
 
@@ -179,3 +187,7 @@ uw.pprint(0, f"    Velocity L2:  {v_l2_full:.10e}")
 uw.pprint(0, f"    Pressure L2:  {p_l2_full:.10e}")
 uw.pprint(0, f"    Max |v| air:  {v_max_air:.10e}")
 uw.pprint(0, "=" * 60)
+
+# --- Save checkpoint ---
+mesh.write_timestep("air_layer", meshVars=[v, p, eta_var], outputPath=output_dir, index=0)
+uw.pprint(0, f"Checkpoint saved to {output_dir}")

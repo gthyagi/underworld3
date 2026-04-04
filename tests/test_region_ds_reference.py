@@ -21,6 +21,7 @@ import underworld3 as uw
 from underworld3.systems import Stokes
 import numpy as np
 import sympy
+import os
 
 # --- Parameters ---
 
@@ -31,6 +32,10 @@ n = 2            # Wave number
 k = 1            # Power exponent for density
 vel_penalty = 1.0e6
 stokes_tol = 1.0e-6
+
+output_dir = "./output/region_ds_reference/"
+if uw.mpi.rank == 0:
+    os.makedirs(output_dir, exist_ok=True)
 
 # --- Mesh ---
 
@@ -124,3 +129,7 @@ uw.pprint(0, f"  Velocity L2 norm:  {v_l2:.10e}")
 uw.pprint(0, f"  Pressure L2 norm:  {p_l2:.10e}")
 uw.pprint(0, f"  Max |v|:           {v_max:.10e}")
 uw.pprint(0, "=" * 60)
+
+# --- Save checkpoint ---
+mesh.write_timestep("reference", meshVars=[v, p], outputPath=output_dir, index=0)
+uw.pprint(0, f"Checkpoint saved to {output_dir}")
