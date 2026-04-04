@@ -287,6 +287,7 @@ class Mesh(Stateful, uw_object):
         self._mesh_update_lock = threading.RLock()
 
         comm = PETSc.COMM_WORLD
+        regions = None  # May be set from h5 metadata or mesh generator
 
         if isinstance(plex_or_meshfile, PETSc.DMPlex):
             isDistributed = plex_or_meshfile.isDistributed()
@@ -411,6 +412,7 @@ class Mesh(Stateful, uw_object):
         self.filename = filename
         self.boundaries = boundaries
         self.boundary_normals = boundary_normals
+        self.regions = regions
 
         # Wrapped imported DMPlex meshes may only expose generic Gmsh labels
         # such as "Face Sets". Rebuild named boundary labels from those sets so
@@ -2115,6 +2117,10 @@ class Mesh(Stateful, uw_object):
 
                 boundaries_dict = {i.name: i.value for i in self.boundaries}
                 g.attrs["boundaries"] = json.dumps(boundaries_dict)
+
+                if self.regions is not None:
+                    regions_dict = {i.name: i.value for i in self.regions}
+                    g.attrs["regions"] = json.dumps(regions_dict)
 
                 coordinates_type_dict = {
                     "name": self.CoordinateSystemType.name,
