@@ -1284,12 +1284,18 @@ class Mesh(Stateful, uw_object):
 
         sub_rows, parent_rows = self._build_dof_map(parent_var, sub_var)
 
+        # Copy, modify, then write through pack_raw_data_to_petsc
+        # to properly sync the PETSc Vec without callback issues
+        new_data = numpy.array(sub_var.data)
+
         if mode == "replace":
-            sub_var.data[sub_rows] = parent_var.data[parent_rows]
+            new_data[sub_rows] = parent_var.data[parent_rows]
         elif mode == "add":
-            sub_var.data[sub_rows] += parent_var.data[parent_rows]
+            new_data[sub_rows] += parent_var.data[parent_rows]
         else:
             raise ValueError(f"mode must be 'replace' or 'add', got '{mode}'")
+
+        sub_var.pack_raw_data_to_petsc(new_data, sync=True)
 
     def prolongate(self, sub_var, parent_var, mode="replace"):
         """Copy data from a submesh variable to a parent-mesh variable.
@@ -1318,12 +1324,18 @@ class Mesh(Stateful, uw_object):
 
         sub_rows, parent_rows = self._build_dof_map(parent_var, sub_var)
 
+        new_data = numpy.array(parent_var.data)
+
         if mode == "replace":
-            parent_var.data[parent_rows] = sub_var.data[sub_rows]
+            new_data[parent_rows] = sub_var.data[sub_rows]
         elif mode == "add":
-            parent_var.data[parent_rows] += sub_var.data[sub_rows]
+            new_data[parent_rows] += sub_var.data[sub_rows]
         else:
             raise ValueError(f"mode must be 'replace' or 'add', got '{mode}'")
+
+        parent_var.pack_raw_data_to_petsc(new_data, sync=True)
+
+        parent_var._data_is_dirty = True
 
     def nuke_coords_and_rebuild(
         self,
