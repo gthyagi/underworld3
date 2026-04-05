@@ -190,6 +190,31 @@ rock_mesh.prolongate(sub_var, parent_var)  # scatter submesh DOFs back to parent
 
 We considered having MeshVariables live on the parent mesh with solvers auto-restricting/prolongating. This hides data flow, makes the solver more complex, and the user loses track of where data lives. The explicit approach is clearer: each mesh owns its variables, copies are visible.
 
+### Mesh deformation and adaptation
+
+Changes to the parent mesh must propagate to submeshes. Two cases:
+
+**Coordinate deformation** (ALE, surface evolution): Parent node positions change but topology is unchanged. The subpoint IS remains valid — restrict the parent's coordinate Vec to update submesh node positions. The submesh DM's internal geometry (Jacobians, normals, quadrature) must then be rebuilt.
+
+```python
+# After deforming parent mesh coordinates
+rock_mesh.sync_coordinates()  # restrict parent coords via subpoint IS, rebuild geometry
+```
+
+This should be automatic: if the submesh detects that its parent's coordinates have changed (version counter on the parent mesh, which we already have via `_mesh_version`), it updates on next access.
+
+**Topology change** (adaptation, remeshing): The parent mesh gains/loses cells and vertices. The subpoint IS is invalidated — the submesh must be re-extracted from scratch. All submesh MeshVariables need re-projection onto the new submesh (interpolation from old to new via the usual adaptation path).
+
+```python
+# After parent mesh adapts
+rock_mesh = full_mesh.extract_region("Inner")  # fresh extraction
+# Old submesh variables are orphaned — user must re-create and re-project
+```
+
+This is the expensive case. The parent mesh already has `refinement_callback` infrastructure for post-adaptation fixups. The submesh re-extraction could hook into this: the parent notifies registered submeshes that topology has changed, and they invalidate themselves.
+
+The parent `Mesh` should track its submeshes (weak references, like the existing `_registered_swarms` pattern) so it can notify them of coordinate or topology changes.
+
 ### Other items
 
 - **Boundary remapping**: Document which parent labels map to submesh boundaries. DMPlexFilter preserves labels; "Internal" on the parent becomes an exterior boundary on the submesh.
