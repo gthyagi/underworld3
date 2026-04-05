@@ -23,16 +23,21 @@ Underworld3 needs to support solving different equations on different subsets of
 
 ## Design Principles
 
-### 1. One field, multiple solvers
+### 1. Separate meshes, separate variables, explicit copies
 
-MeshVariables live on the **parent (full) mesh**. They are the single source of truth. A solver on a submesh reads from and writes to the parent-mesh variable — it only modifies DOFs it owns (the submesh region). The user never creates submesh-local variables.
+Each mesh has its own MeshVariables. The user decides when data moves between meshes. There are no hidden globals or auto-managed shared fields.
 
 ```python
-v = MeshVariable("v", full_mesh, ...)
-p = MeshVariable("p", full_mesh, ...)
+# Each mesh owns its own variables
+v_rock = MeshVariable("v", rock_mesh, ...)
+v_full = MeshVariable("v", full_mesh, ...)
 
-stokes = Stokes(rock_mesh, velocityField=v, pressureField=p)
-stokes.solve()  # updates v, p at rock DOFs only
+# Solver works on submesh variables directly
+stokes = Stokes(rock_mesh, velocityField=v_rock, ...)
+stokes.solve()
+
+# Explicit copy to full mesh when needed (e.g., for visualisation or coupling)
+rock_mesh.prolongate(v_rock, v_full)
 ```
 
 ### 2. Meshes know their lineage
@@ -181,9 +186,9 @@ rock_mesh.prolongate(sub_var, parent_var)  # scatter submesh DOFs back to parent
 - Translation from point IS to DOF IS uses the PETSc section (offset lookup per point)
 - Exact — same nodes, no interpolation
 
-### Future: Solver auto-detection
+### Why not auto-managed globals?
 
-If desired, the solver could accept parent-mesh variables and handle restrict/prolongate internally. But this adds complexity and hides data flow. The explicit two-mesh pattern above is clearer for users.
+We considered having MeshVariables live on the parent mesh with solvers auto-restricting/prolongating. This hides data flow, makes the solver more complex, and the user loses track of where data lives. The explicit approach is clearer: each mesh owns its variables, copies are visible.
 
 ### Other items
 
