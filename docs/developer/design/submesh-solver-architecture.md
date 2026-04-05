@@ -154,7 +154,7 @@ stokes.add_natural_bc(penalty * Gamma_N.dot(v_rock.sym) * Gamma_N, "Internal")
 stokes.solve()
 
 # Transfer rock solution to full mesh via evaluate (existing infrastructure)
-v_full.data[:] = uw.function.evaluate(v_rock.sym, v_full.coords)
+v_full.array[:] = uw.function.evaluate(v_rock.sym, v_full.coords)
 
 # Gravity on full mesh using transferred data
 gravity = Poisson(full_mesh, ...)
