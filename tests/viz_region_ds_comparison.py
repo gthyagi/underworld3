@@ -6,211 +6,246 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
+#       jupytext_version: 1.18.1
 #   kernelspec:
-#     display_name: Python 3
+#     display_name: Python 3 (ipykernel)
 #     language: python
 #     name: python3
 # ---
 
 # %% [markdown]
 """
-# Region DS Verification: Rock-Only vs Air Layer Comparison
+# Normalised Gamma_N: Rock-Only vs Air-Layer Comparison
 
-Two Stokes solutions compared:
-1. **Reference**: Rock-only annulus (r=0.5 to r=1.0), free-slip both boundaries
-2. **Air layer**: Full annulus (r=0.5 to r=1.5) with low-viscosity air (eta=1e-3),
-   radial velocity penalty on internal boundary
+Loads checkpointed solutions from `test_normalised_comparison.py`.
+Both use normalised `Gamma_N` penalty with penalty=1e4, tol=1e-4.
 
-The air layer solve demonstrates the bilateral penalty problem.
+Run the solve script first:
+```
+pixi run -e default python tests/test_normalised_comparison.py
+```
 """
 
 # %%
 import underworld3 as uw
-from underworld3.systems import Stokes
 import underworld3.visualisation as vis
+from underworld3.cython.petsc_discretisation import petsc_dm_filter_by_label
+from underworld3.discretisation import Mesh
+from underworld3.coordinates import CoordinateSystemType
 import numpy as np
 import sympy
+from enum import Enum
+from scipy.spatial import cKDTree
 
 if uw.mpi.size == 1:
     import pyvista as pv
-    import matplotlib.pyplot as plt
-
-# %% [markdown]
-"""
-## Parameters
-"""
 
 # %%
 r_inner = 0.5
 r_internal = 1.0
 r_outer_full = 1.5
 cellsize = 1/16
-n = 2
-k = 1
-eta_air = 1.0e-3
 
 # %% [markdown]
 """
-## 1. Rock-only reference solve
+## Load rock-only submesh solution
 """
 
 # %%
-mesh_ref = uw.meshing.Annulus(
-    radiusOuter=r_internal, radiusInner=r_inner, cellSize=cellsize,
-)
-
-v_ref = uw.discretisation.MeshVariable("V_ref", mesh_ref, mesh_ref.dim, degree=2)
-p_ref = uw.discretisation.MeshVariable("P_ref", mesh_ref, 1, degree=1, continuous=True)
-
-unit_rvec_ref = mesh_ref.CoordinateSystem.unit_e_0
-r_ref, th_ref = mesh_ref.CoordinateSystem.xR
-Gamma_ref = mesh_ref.Gamma
-v_theta_ref = r_ref * mesh_ref.CoordinateSystem.rRotN.T * sympy.Matrix((0, 1))
-
-stokes_ref = Stokes(mesh_ref, velocityField=v_ref, pressureField=p_ref)
-stokes_ref.constitutive_model = uw.constitutive_models.ViscousFlowModel
-stokes_ref.constitutive_model.Parameters.shear_viscosity_0 = 1.0
-stokes_ref.saddle_preconditioner = 1.0
-
-rho_ref = ((r_ref / r_internal) ** k) * sympy.cos(n * th_ref)
-stokes_ref.bodyforce = rho_ref * (-1.0 * unit_rvec_ref)
-
-stokes_ref.add_natural_bc(1e6 * Gamma_ref.dot(v_ref.sym) * Gamma_ref, "Upper")
-stokes_ref.add_natural_bc(1e6 * Gamma_ref.dot(v_ref.sym) * Gamma_ref, "Lower")
-
-stokes_ref.tolerance = 1e-6
-stokes_ref.petsc_options["snes_type"] = "newtonls"
-stokes_ref.petsc_options["ksp_type"] = "fgmres"
-stokes_ref.petsc_options.setValue("fieldsplit_velocity_pc_mg_type", "kaskade")
-stokes_ref.petsc_options["fieldsplit_velocity_mg_coarse_pc_type"] = "svd"
-
-stokes_ref.solve(verbose=False)
-
-# Null space removal
-I0 = uw.maths.Integral(mesh_ref, v_theta_ref.dot(v_ref.sym))
-norm = I0.evaluate()
-I0.fn = v_theta_ref.dot(v_theta_ref)
-vnorm = I0.evaluate()
-dv = uw.function.evaluate(norm * v_theta_ref, v_ref.coords).reshape(-1, 2) / vnorm
-v_ref.data[...] -= dv
-
-v_l2_ref = np.sqrt(uw.maths.Integral(mesh_ref, v_ref.sym.dot(v_ref.sym)).evaluate())
-print(f"Reference velocity L2: {v_l2_ref:.6e}")
-
-# %% [markdown]
-"""
-## 2. Air layer solve
-"""
-
-# %%
-mesh_air = uw.meshing.AnnulusInternalBoundary(
+full_mesh = uw.meshing.AnnulusInternalBoundary(
     radiusOuter=r_outer_full, radiusInternal=r_internal,
     radiusInner=r_inner, cellSize=cellsize,
 )
 
-v_air = uw.discretisation.MeshVariable("V_air", mesh_air, mesh_air.dim, degree=2)
-p_air = uw.discretisation.MeshVariable("P_air", mesh_air, 1, degree=1, continuous=True)
-eta_var = uw.discretisation.MeshVariable("eta", mesh_air, 1, degree=1, continuous=False)
-bf_mask = uw.discretisation.MeshVariable("mask", mesh_air, 1, degree=1, continuous=False)
+subdm = petsc_dm_filter_by_label(full_mesh.dm, "Inner", 101)
+subdm.markBoundaryFaces("All_Boundaries", 1001)
 
-r_at_eta = np.sqrt(eta_var.coords[:, 0]**2 + eta_var.coords[:, 1]**2)
-is_rock = r_at_eta < r_internal
-eta_var.data[is_rock, 0] = 1.0
-eta_var.data[~is_rock, 0] = eta_air
-bf_mask.data[is_rock, 0] = 1.0
-bf_mask.data[~is_rock, 0] = 0.0
+class sub_bd(Enum):
+    Lower = 1; Internal = 2
 
-unit_rvec_air = mesh_air.CoordinateSystem.unit_e_0
-r_air, th_air = mesh_air.CoordinateSystem.xR
-Gamma_air = mesh_air.Gamma
-v_theta_air = r_air * mesh_air.CoordinateSystem.rRotN.T * sympy.Matrix((0, 1))
+rock_mesh = Mesh(subdm, degree=1, qdegree=2, boundaries=sub_bd,
+                 coordinate_system_type=CoordinateSystemType.CYLINDRICAL2D)
 
-stokes_air = Stokes(mesh_air, velocityField=v_air, pressureField=p_air)
-stokes_air.constitutive_model = uw.constitutive_models.ViscousFlowModel
-stokes_air.constitutive_model.Parameters.shear_viscosity_0 = eta_var.sym[0, 0]
-stokes_air.saddle_preconditioner = 1.0 / eta_var.sym[0, 0]
-
-rho_air = ((r_air / r_internal) ** k) * sympy.cos(n * th_air)
-stokes_air.bodyforce = bf_mask.sym[0, 0] * rho_air * (-1.0 * unit_rvec_air)
-
-stokes_air.add_natural_bc(1e4 * Gamma_air.dot(v_air.sym) * Gamma_air, "Upper")
-stokes_air.add_natural_bc(1e4 * Gamma_air.dot(v_air.sym) * Gamma_air, "Lower")
-stokes_air.add_natural_bc(1e4 * v_air.sym.dot(unit_rvec_air) * unit_rvec_air, "Internal")
-
-stokes_air.tolerance = 1e-4
-stokes_air.petsc_options["snes_type"] = "newtonls"
-stokes_air.petsc_options["ksp_type"] = "fgmres"
-stokes_air.petsc_options.setValue("fieldsplit_velocity_pc_mg_type", "kaskade")
-stokes_air.petsc_options["fieldsplit_velocity_mg_coarse_pc_type"] = "svd"
-
-stokes_air.solve(verbose=False)
-
-# Null space removal
-I0 = uw.maths.Integral(mesh_air, v_theta_air.dot(v_air.sym))
-norm = I0.evaluate()
-I0.fn = v_theta_air.dot(v_theta_air)
-vnorm = I0.evaluate()
-dv = uw.function.evaluate(norm * v_theta_air, v_air.coords).reshape(-1, 2) / vnorm
-v_air.data[...] -= dv
-
-v_l2_air_inner = np.sqrt(uw.maths.Integral(
-    mesh_air,
-    sympy.Piecewise((1.0, r_air < r_internal), (0.0, True)) * v_air.sym.dot(v_air.sym)
-).evaluate())
-print(f"Air layer inner velocity L2: {v_l2_air_inner:.6e}")
-print(f"Relative error vs reference: {abs(v_l2_air_inner - v_l2_ref) / v_l2_ref:.4e}")
+v_rock = uw.discretisation.MeshVariable("V_rock", rock_mesh, rock_mesh.dim, degree=2)
+p_rock = uw.discretisation.MeshVariable("P_rock", rock_mesh, 1, degree=1, continuous=True)
+v_rock.read_timestep("rock", "V", 0, outputPath="../output/normalised_rock/")
+p_rock.read_timestep("rock", "P", 0, outputPath="../output/normalised_rock/")
+print(f"Rock submesh: {v_rock.data.shape[0]} v-nodes loaded")
 
 # %% [markdown]
 """
-## 3. Visualise reference solution
+## Load air-layer penalty solution
 """
 
 # %%
-if uw.mpi.size == 1:
-    vis.plot_vector(mesh_ref, v_ref, vector_name="V_ref",
-                    clip_angle=0., cpos="xy", show_arrows=False)
-
-# %%
-if uw.mpi.size == 1:
-    vis.plot_scalar(mesh_ref, p_ref.sym, "P_ref",
-                    clip_angle=0., cpos="xy")
+# DG pressure solve (current checkpoint in normalised_nitsche/)
+v_dg = uw.discretisation.MeshVariable("V_dg", full_mesh, full_mesh.dim, degree=2)
+v_dg.read_timestep("nitsche", "V", 0, outputPath="../output/normalised_nitsche/")
+print(f"Air-layer (DG P): {v_dg.data.shape[0]} v-nodes loaded")
 
 # %% [markdown]
 """
-## 4. Visualise air layer solution
+## Load air-layer continuous-P solution
 """
 
 # %%
-if uw.mpi.size == 1:
-    vis.plot_vector(mesh_air, v_air, vector_name="V_air",
-                    clip_angle=0., cpos="xy", show_arrows=False)
-
-# %%
-if uw.mpi.size == 1:
-    vis.plot_scalar(mesh_air, p_air.sym, "P_air",
-                    clip_angle=0., cpos="xy")
-
-# %%
-if uw.mpi.size == 1:
-    vis.plot_scalar(mesh_air, eta_var.sym, "viscosity",
-                    clip_angle=0., cpos="xy")
+# Continuous pressure solve (separate checkpoint)
+v_air = uw.discretisation.MeshVariable("V_air", full_mesh, full_mesh.dim, degree=2)
+p_air = uw.discretisation.MeshVariable("P_air", full_mesh, 1, degree=1, continuous=True)
+v_air.read_timestep("cont_p", "V", 0, outputPath="../output/normalised_cont_p/")
+p_air.read_timestep("cont_p", "P", 0, outputPath="../output/normalised_cont_p/")
+print(f"Air-layer (cont P): {v_air.data.shape[0]} v-nodes loaded")
 
 # %% [markdown]
 """
-## 5. Summary
-
-| Quantity | Reference | Air layer | Relative error |
-|----------|-----------|-----------|----------------|
+## Rock-only: velocity
 """
 
 # %%
-p_l2_ref = np.sqrt(uw.maths.Integral(mesh_ref, p_ref.sym.dot(p_ref.sym)).evaluate())
-p_l2_air_inner = np.sqrt(uw.maths.Integral(
-    mesh_air,
-    sympy.Piecewise((1.0, r_air < r_internal), (0.0, True)) * p_air.sym.dot(p_air.sym)
-).evaluate())
+if uw.mpi.size == 1:
+    vmag = np.sqrt(v_rock.data[:, 0]**2 + v_rock.data[:, 1]**2)
+    vis.plot_vector(rock_mesh, v_rock, vector_name="V_rock", vfreq=1, vmag=2e1,
+                    clip_angle=0., cpos="xy", show_arrows=True,
+                    clim=[0., float(vmag.max())], cmap="coolwarm")
 
-print(f"{'Quantity':<20} {'Reference':>12} {'Air layer':>12} {'Rel. error':>12}")
-print("-" * 60)
-print(f"{'Velocity L2':<20} {v_l2_ref:>12.4e} {v_l2_air_inner:>12.4e} {abs(v_l2_air_inner - v_l2_ref)/v_l2_ref:>12.4e}")
-print(f"{'Pressure L2':<20} {p_l2_ref:>12.4e} {p_l2_air_inner:>12.4e} {abs(p_l2_air_inner - p_l2_ref)/p_l2_ref:>12.4e}")
+# %% [markdown]
+"""
+## Air-layer: velocity (full mesh)
+"""
+
+# %%
+if uw.mpi.size == 1:
+    vmag_air = np.sqrt(v_air.data[:, 0]**2 + v_air.data[:, 1]**2)
+    vis.plot_vector(full_mesh, v_air, vector_name="V_air", vfreq=1, vmag=2e1,
+                    clip_angle=0., cpos="xy", show_arrows=True,
+                    clim=[0., float(vmag_air.max())], cmap="coolwarm")
+
+# %% [markdown]
+"""
+## Rock-only: pressure
+"""
+
+# %%
+if uw.mpi.size == 1:
+    pvals = uw.function.evaluate(p_rock.sym[0, 0], p_rock.coords).flatten()
+    plim = float(max(abs(pvals.min()), abs(pvals.max())))
+    vis.plot_scalar(rock_mesh, p_rock.sym, "P_rock",
+                    clip_angle=0., cpos="xy", cmap="RdBu",
+                    clim=[-plim, plim])
+
+# %% [markdown]
+"""
+## Air-layer: pressure
+"""
+
+# %%
+if uw.mpi.size == 1:
+    pvals_air = uw.function.evaluate(p_air.sym[0, 0], p_air.coords).flatten()
+    plim_air = float(max(abs(pvals_air.min()), abs(pvals_air.max())))
+    vis.plot_scalar(full_mesh, p_air.sym, "P_air",
+                    clip_angle=0., cpos="xy", cmap="RdBu",
+                    clim=[-plim_air, plim_air])
+
+# %% [markdown]
+"""
+## Overlay: all three velocity fields (pyvista interactive)
+
+- Blue: rock-only submesh
+- Red: air-layer, continuous pressure
+- Green: air-layer, discontinuous pressure
+
+Same nodes, same arrow scale. Zoom to compare.
+"""
+
+# %%
+if uw.mpi.size == 1:
+    tree = cKDTree(v_rock.coords)
+
+    # Match continuous-P air-layer nodes to rock nodes
+    dists_c, idx_c = tree.query(v_air.coords)
+    matched_c = dists_c < 1e-10
+
+    # Match DG-P air-layer nodes to rock nodes
+    dists_d, idx_d = tree.query(v_dg.coords)
+    matched_d = dists_d < 1e-10
+
+    # Rock submesh
+    rock_pts = pv.PolyData(np.column_stack([v_rock.coords, np.zeros(len(v_rock.coords))]))
+    rock_pts["vectors"] = np.column_stack([v_rock.data, np.zeros(len(v_rock.data))])
+
+    # Continuous-P at matched nodes
+    cont_coords = v_air.coords[matched_c]
+    cont_data = v_air.data[matched_c]
+    cont_pts = pv.PolyData(np.column_stack([cont_coords, np.zeros(len(cont_coords))]))
+    cont_pts["vectors"] = np.column_stack([cont_data, np.zeros(len(cont_data))])
+
+    # DG-P at matched nodes
+    dg_coords = v_dg.coords[matched_d]
+    dg_data = v_dg.data[matched_d]
+    dg_pts = pv.PolyData(np.column_stack([dg_coords, np.zeros(len(dg_coords))]))
+    dg_pts["vectors"] = np.column_stack([dg_data, np.zeros(len(dg_data))])
+
+    vmax = max(np.sqrt(v_rock.data[:, 0]**2 + v_rock.data[:, 1]**2).max(),
+               np.sqrt(cont_data[:, 0]**2 + cont_data[:, 1]**2).max(),
+               np.sqrt(dg_data[:, 0]**2 + dg_data[:, 1]**2).max())
+    factor = 0.1 / vmax if vmax > 0 else 1.0
+
+    rock_arrows = rock_pts.glyph(orient="vectors", scale="vectors", factor=factor)
+    cont_arrows = cont_pts.glyph(orient="vectors", scale="vectors", factor=factor)
+    dg_arrows = dg_pts.glyph(orient="vectors", scale="vectors", factor=factor)
+
+    pl = pv.Plotter()
+    pl.add_mesh(rock_arrows, color="blue", opacity=0.7, label="Rock-only submesh")
+    pl.add_mesh(cont_arrows, color="red", opacity=0.7, label="Air-layer (cont P)")
+    pl.add_mesh(dg_arrows, color="green", opacity=0.7, label="Air-layer (DG P)")
+
+    theta = np.linspace(0, 2*np.pi, 200)
+    circle = pv.lines_from_points(np.column_stack([
+        r_internal * np.cos(theta), r_internal * np.sin(theta), np.zeros(200)
+    ]))
+    pl.add_mesh(circle, color="black", line_width=2)
+
+    pl.add_legend()
+    pl.camera_position = "xy"
+    pl.show()
+
+# %% [markdown]
+"""
+## Norm comparison at matched nodes
+"""
+
+# %%
+tree = cKDTree(v_rock.coords)
+dists, idx = tree.query(v_air.coords)
+matched = dists < 1e-10
+
+v_rock_m = v_rock.data[idx[matched]]
+v_air_m = v_air.data[matched]
+
+tree_p = cKDTree(p_rock.coords)
+dists_p, idx_p = tree_p.query(p_air.coords)
+matched_p = dists_p < 1e-10
+
+p_rock_m = p_rock.data[idx_p[matched_p]]
+p_air_m = p_air.data[matched_p]
+
+def l2(a, b):
+    return np.sqrt(np.sum((a - b)**2)) / np.sqrt(np.sum(b**2))
+
+def linf(a, b):
+    return np.max(np.abs(a - b)) / np.max(np.abs(b))
+
+print(f"Matched: {matched.sum()} v-nodes, {matched_p.sum()} p-nodes")
+print()
+print(f"{'Metric':<22} {'Value':>12}")
+print("-" * 36)
+print(f"{'Velocity L2 rel':<22} {l2(v_air_m, v_rock_m):>12.4e}")
+print(f"{'Velocity Linf rel':<22} {linf(v_air_m, v_rock_m):>12.4e}")
+print(f"{'Pressure L2 rel':<22} {l2(p_air_m, p_rock_m):>12.4e}")
+print(f"{'Pressure Linf rel':<22} {linf(p_air_m, p_rock_m):>12.4e}")
+print()
+vmag_r = np.sqrt(v_rock_m[:, 0]**2 + v_rock_m[:, 1]**2)
+vmag_a = np.sqrt(v_air_m[:, 0]**2 + v_air_m[:, 1]**2)
+print(f"|v| ratio (air/rock): {vmag_a.mean() / vmag_r.mean():.4f}")
+
+# %%
