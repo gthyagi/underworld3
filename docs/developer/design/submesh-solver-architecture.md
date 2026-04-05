@@ -141,42 +141,49 @@ Wraps `DMPlexFilter`, returns a new `Mesh` with:
 - Boundaries inherited from parent labels (they survive DMPlexFilter)
 - Coordinate system inherited from parent
 
-The extracted mesh is fully independent — users create their own MeshVariables on it, set up solvers normally, and use the existing `uw.function.evaluate(expr, coords)` path for mesh-to-mesh data transfer:
+The extracted mesh is fully independent — users create their own MeshVariables on it, set up solvers normally, and transfer data between parent and submesh via restrict/prolongate:
 
 ```python
 # Separate variables on separate meshes
 v_rock = MeshVariable("v", rock_mesh, ...)
+rho_rock = MeshVariable("rho", rock_mesh, ...)
 rho_full = MeshVariable("rho", full_mesh, ...)
+
+# Transfer density from full mesh to rock submesh
+rock_mesh.restrict(rho_full, rho_rock)
 
 # Stokes on rock submesh — standard solver, nothing special
 stokes = Stokes(rock_mesh, velocityField=v_rock, ...)
 stokes.add_natural_bc(penalty * Gamma_N.dot(v_rock.sym) * Gamma_N, "Internal")
 stokes.solve()
 
-# Transfer rock solution to full mesh via evaluate (existing infrastructure)
-v_full.array[:] = uw.function.evaluate(v_rock.sym, v_full.coords)
+# Transfer rock velocity back to full mesh
+rock_mesh.prolongate(v_rock, v_full)
 
 # Gravity on full mesh using transferred data
 gravity = Poisson(full_mesh, ...)
 gravity.solve()
 ```
 
-This works today with the `petsc_dm_filter_by_label()` function we already built. `extract_region` just packages it with the parent reference and boundary setup.
+The restrict/prolongate use the subpoint IS from `DMPlexFilter` — a direct index mapping with exact point correspondence. No kd-tree search, no interpolation, no error. This is the preferred transfer mechanism between parent and submesh.
 
-### Future: Optimised restrict/prolongate
+For transfer between unrelated meshes (no parent relationship), the existing `uw.function.evaluate(expr, coords)` path still works.
 
-When `evaluate` becomes a bottleneck (large meshes, frequent transfers), add IS-based restrict/prolongate that skips the kd-tree:
+### Restrict / Prolongate
 
 ```python
-mesh.restrict(parent_var, sub_var)    # gather via subpoint IS
-mesh.prolongate(sub_var, parent_var)  # scatter via subpoint IS
+rock_mesh.restrict(parent_var, sub_var)    # gather parent DOFs at subpoint IS
+rock_mesh.prolongate(sub_var, parent_var)  # scatter submesh DOFs back to parent
 ```
 
-No-op when `parent is None`. The subpoint IS is already stored from `extract_region`.
+- No-op when `parent is None` (top-level mesh)
+- The subpoint IS maps submesh points → parent points
+- Translation from point IS to DOF IS uses the PETSc section (offset lookup per point)
+- Exact — same nodes, no interpolation
 
 ### Future: Solver auto-detection
 
-If desired, the solver could accept parent-mesh variables and handle restrict/prolongate internally. But this adds complexity and hides data flow. The explicit two-mesh pattern above is clearer for users and works now.
+If desired, the solver could accept parent-mesh variables and handle restrict/prolongate internally. But this adds complexity and hides data flow. The explicit two-mesh pattern above is clearer for users.
 
 ### Other items
 
