@@ -413,6 +413,8 @@ class Mesh(Stateful, uw_object):
         self.boundaries = boundaries
         self.boundary_normals = boundary_normals
         self.regions = regions
+        self.parent = None       # Set by extract_region() for submeshes
+        self.subpoint_is = None  # IS mapping submesh points -> parent points
 
         # Wrapped imported DMPlex meshes may only expose generic Gmsh labels
         # such as "Face Sets". Rebuild named boundary labels from those sets so
@@ -1119,6 +1121,104 @@ class Mesh(Stateful, uw_object):
             new_dm_hierarchy[i + 1].setCoarseDM(new_dm_hierarchy[i])
 
         return new_dm_hierarchy
+
+    def extract_region(self, label_name, label_value=None):
+        """Extract a submesh containing only cells with the given region label.
+
+        Uses ``DMPlexFilter`` to create a new mesh sharing exact node
+        positions with the parent. The submesh carries a ``subpoint_is``
+        mapping back to the parent for restrict/prolongate operations,
+        and a ``parent`` reference.
+
+        Boundary labels from the parent survive the filter. For example,
+        an "Internal" boundary on the parent becomes an exterior boundary
+        on the submesh and can be referenced by the same name.
+
+        Parameters
+        ----------
+        label_name : str
+            DM label name identifying the region (e.g., ``"Inner"``).
+        label_value : int, optional
+            Stratum value within the label. If ``None``, uses
+            ``mesh.regions.<label_name>.value`` when available.
+
+        Returns
+        -------
+        Mesh
+            A new mesh covering only the specified region.
+
+        Examples
+        --------
+        >>> full_mesh = uw.meshing.AnnulusInternalBoundary(...)
+        >>> rock_mesh = full_mesh.extract_region("Inner")
+        >>> rock_mesh.parent is full_mesh
+        True
+        """
+        from underworld3.cython.petsc_discretisation import petsc_dm_filter_by_label
+
+        # Resolve label value
+        if label_value is None:
+            if self.regions is not None:
+                try:
+                    label_value = self.regions[label_name].value
+                except KeyError:
+                    raise ValueError(
+                        f"Region '{label_name}' not found. "
+                        f"Available: {[r.name for r in self.regions]}"
+                    )
+            else:
+                raise ValueError(
+                    "No regions defined on this mesh. Provide label_value explicitly."
+                )
+
+        # Filter the DM
+        subdm = petsc_dm_filter_by_label(self.dm, label_name, label_value)
+        subdm.markBoundaryFaces("All_Boundaries", 1001)
+
+        # Build boundaries enum from labels that survived the filter
+        # (DMPlexFilter preserves parent labels on the submesh)
+        surviving = {}
+        if self.boundaries is not None:
+            for b in self.boundaries:
+                if b.name in ("Null_Boundary", "All_Boundaries"):
+                    continue
+                label = subdm.getLabel(b.name)
+                if label:
+                    sis = label.getStratumIS(b.value)
+                    if sis and sis.getSize() > 0:
+                        surviving[b.name] = b.value
+
+        if self.regions is not None:
+            for r in self.regions:
+                label = subdm.getLabel(r.name)
+                if label:
+                    sis = label.getStratumIS(r.value)
+                    if sis and sis.getSize() > 0:
+                        surviving[r.name] = r.value
+
+        sub_boundaries = Enum("Boundaries", surviving) if surviving else None
+
+        # Get the subpoint IS before wrapping (the Mesh constructor may modify the DM)
+        subpoint_is = subdm.getSubpointIS()
+
+        # Construct the submesh
+        sub_mesh = Mesh(
+            subdm,
+            degree=self.degree,
+            qdegree=self.qdegree,
+            boundaries=sub_boundaries,
+            coordinate_system_type=self.CoordinateSystemType,
+            verbose=False,
+        )
+
+        # Store lineage
+        sub_mesh.parent = self
+        sub_mesh.subpoint_is = subpoint_is
+
+        # Inherit regions from parent (for nested extraction)
+        sub_mesh.regions = self.regions
+
+        return sub_mesh
 
     def nuke_coords_and_rebuild(
         self,
