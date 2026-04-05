@@ -186,6 +186,22 @@ rock_mesh.prolongate(sub_var, parent_var)  # scatter submesh DOFs back to parent
 - Translation from point IS to DOF IS uses the PETSc section (offset lookup per point)
 - Exact — same nodes, no interpolation
 
+### Expression safety: one mesh per expression
+
+An expression passed to a solver must only contain MeshVariable symbols from that solver's mesh. The JIT compiler evaluates all symbols against one DM's auxiliary vector and one coordinate system — mixing meshes in an expression is undefined.
+
+The user must restrict cross-mesh data before building expressions:
+
+```python
+# T lives on full_mesh, but Stokes is on rock_mesh
+rock_mesh.restrict(T_full, T_rock)
+
+# Expression uses only rock_mesh variables — safe
+stokes.bodyforce = rho_rock.sym * alpha * T_rock.sym * gravity
+```
+
+If a user accidentally mixes meshes in an expression, we should detect it (check `var.mesh` for all MeshVariable atoms) and raise a clear error at solver setup, not at assembly time.
+
 ### Why not auto-managed globals?
 
 We considered having MeshVariables live on the parent mesh with solvers auto-restricting/prolongating. This hides data flow, makes the solver more complex, and the user loses track of where data lives. The explicit approach is clearer: each mesh owns its variables, copies are visible.
