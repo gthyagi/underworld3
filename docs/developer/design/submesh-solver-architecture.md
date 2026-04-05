@@ -127,50 +127,30 @@ The **DMPlexFilter + subpoint IS + UW3-level restrict/prolongate** approach rema
 
 ## Implementation Plan
 
-### Phase 1: `Mesh.extract_region()`
+1. **`Mesh.extract_region(label_name)`** — wraps `DMPlexFilter`, returns a new `Mesh` with:
+   - `parent` reference to the full mesh
+   - `subpoint_is` from `getSubpointIS()`
+   - Boundaries inherited from parent labels (labels survive DMPlexFilter)
 
-Add to the `Mesh` class:
-- `extract_region(label_name)` — calls `DMPlexFilter`, wraps result as a `Mesh`, stores `parent` reference and `subpoint_is`
-- `parent` attribute — `None` for top-level meshes, reference to parent for submeshes
-- `subpoint_is` attribute — `None` for top-level, PETSc IS for submeshes
+2. **`mesh.restrict(var)` / `mesh.prolongate(var)`** — gather/scatter via subpoint IS
+   - No-op when `parent is None` (top-level mesh)
+   - The IS maps submesh points → parent points; need to translate to DOF indices via section
 
-The extracted mesh inherits labels from the parent (DMPlexFilter preserves them). Boundaries like "Internal" on the full mesh become exterior boundaries on the submesh — the user refers to them by the same name.
+3. **Solver integration** — detect `var.mesh != solver.mesh`, auto restrict before solve, prolongate after
+   - Solver creates its own DM from the submesh (existing `clone_dm_hierarchy`)
+   - Auxiliary Vec (for MeshVariable evaluation) populated from restricted parent data
 
-### Phase 2: Restrict / Prolongate
+4. **Boundary remapping** — document which parent labels map to which submesh boundaries
+   - DMPlexFilter preserves labels; the user refers to "Internal" on the submesh for what was the internal boundary on the parent
 
-Add to the `Mesh` class:
-- `restrict(parent_var, sub_var)` — gather parent Vec at subpoint IS into submesh Vec. No-op if `parent is None`.
-- `prolongate(sub_var, parent_var)` — scatter submesh Vec back to parent at subpoint IS. No-op if `parent is None`.
+5. **DM lifecycle** — audit clone/destroy patterns, ensure submesh DMs are cleaned up
 
-The subpoint IS maps DMPlex points (not DOFs directly). The restrict/prolongate must translate point IS to DOF IS via the section. This is standard PETSc (section offset lookup per point).
+## Additional Findings
 
-### Phase 3: Solver integration
+### Discontinuous pressure required for viscosity contrasts
 
-Modify the solver base class so that when `solver.mesh` is a submesh and a variable's mesh is the parent:
-- Before solve: auto-restrict input variables
-- After solve: auto-prolongate output variables
-- The solver's internal DM, DS, and field setup use the submesh — clean, no air contamination
+Continuous P1 pressure cannot represent the pressure jump at a viscosity discontinuity (scales with viscosity ratio). With eta_rock/eta_air = 1000, the pressure smears across interface elements and corrupts velocity direction up to 177 degrees. Discontinuous P1 handles each side independently — velocity direction error drops to <5 degrees.
 
-### Phase 4: User-facing API
+### Normalised boundary normal (Gamma_N)
 
-```python
-full_mesh = uw.meshing.AnnulusInternalBoundary(...)
-rock_mesh = full_mesh.extract_region("Inner")
-
-v = MeshVariable("v", full_mesh, ...)
-p = MeshVariable("p", full_mesh, ...)
-
-stokes = Stokes(rock_mesh, velocityField=v, pressureField=p)
-stokes.add_natural_bc(penalty * Gamma_N.dot(v.sym) * Gamma_N, "Internal")  # now exterior
-stokes.solve()  # restrict, solve, prolongate — all automatic
-```
-
-### Open questions for implementation
-
-1. **DM lifecycle**: Submesh DM is created once by `extract_region()`. Solver clones from it. Need to ensure cleanup when submesh is destroyed.
-
-2. **Point IS → DOF IS translation**: The subpoint IS maps mesh points. For P2 velocity, edge midpoint DOFs need section-based offset computation. Is there a PETSc utility for this or do we walk the section manually?
-
-3. **Mesh adaptation**: If the parent mesh adapts, `extract_region()` must be called again. Should the submesh auto-invalidate? Or is this the user's responsibility?
-
-4. **Parallel**: `DMPlexFilter` builds a new SF. If the partition changes, restrict/prolongate need MPI communication via VecScatter. Test this in MPI before relying on it.
+`mesh.Gamma_N` now returns `Gamma / |Gamma|` — a unit normal regardless of element size. The raw `mesh.Gamma` magnitude scales with edge length (2D) / face area (3D). This affects penalty scaling: `penalty * Gamma.dot(v) * Gamma` has effective penalty ~ penalty * h², while `penalty * Gamma_N.dot(v) * Gamma_N` is mesh-independent. Nitsche's `gamma * mu / h` term now has correct 1/h scaling with normalised normals.
