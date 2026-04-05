@@ -127,23 +127,62 @@ The **DMPlexFilter + subpoint IS + UW3-level restrict/prolongate** approach rema
 
 ## Implementation Plan
 
-1. **`Mesh.extract_region(label_name)`** — wraps `DMPlexFilter`, returns a new `Mesh` with:
-   - `parent` reference to the full mesh
-   - `subpoint_is` from `getSubpointIS()`
-   - Boundaries inherited from parent labels (labels survive DMPlexFilter)
+### Immediate: `Mesh.extract_region()`
 
-2. **`mesh.restrict(var)` / `mesh.prolongate(var)`** — gather/scatter via subpoint IS
-   - No-op when `parent is None` (top-level mesh)
-   - The IS maps submesh points → parent points; need to translate to DOF indices via section
+The minimum viable feature. Everything else follows from existing UW3 patterns.
 
-3. **Solver integration** — detect `var.mesh != solver.mesh`, auto restrict before solve, prolongate after
-   - Solver creates its own DM from the submesh (existing `clone_dm_hierarchy`)
-   - Auxiliary Vec (for MeshVariable evaluation) populated from restricted parent data
+```python
+rock_mesh = full_mesh.extract_region("Inner")
+```
 
-4. **Boundary remapping** — document which parent labels map to which submesh boundaries
-   - DMPlexFilter preserves labels; the user refers to "Internal" on the submesh for what was the internal boundary on the parent
+Wraps `DMPlexFilter`, returns a new `Mesh` with:
+- `parent` reference to the full mesh
+- `subpoint_is` from `getSubpointIS()` (stored for future optimisation)
+- Boundaries inherited from parent labels (they survive DMPlexFilter)
+- Coordinate system inherited from parent
 
-5. **DM lifecycle** — audit clone/destroy patterns, ensure submesh DMs are cleaned up
+The extracted mesh is fully independent — users create their own MeshVariables on it, set up solvers normally, and use the existing `uw.function.evaluate(expr, coords)` path for mesh-to-mesh data transfer:
+
+```python
+# Separate variables on separate meshes
+v_rock = MeshVariable("v", rock_mesh, ...)
+rho_full = MeshVariable("rho", full_mesh, ...)
+
+# Stokes on rock submesh — standard solver, nothing special
+stokes = Stokes(rock_mesh, velocityField=v_rock, ...)
+stokes.add_natural_bc(penalty * Gamma_N.dot(v_rock.sym) * Gamma_N, "Internal")
+stokes.solve()
+
+# Transfer rock solution to full mesh via evaluate (existing infrastructure)
+v_full.data[:] = uw.function.evaluate(v_rock.sym, v_full.coords)
+
+# Gravity on full mesh using transferred data
+gravity = Poisson(full_mesh, ...)
+gravity.solve()
+```
+
+This works today with the `petsc_dm_filter_by_label()` function we already built. `extract_region` just packages it with the parent reference and boundary setup.
+
+### Future: Optimised restrict/prolongate
+
+When `evaluate` becomes a bottleneck (large meshes, frequent transfers), add IS-based restrict/prolongate that skips the kd-tree:
+
+```python
+mesh.restrict(parent_var, sub_var)    # gather via subpoint IS
+mesh.prolongate(sub_var, parent_var)  # scatter via subpoint IS
+```
+
+No-op when `parent is None`. The subpoint IS is already stored from `extract_region`.
+
+### Future: Solver auto-detection
+
+If desired, the solver could accept parent-mesh variables and handle restrict/prolongate internally. But this adds complexity and hides data flow. The explicit two-mesh pattern above is clearer for users and works now.
+
+### Other items
+
+- **Boundary remapping**: Document which parent labels map to submesh boundaries. DMPlexFilter preserves labels; "Internal" on the parent becomes an exterior boundary on the submesh.
+- **DM lifecycle**: Audit clone/destroy patterns, ensure submesh DMs are cleaned up.
+- **Parallel**: `DMPlexFilter` builds a new SF. Test in MPI before relying on it.
 
 ## Additional Findings
 
