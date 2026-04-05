@@ -1218,7 +1218,112 @@ class Mesh(Stateful, uw_object):
         # Inherit regions from parent (for nested extraction)
         sub_mesh.regions = self.regions
 
+        # Cache for DOF mappings (built lazily on first restrict/prolongate)
+        sub_mesh._dof_maps = {}
+
         return sub_mesh
+
+    def _build_dof_map(self, parent_var, sub_var):
+        """Build a DOF-level index mapping between parent and submesh variables.
+
+        Uses coordinate matching on DOF coordinates (exact match from
+        DMPlexFilter shared nodes). Cached per variable pair.
+
+        Returns (sub_rows, parent_rows) — numpy arrays of matching DOF indices.
+        """
+        import numpy as np
+        from scipy.spatial import cKDTree
+
+        key = (id(parent_var), id(sub_var))
+        if key in self._dof_maps:
+            return self._dof_maps[key]
+
+        tree = cKDTree(sub_var.coords)
+        dists, indices = tree.query(parent_var.coords)
+        matched = dists < 1.0e-10
+
+        # indices[matched] maps parent row → sub row
+        parent_rows = np.where(matched)[0]
+        sub_rows = indices[matched]
+
+        if len(sub_rows) != sub_var.data.shape[0]:
+            import warnings
+            warnings.warn(
+                f"DOF mapping: matched {len(sub_rows)} of "
+                f"{sub_var.data.shape[0]} submesh DOFs"
+            )
+
+        result = (sub_rows, parent_rows)
+        self._dof_maps[key] = result
+        return result
+
+    def restrict(self, parent_var, sub_var, mode="replace"):
+        """Copy data from a parent-mesh variable to a submesh variable.
+
+        Parameters
+        ----------
+        parent_var : MeshVariable
+            Source variable on the parent mesh.
+        sub_var : MeshVariable
+            Destination variable on this (sub)mesh.
+        mode : str
+            ``"replace"`` overwrites submesh values (INSERT_VALUES).
+            ``"add"`` adds parent values into submesh (ADD_VALUES).
+
+        Raises
+        ------
+        ValueError
+            If this mesh has no parent, or the variable meshes don't match.
+        """
+        if self.parent is None:
+            raise ValueError("restrict requires a submesh (parent is None)")
+        if parent_var.mesh is not self.parent:
+            raise ValueError("parent_var must be on this mesh's parent")
+        if sub_var.mesh is not self:
+            raise ValueError("sub_var must be on this mesh")
+
+        sub_rows, parent_rows = self._build_dof_map(parent_var, sub_var)
+
+        if mode == "replace":
+            sub_var.data[sub_rows] = parent_var.data[parent_rows]
+        elif mode == "add":
+            sub_var.data[sub_rows] += parent_var.data[parent_rows]
+        else:
+            raise ValueError(f"mode must be 'replace' or 'add', got '{mode}'")
+
+    def prolongate(self, sub_var, parent_var, mode="replace"):
+        """Copy data from a submesh variable to a parent-mesh variable.
+
+        Parameters
+        ----------
+        sub_var : MeshVariable
+            Source variable on this (sub)mesh.
+        parent_var : MeshVariable
+            Destination variable on the parent mesh.
+        mode : str
+            ``"replace"`` overwrites parent values at submesh DOFs.
+            ``"add"`` adds submesh values into parent.
+
+        Raises
+        ------
+        ValueError
+            If this mesh has no parent, or the variable meshes don't match.
+        """
+        if self.parent is None:
+            raise ValueError("prolongate requires a submesh (parent is None)")
+        if parent_var.mesh is not self.parent:
+            raise ValueError("parent_var must be on this mesh's parent")
+        if sub_var.mesh is not self:
+            raise ValueError("sub_var must be on this mesh")
+
+        sub_rows, parent_rows = self._build_dof_map(parent_var, sub_var)
+
+        if mode == "replace":
+            parent_var.data[parent_rows] = sub_var.data[sub_rows]
+        elif mode == "add":
+            parent_var.data[parent_rows] += sub_var.data[sub_rows]
+        else:
+            raise ValueError(f"mode must be 'replace' or 'add', got '{mode}'")
 
     def nuke_coords_and_rebuild(
         self,
