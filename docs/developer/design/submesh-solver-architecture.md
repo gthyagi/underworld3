@@ -62,7 +62,23 @@ mesh.prolongate(var)  # submesh DOFs -> parent (no-op if parent is None)
 
 Solvers call these uniformly. On a top-level mesh they're no-ops. On a submesh they gather/scatter via the subpoint IS. The solver code doesn't branch.
 
-### 4. Boundary mapping is automatic
+### 4. One mesh per expression
+
+An expression passed to a solver must only contain MeshVariable symbols from that solver's mesh. The JIT compiler evaluates all symbols against one DM's auxiliary vector and one coordinate system — mixing meshes is undefined.
+
+The user must restrict cross-mesh data before building expressions:
+
+```python
+# T lives on full_mesh, but Stokes is on rock_mesh
+rock_mesh.restrict(T_full, T_rock)
+
+# Expression uses only rock_mesh variables — safe
+stokes.bodyforce = rho_rock.sym * alpha * T_rock.sym * gravity
+```
+
+If meshes are mixed in an expression, detect it (check `var.mesh` for all MeshVariable atoms) and raise an error at solver setup.
+
+### 5. Boundary mapping is automatic
 
 When `extract_region("Inner")` creates a submesh, boundaries are remapped:
 - Full mesh "Lower" (r=r_inner) → submesh "Lower"
@@ -185,22 +201,6 @@ rock_mesh.prolongate(sub_var, parent_var)  # scatter submesh DOFs back to parent
 - The subpoint IS maps submesh points → parent points
 - Translation from point IS to DOF IS uses the PETSc section (offset lookup per point)
 - Exact — same nodes, no interpolation
-
-### Expression safety: one mesh per expression
-
-An expression passed to a solver must only contain MeshVariable symbols from that solver's mesh. The JIT compiler evaluates all symbols against one DM's auxiliary vector and one coordinate system — mixing meshes in an expression is undefined.
-
-The user must restrict cross-mesh data before building expressions:
-
-```python
-# T lives on full_mesh, but Stokes is on rock_mesh
-rock_mesh.restrict(T_full, T_rock)
-
-# Expression uses only rock_mesh variables — safe
-stokes.bodyforce = rho_rock.sym * alpha * T_rock.sym * gravity
-```
-
-If a user accidentally mixes meshes in an expression, we should detect it (check `var.mesh` for all MeshVariable atoms) and raise a clear error at solver setup, not at assembly time.
 
 ### Why not auto-managed globals?
 
