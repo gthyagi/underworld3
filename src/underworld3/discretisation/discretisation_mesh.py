@@ -284,6 +284,7 @@ class Mesh(Stateful, uw_object):
         self._mesh_version = 0
         self._registered_swarms = weakref.WeakSet()
         self._registered_surfaces = weakref.WeakSet()  # Surfaces using this mesh
+        self._registered_submeshes = weakref.WeakSet()  # Submeshes from extract_region
         self._mesh_update_lock = threading.RLock()
 
         comm = PETSc.COMM_WORLD
@@ -1214,6 +1215,7 @@ class Mesh(Stateful, uw_object):
         # Store lineage
         sub_mesh.parent = self
         sub_mesh.subpoint_is = subpoint_is
+        sub_mesh._parent_mesh_version = self._mesh_version
 
         # Inherit regions from parent (for nested extraction)
         sub_mesh.regions = self.regions
@@ -1221,7 +1223,58 @@ class Mesh(Stateful, uw_object):
         # Cache for DOF mappings (built lazily on first restrict/prolongate)
         sub_mesh._dof_maps = {}
 
+        # Build and cache the vertex map now (before any deformation)
+        sub_mesh._build_vertex_map()
+
+        # Register with parent for coordinate sync notifications
+        self._registered_submeshes.add(sub_mesh)
+
         return sub_mesh
+
+    def _build_vertex_map(self):
+        """Build vertex index mapping between submesh and parent.
+
+        Uses coordinate matching at extraction time (before any
+        deformation). Cached permanently since topology doesn't change.
+        """
+        if hasattr(self, '_vertex_map') and self._vertex_map is not None:
+            return self._vertex_map
+
+        from scipy.spatial import cKDTree
+
+        tree = cKDTree(self.X.coords)
+        dists, indices = tree.query(self.parent.X.coords)
+        matched = dists < 1.0e-10
+
+        # parent_rows[i] -> sub_rows[i]: matched vertex pairs
+        parent_rows = numpy.where(matched)[0]
+        sub_rows = indices[matched]
+
+        self._vertex_map = (sub_rows, parent_rows)
+        return self._vertex_map
+
+    def sync_coordinates_from_parent(self):
+        """Update submesh coordinates from the parent mesh.
+
+        Called automatically when the parent mesh deforms. Uses the
+        cached vertex map to copy parent vertex positions to the
+        submesh, then calls ``_deform_mesh`` to rebuild geometry.
+
+        Raises
+        ------
+        ValueError
+            If this mesh has no parent.
+        """
+        if self.parent is None:
+            raise ValueError("sync_coordinates_from_parent requires a submesh")
+
+        sub_rows, parent_rows = self._build_vertex_map()
+
+        new_sub_coords = numpy.array(self.X.coords)
+        new_sub_coords[sub_rows] = self.parent.X.coords[parent_rows]
+
+        self._deform_mesh(new_sub_coords)
+        self._parent_mesh_version = self.parent._mesh_version
 
     def _build_dof_map(self, parent_var, sub_var):
         """Build a DOF-level index mapping between parent and submesh variables.
@@ -1540,6 +1593,10 @@ class Mesh(Stateful, uw_object):
         )
         for cb in old_callbacks:
             self._coords.add_callback(cb)
+
+        # Propagate coordinate changes to registered submeshes
+        for submesh in self._registered_submeshes:
+            submesh.sync_coordinates_from_parent()
 
         return
 
