@@ -56,6 +56,51 @@ class SolverBaseClass(uw_object):
         self.petsc_options_prefix = self.name
         self.petsc_options = PETSc.Options(self.petsc_options_prefix)
 
+    def _check_expression_meshes(self):
+        """Check that all MeshVariable symbols in solver expressions
+        belong to this solver's mesh.
+
+        Raises a clear error if variables from a different mesh are
+        found, rather than letting the JIT fail with a cryptic message.
+        """
+        from underworld3.function.expressions import extract_meshes
+
+        solver_mesh = self.mesh
+
+        # Collect all sympy expressions from the solver
+        exprs = []
+
+        if hasattr(self, 'bodyforce') and self.bodyforce is not None:
+            if hasattr(self.bodyforce, 'atoms'):
+                exprs.append(self.bodyforce)
+
+        for bc in getattr(self, 'natural_bcs', []):
+            for attr in ('fn_f', 'fn_F', 'fn_p'):
+                fn = getattr(bc, attr, None)
+                if fn is not None and hasattr(fn, 'atoms'):
+                    exprs.append(fn)
+
+        if hasattr(self, '_constitutive_model') and self._constitutive_model is not None:
+            cm = self._constitutive_model
+            if hasattr(cm, 'flux') and cm.flux is not None and hasattr(cm.flux, 'atoms'):
+                exprs.append(cm.flux)
+
+        # Extract all meshes from all expressions
+        foreign_meshes = set()
+        for expr in exprs:
+            meshes = extract_meshes(expr)
+            for m in meshes:
+                if m is not solver_mesh:
+                    foreign_meshes.add(m)
+
+        if foreign_meshes:
+            raise ValueError(
+                f"Solver expressions contain MeshVariable symbols from "
+                f"{len(foreign_meshes)} foreign mesh(es). All variables in "
+                f"a solver expression must belong to the solver's mesh. "
+                f"Use var.copy_into() to transfer data before building expressions."
+            )
+
 
         return
 
@@ -484,6 +529,8 @@ class SolverBaseClass(uw_object):
                     debug: bool = False,
                     debug_name: str = None,
                     ):
+
+        self._check_expression_meshes()
 
         if self.is_setup:
             return
