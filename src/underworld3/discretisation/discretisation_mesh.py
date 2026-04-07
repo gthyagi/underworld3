@@ -1312,11 +1312,20 @@ class Mesh(Stateful, uw_object):
         new_subdm = petsc_dm_filter_by_label(self.parent.dm, label_name, label_value)
         new_subdm.markBoundaryFaces("All_Boundaries", 1001)
 
-        # Store old variable data for potential recovery
+        # Back up old variable data and coordinates for interpolation
         old_vars = {}
+        old_var_backups = {}
         for var_name, var in self._vars.items():
             if var is not None:
                 old_vars[var_name] = var
+                try:
+                    if var._lvec is not None and var.data.size > 0:
+                        old_var_backups[var_name] = (
+                            numpy.array(var.coords),  # old DOF coords
+                            numpy.array(var.data),     # old DOF values
+                        )
+                except Exception:
+                    pass
 
         # Update DM in-place
         with self._mesh_update_lock:
@@ -1366,8 +1375,33 @@ class Mesh(Stateful, uw_object):
                 old_var._setup_ds()
                 old_var._set_vec(available=True)
 
-                if verbose:
-                    uw.pprint(0, f"  Submesh variable '{var_name}' reset")
+                # Interpolate from backed-up data via kd-tree IDW
+                if var_name in old_var_backups:
+                    try:
+                        from scipy.spatial import cKDTree
+                        old_coords, old_data = old_var_backups[var_name]
+                        new_coords = old_var.coords
+
+                        tree = cKDTree(old_coords)
+                        nnn = 3 if self.dim == 2 else 4
+                        dists, indices = tree.query(new_coords, k=nnn)
+
+                        # Inverse distance weighting
+                        weights = 1.0 / (dists + 1e-30)
+                        weights /= weights.sum(axis=1, keepdims=True)
+                        new_data = numpy.zeros_like(old_var.data)
+                        for i in range(nnn):
+                            new_data += weights[:, i:i+1] * old_data[indices[:, i]]
+
+                        old_var.pack_raw_data_to_petsc(new_data, sync=True)
+                        if verbose:
+                            uw.pprint(0, f"  Submesh variable '{var_name}' transferred")
+                    except Exception as e2:
+                        if verbose:
+                            uw.pprint(0, f"  Submesh variable '{var_name}' reset (transfer failed: {e2})")
+                else:
+                    if verbose:
+                        uw.pprint(0, f"  Submesh variable '{var_name}' reset")
             except Exception as e:
                 if verbose:
                     uw.pprint(0, f"  Warning: failed to reinitialise '{var_name}': {e}")
@@ -3619,24 +3653,24 @@ class Mesh(Stateful, uw_object):
             boundaries=self.boundaries,
         )
 
-        # Note: Variable transfer is complex and may hang with large meshes.
-        # For now, we skip automatic transfer. Users can reinitialize variables
-        # after adaptation using old_var.rbf_interpolate() if needed.
-        if verbose and old_vars_data:
-            print(f"[{uw.mpi.rank}] Found {len(old_vars_data)} variables. "
-                  "Variables will be reset; reinitialize manually if needed.", flush=True)
+        # Transfer variable data from old mesh to new mesh via evaluate.
+        # The old variables are still on `self` (old DM). Evaluate them at
+        # the new mesh coordinates (from temp_mesh) to get interpolated values.
+        new_coords = temp_mesh.X.coords
+        transferred_data = {}
 
-        # Store old data for potential manual recovery
-        old_var_data_backup = {}
         for var_name, old_var in old_vars_data.items():
             try:
-                # Back up old data before adaptation
-                if old_var._lvec is not None:
-                    old_var_data_backup[var_name] = old_var._lvec.array.copy()
-            except Exception:
-                pass
+                if old_var._lvec is not None and old_var.data.size > 0:
+                    if verbose:
+                        print(f"[{uw.mpi.rank}] Transferring '{var_name}'...", flush=True)
+                    transferred_data[var_name] = uw.function.evaluate(
+                        old_var.sym, new_coords
+                    )
+            except Exception as e:
+                if verbose:
+                    print(f"[{uw.mpi.rank}] Warning: transfer of '{var_name}' failed: {e}", flush=True)
 
-        # Clean up temp mesh (we created it but won't use it for transfer)
         del temp_mesh
 
         # Now update this mesh's internal state
@@ -3693,8 +3727,21 @@ class Mesh(Stateful, uw_object):
                 old_var._setup_ds()
                 old_var._set_vec(available=True)
 
-                if verbose:
-                    print(f"[{uw.mpi.rank}] Variable '{var_name}' reset on adapted mesh", flush=True)
+                # Restore transferred data if available
+                if var_name in transferred_data:
+                    try:
+                        data = transferred_data[var_name]
+                        # evaluate returns (N, a, b) shaped array; pack to (N, ncomp)
+                        data_flat = data.reshape(old_var.data.shape)
+                        old_var.pack_raw_data_to_petsc(data_flat, sync=True)
+                        if verbose:
+                            print(f"[{uw.mpi.rank}] Variable '{var_name}' transferred to adapted mesh", flush=True)
+                    except Exception as e2:
+                        if verbose:
+                            print(f"[{uw.mpi.rank}] Variable '{var_name}' reset (transfer failed: {e2})", flush=True)
+                else:
+                    if verbose:
+                        print(f"[{uw.mpi.rank}] Variable '{var_name}' reset on adapted mesh", flush=True)
             except Exception as e:
                 if verbose:
                     print(f"[{uw.mpi.rank}] Warning: Failed to reinitialize '{var_name}': {e}", flush=True)
