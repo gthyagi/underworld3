@@ -1216,6 +1216,8 @@ class Mesh(Stateful, uw_object):
         sub_mesh.parent = self
         sub_mesh.subpoint_is = subpoint_is
         sub_mesh._parent_mesh_version = self._mesh_version
+        sub_mesh._extract_label_name = label_name
+        sub_mesh._extract_label_value = label_value
 
         # Inherit regions from parent (for nested extraction)
         sub_mesh.regions = self.regions
@@ -1275,6 +1277,116 @@ class Mesh(Stateful, uw_object):
 
         self._deform_mesh(new_sub_coords)
         self._parent_mesh_version = self.parent._mesh_version
+
+    def _re_extract_from_parent(self, verbose=False):
+        """Re-extract this submesh from the adapted parent mesh.
+
+        Called automatically when the parent mesh adapts. Replaces the
+        DM, rebuilds coordinates and vertex map, and reinitialises all
+        MeshVariables on the new submesh (reset to zero).
+
+        The Python object is updated in-place — external references
+        to this submesh remain valid.
+        """
+        import underworld3 as uw
+        from underworld3.cython.petsc_discretisation import petsc_dm_filter_by_label
+
+        if self.parent is None:
+            raise ValueError("_re_extract_from_parent requires a submesh")
+
+        # Find which region label this submesh was extracted from
+        # (stored at extraction time)
+        if not hasattr(self, '_extract_label_name') or not hasattr(self, '_extract_label_value'):
+            raise RuntimeError(
+                "Cannot re-extract: submesh doesn't know its extraction label. "
+                "Was it created with extract_region()?"
+            )
+
+        label_name = self._extract_label_name
+        label_value = self._extract_label_value
+
+        if verbose:
+            uw.pprint(0, f"Re-extracting submesh '{label_name}' from adapted parent...")
+
+        # Extract new DM
+        new_subdm = petsc_dm_filter_by_label(self.parent.dm, label_name, label_value)
+        new_subdm.markBoundaryFaces("All_Boundaries", 1001)
+
+        # Store old variable data for potential recovery
+        old_vars = {}
+        for var_name, var in self._vars.items():
+            if var is not None:
+                old_vars[var_name] = var
+
+        # Update DM in-place
+        with self._mesh_update_lock:
+            self.dm = new_subdm
+            self.subpoint_is = new_subdm.getSubpointIS()
+
+            # Rebuild coordinates
+            self._coords = uw.utilities.NDArray_With_Callback(
+                numpy.ndarray.view(self.dm.getCoordinatesLocal().array.reshape(-1, self.cdim)),
+                owner=self,
+            )
+
+            def mesh_update_callback(array, change_context):
+                coords = array.reshape(-1, array.owner.cdim)
+                self._deform_mesh(coords, verbose=False)
+                with self._mesh_update_lock:
+                    self._mesh_version += 1
+                return
+
+            self._coords.add_callback(mesh_update_callback)
+
+            self._mesh_version += 1
+            self._topology_version += 1
+            self.nuke_coords_and_rebuild(verbose=False)
+
+        # Rebuild vertex map (for restrict/prolongate)
+        self._vertex_map = None
+        self._build_vertex_map()
+
+        # Invalidate DOF maps
+        self._dof_maps = {}
+
+        # Reinitialise variables on the new DM
+        for var_name, old_var in old_vars.items():
+            try:
+                if old_var._lvec is not None:
+                    old_var._lvec.destroy()
+                    old_var._lvec = None
+                if old_var._gvec is not None:
+                    old_var._gvec.destroy()
+                    old_var._gvec = None
+                if hasattr(old_var, '_canonical_data'):
+                    old_var._canonical_data = None
+                if hasattr(old_var, '_cached_data_array'):
+                    old_var._cached_data_array = None
+
+                old_var._setup_ds()
+                old_var._set_vec(available=True)
+
+                if verbose:
+                    uw.pprint(0, f"  Submesh variable '{var_name}' reset")
+            except Exception as e:
+                if verbose:
+                    uw.pprint(0, f"  Warning: failed to reinitialise '{var_name}': {e}")
+
+        # Mark solvers for rebuild
+        for solver in self._equation_systems_register:
+            if solver is not None and hasattr(solver, 'is_setup'):
+                solver.is_setup = False
+
+        # Clear caches
+        self._evaluation_hash = None
+        self._evaluation_interpolated_results = None
+        if hasattr(self, '_dminterpolation_cache'):
+            self._dminterpolation_cache.invalidate_all(reason="submesh_re_extraction")
+
+        self._parent_mesh_version = self.parent._mesh_version
+
+        if verbose:
+            uw.pprint(0, f"  Submesh re-extracted: {self.dm.getChart()}")
 
     def _build_dof_map(self, parent_var, sub_var):
         """Build a DOF-level index mapping between parent and submesh variables.
@@ -3602,6 +3714,14 @@ class Mesh(Stateful, uw_object):
         self._evaluation_interpolated_results = None
         if hasattr(self, '_dminterpolation_cache'):
             self._dminterpolation_cache.invalidate_all(reason="mesh_adaptation")
+
+        # Re-extract registered submeshes from the adapted parent
+        for submesh in list(self._registered_submeshes):
+            try:
+                submesh._re_extract_from_parent(verbose=verbose)
+            except Exception as e:
+                if verbose:
+                    print(f"[{uw.mpi.rank}] Warning: submesh re-extraction failed: {e}", flush=True)
 
         if verbose:
             print(f"[{uw.mpi.rank}] Mesh adaptation complete", flush=True)
