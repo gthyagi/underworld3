@@ -1451,19 +1451,27 @@ class Mesh(Stateful, uw_object):
         return self._N
 
     @property
-    def Gamma_N(self) -> sympy.vector.CoordSys3D:
-        r"""SymPy coordinate system for boundary/surface coordinates.
+    def Gamma_N(self) -> sympy.Matrix:
+        r"""Normalised boundary/surface normal as a row matrix.
+
+        Returns ``Gamma / |Gamma|`` so that the result is a unit normal
+        regardless of element size. Use this for penalty and Nitsche BCs
+        where mesh-independent scaling is required.
 
         Returns
         -------
-        sympy.vector.CoordSys3D
-            The boundary coordinate system object.
+        sympy.Matrix
+            Row matrix of normalised boundary normal components.
         """
-        return self._Gamma
+        G = self.Gamma
+        return G / sympy.sqrt(G.dot(G))
 
     @property
-    def Gamma(self) -> sympy.vector.CoordSys3D:
-        r"""Boundary coordinate scalars as a row matrix.
+    def Gamma(self) -> sympy.Matrix:
+        r"""Raw (un-normalised) boundary coordinate scalars as a row matrix.
+
+        The magnitude scales with face edge length (2D) or face area (3D).
+        For a unit normal, use :attr:`Gamma_N` instead.
 
         Returns
         -------

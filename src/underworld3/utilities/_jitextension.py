@@ -775,8 +775,10 @@ def _createext(
             return f"petsc_x[{idx}]"
 
     type(mesh.N.x)._ccode = _basescalar_ccode
-    if type(mesh.Gamma_N.x) is not type(mesh.N.x):
-        type(mesh.Gamma_N.x)._ccode = _basescalar_ccode
+    # Gamma base scalars (un-normalised face normal) — ensure ccode is registered
+    Gamma_scalars = mesh._Gamma.base_scalars()
+    if type(Gamma_scalars[0]) is not type(mesh.N.x):
+        type(Gamma_scalars[0])._ccode = _basescalar_ccode
 
     # Create a custom functions replacement dictionary.
     # Note that this dictionary is really just to appease Sympy,

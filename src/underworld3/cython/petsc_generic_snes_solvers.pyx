@@ -2193,10 +2193,9 @@ class SNES_Vector(SolverBaseClass):
         mesh = self.mesh
         dim = mesh.dim
 
-        # Surface normal components
-        n = [mesh.Gamma_N.x, mesh.Gamma_N.y]
-        if dim == 3:
-            n.append(mesh.Gamma_N.z)
+        # Surface normal components (normalised)
+        Gamma_N = mesh.Gamma_N
+        n = [Gamma_N[i] for i in range(dim)]
 
         # Constraint direction: defaults to surface normal
         if direction is not None:
@@ -3233,16 +3232,15 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
         mesh = self.mesh
         dim = mesh.dim
 
-        # Surface normal components. By default use PETSc's facet normal.
+        # Surface normal components. By default use normalised PETSc facet normal.
         if normal is not None:
             if isinstance(normal, sympy.MatrixBase):
                 n = [normal[i] for i in range(dim)]
             else:
                 n = list(normal)
         else:
-            n = [mesh.Gamma_N.x, mesh.Gamma_N.y]
-            if dim == 3:
-                n.append(mesh.Gamma_N.z)
+            Gamma_N = mesh.Gamma_N
+            n = [Gamma_N[i] for i in range(dim)]
 
         # Constraint direction: defaults to surface normal
         if direction is not None:
