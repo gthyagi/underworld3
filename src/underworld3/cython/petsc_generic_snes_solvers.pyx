@@ -3552,6 +3552,35 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
         self._saddle_preconditioner = function
 
     @property
+    def petsc_use_nullspace(self):
+        """Enable full nullspace handling: constant pressure + mesh rotation modes.
+
+        Convenience property that enables the pressure nullspace and
+        auto-populates velocity nullspace modes from ``mesh.nullspace_rotations``.
+
+        For finer control, use ``petsc_use_pressure_nullspace`` and
+        ``petsc_velocity_nullspace_basis`` separately.
+        """
+        return (self._petsc_use_pressure_nullspace
+                or len(self._petsc_velocity_nullspace_basis) > 0)
+
+    @petsc_use_nullspace.setter
+    def petsc_use_nullspace(self, value):
+        value = bool(value)
+        self._petsc_use_pressure_nullspace = value
+        if value:
+            # Sync velocity nullspace basis to mesh rotations (even if empty)
+            # to avoid stale modes carrying over between meshes/runs
+            if hasattr(self.mesh, 'nullspace_rotations'):
+                self.petsc_velocity_nullspace_basis = self.mesh.nullspace_rotations or ()
+            else:
+                self._petsc_velocity_nullspace_basis = ()
+        else:
+            self._petsc_velocity_nullspace_basis = ()
+        self._reset_stokes_nullspace()
+        self.is_setup = False
+
+    @property
     def petsc_use_pressure_nullspace(self):
         """
         Enable PETSc handling of the constant-pressure nullspace.
