@@ -3442,6 +3442,26 @@ class Mesh(Stateful, uw_object):
         # Stack boundary labels for adaptation
         adaptivity._dm_stack_bcs(self.dm, self.boundaries, "CombinedBoundaries")
 
+        # Create cell region label if regions exist — this tells MMG to
+        # preserve the interface between regions during adaptation
+        rgLabel_name = None
+        if self.regions is not None:
+            depth_label = self.dm.getLabel("depth")
+            cell_is = depth_label.getStratumIS(self.dim)
+            if cell_is:
+                cells = cell_is.getIndices()
+                self.dm.createLabel("_CellRegions_")
+                rg = self.dm.getLabel("_CellRegions_")
+                for region in self.regions:
+                    lab = self.dm.getLabel(region.name)
+                    if lab:
+                        region_is = lab.getStratumIS(region.value)
+                        if region_is:
+                            region_cells = set(region_is.getIndices()) & set(cells)
+                            for c in region_cells:
+                                rg.setValue(c, region.value)
+                rgLabel_name = "_CellRegions_"
+
         # Create the metric from the field
         hvec = metric_field._lvec
         metric_vec = self.dm.metricCreateIsotropic(hvec, metric_field.field_id)
@@ -3451,10 +3471,25 @@ class Mesh(Stateful, uw_object):
             print(f"[{uw.mpi.rank}] Mesh adaptation starting (nodes: ~{n_nodes_old})...", flush=True)
 
         # Perform the actual mesh adaptation
-        new_dm = self.dm.adaptMetric(metric_vec, bdLabel="CombinedBoundaries")
+        new_dm = self.dm.adaptMetric(
+            metric_vec,
+            bdLabel="CombinedBoundaries",
+            rgLabel=rgLabel_name,
+        )
 
         # Unstack boundary labels on the new dm
         adaptivity._dm_unstack_bcs(new_dm, self.boundaries, "CombinedBoundaries")
+
+        # Reconstruct region labels from cell tags on the adapted mesh
+        if rgLabel_name and self.regions is not None:
+            rg_new = new_dm.getLabel(rgLabel_name)
+            if rg_new:
+                for region in self.regions:
+                    new_dm.createLabel(region.name)
+                    region_label = new_dm.getLabel(region.name)
+                    region_is = rg_new.getStratumIS(region.value)
+                    if region_is:
+                        region_label.setStratumIS(region.value, region_is)
 
         if verbose:
             n_nodes_new = new_dm.getChart()[1] - new_dm.getChart()[0]
