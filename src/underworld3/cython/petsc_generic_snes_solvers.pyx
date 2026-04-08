@@ -4053,7 +4053,7 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
     #     BC = namedtuple('EssentialBC', ['components', 'fn', 'boundary', 'boundary_label_val', 'type', 'PETScID'])
     #     self.essential_p_bcs.append(BC(components, sympy_fn, boundary, -1,  'essential', -1))
 
-    def add_nitsche_bc(self, boundary, g=None, direction=None, normal=None, gamma=10.0, theta=1):
+    def add_nitsche_bc(self, boundary, g=None, direction=None, normal=None, gamma=10.0, theta=1, mask=None):
         r"""Add Nitsche weak enforcement of a velocity constraint along a direction.
 
         Nitsche's method provides a variationally consistent alternative to
@@ -4097,6 +4097,11 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
              1: symmetric (default — optimal convergence and solver efficiency)
              0: incomplete (no symmetry term)
             -1: skew-symmetric (unconditionally stable but slower convergence)
+        mask : sympy expression, optional
+            Element-wise mask for one-sided application on internal
+            boundaries. Use a DG MeshVariable that is 1 on the active
+            side and 0 on the inactive side. The mask multiplies all
+            Nitsche terms so that only the active-side cell contributes.
 
         Examples
         --------
@@ -4210,6 +4215,17 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
         # Enforces continuity: (n.d)(u.d - g) on boundary
         # Vanishes when constraint direction is purely tangential
         fn_p = sympy.Matrix([n_dot_d * constraint]).as_immutable()
+
+        # Apply mask for one-sided internal boundary application
+        if mask is not None:
+            if hasattr(mask, 'sym'):
+                mask_expr = mask.sym[0, 0]
+            else:
+                mask_expr = mask
+            fn_f = (fn_f * mask_expr).as_immutable()
+            if fn_F is not None:
+                fn_F = (fn_F * mask_expr).as_immutable()
+            fn_p = (fn_p * mask_expr).as_immutable()
 
         # Create the NaturalBC with all terms populated
         BC = namedtuple('NaturalBC', [
