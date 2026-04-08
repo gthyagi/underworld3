@@ -3380,6 +3380,13 @@ class Swarm(Stateful, uw_object):
                 self._remeshed.data[...] = 0
 
         self.dm.migrate(remove_sent_points=True)
+
+        # Invalidate cached data — particle count changed after addNPoints + migrate
+        self._particle_coordinates._canonical_data = None
+        for var in self._vars.values():
+            if hasattr(var, "_canonical_data"):
+                var._canonical_data = None
+
         return npoints
 
     @timing.routine_timer_decorator
