@@ -1650,6 +1650,9 @@ class Mesh(Stateful, uw_object):
         if self.dm is not self.dm_hierarchy[-1]:
             self.dm.copyDS(self.dm_hierarchy[-1])
 
+        # Invalidate projected boundary normals (rebuilt lazily on access)
+        self._projected_normals = None
+
         if verbose and uw.mpi.rank == 0:
             print(
                 f"Mesh Spatial Discretisation Complete",
@@ -1657,6 +1660,46 @@ class Mesh(Stateful, uw_object):
             )
 
         return
+
+    def _update_projected_normals(self):
+        """Project PETSc face normals (Gamma) onto a P1 field and normalise.
+
+        Creates ``_projected_normals`` on first call, updates in-place
+        thereafter. The result is a smooth, consistently-oriented unit
+        normal field that works well for penalty and Nitsche BCs on
+        curved boundaries.
+        """
+        import underworld3 as uw
+
+        Gamma = self.Gamma
+
+        if not hasattr(self, '_projected_normals') or self._projected_normals is None:
+            self._projected_normals = uw.discretisation.MeshVariable(
+                "_n_proj", self, self.cdim, degree=1,
+            )
+
+        n = self._projected_normals
+        for i in range(self.cdim):
+            n.data[:, i] = uw.function.evaluate(Gamma[i], n.coords).flatten()
+
+        mag = numpy.sqrt(numpy.sum(n.data ** 2, axis=1))
+        nonzero = mag > 1.0e-30
+        n.data[nonzero] /= mag[nonzero, numpy.newaxis]
+
+    @property
+    def Gamma_P1(self):
+        """Projected P1 boundary normals as a sympy Matrix.
+
+        Returns the normalised, vertex-averaged PETSc face normals
+        as a smooth P1 field. Preferred over :attr:`Gamma_N` for
+        penalty and Nitsche BCs on curved boundaries — gives
+        consistent orientation and better convergence in 3D.
+
+        Automatically updated when the mesh deforms.
+        """
+        if not hasattr(self, '_projected_normals') or self._projected_normals is None:
+            self._update_projected_normals()
+        return self._projected_normals.sym
 
     @timing.routine_timer_decorator
     def update_lvec(self):
