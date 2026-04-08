@@ -2376,9 +2376,10 @@ class SNES_Vector(SolverBaseClass):
         mesh = self.mesh
         dim = mesh.dim
 
-        # Surface normal components (normalised)
-        Gamma_N = mesh.Gamma_N
-        n = [Gamma_N[i] for i in range(dim)]
+        # Surface normal components — use projected P1 normals by default.
+        # These are smooth, consistently oriented, and converge in 3D.
+        Gamma_P1 = mesh.Gamma_P1
+        n = [Gamma_P1[i] for i in range(dim)]
 
         # Constraint direction: defaults to surface normal
         if direction is not None:
@@ -4136,15 +4137,16 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
         mesh = self.mesh
         dim = mesh.dim
 
-        # Surface normal components. By default use normalised PETSc facet normal.
+        # Surface normal components. By default use projected P1 normals
+        # (smooth, consistently oriented, converges in 3D).
         if normal is not None:
             if isinstance(normal, sympy.MatrixBase):
                 n = [normal[i] for i in range(dim)]
             else:
                 n = list(normal)
         else:
-            Gamma_N = mesh.Gamma_N
-            n = [Gamma_N[i] for i in range(dim)]
+            Gamma_P1 = mesh.Gamma_P1
+            n = [Gamma_P1[i] for i in range(dim)]
 
         # Constraint direction: defaults to surface normal
         if direction is not None:
@@ -4167,7 +4169,11 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
 
         # n.d — how much of the constraint direction is normal to the surface
         # Controls pressure coupling (vanishes when d is purely tangential)
+        # Use Abs to ensure sign-consistent pressure coupling regardless
+        # of whether PETSc face normal points inward or outward
         n_dot_d = sum(n[i] * d[i] for i in range(dim))
+        # n_dot_d is always positive when n = d (it's |n|²),
+        # so sign of PETSc face normal doesn't affect this term
 
         # Mesh size (global estimate via UWexpression constant)
         h = uw.function.expression(
