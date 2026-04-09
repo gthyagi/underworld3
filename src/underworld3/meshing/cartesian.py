@@ -906,11 +906,48 @@ def BoxInternalBoundary(
     )
     uw.adaptivity._dm_unstack_bcs(new_mesh.dm, new_mesh.boundaries, "Face Sets")
 
-    # Assign regions
+    # Create region labels by classifying cells based on centroid position
+    # relative to the internal boundary coordinate
     if dim == 2:
         new_mesh.regions = regions_2D
     else:
         new_mesh.regions = regions_3D
+
+    dm = new_mesh.dm
+    depth_label = dm.getLabel("depth")
+    cell_is = depth_label.getStratumIS(dim)
+
+    if cell_is:
+        cells = cell_is.getIndices()
+        coord_sec = dm.getCoordinateSection()
+        coord_vec = dm.getCoordinatesLocal()
+        coord_arr = coord_vec.array
+
+        for region in new_mesh.regions:
+            dm.createLabel(region.name)
+
+        inner_label = dm.getLabel(new_mesh.regions.Inner.name)
+        outer_label = dm.getLabel(new_mesh.regions.Outer.name)
+
+        # z-coordinate index: 1 for 2D (y), 2 for 3D (z)
+        z_idx = dim - 1
+
+        for cell in cells:
+            # Compute centroid from cell vertex coordinates
+            closure = dm.getTransitiveClosure(cell)[0]
+            vert_coords = []
+            for pt in closure:
+                ndof = coord_sec.getDof(pt)
+                if ndof > 0:
+                    off = coord_sec.getOffset(pt)
+                    vert_coords.append(coord_arr[off + z_idx])
+
+            if vert_coords:
+                centroid_z = sum(vert_coords) / len(vert_coords)
+                if centroid_z < zintCoord:
+                    inner_label.setValue(cell, new_mesh.regions.Inner.value)
+                else:
+                    outer_label.setValue(cell, new_mesh.regions.Outer.value)
 
     return new_mesh
 
