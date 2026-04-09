@@ -264,7 +264,7 @@ def QuarterAnnulus(
         Right = new_mesh.CoordinateSystem.unit_e_1
         Centre = None
 
-    new_mesh.boundary_normals = boundary_normals
+    # boundary_normals deprecated — use mesh.Gamma_P1 for boundary normals
 
     return new_mesh
 
@@ -536,7 +536,7 @@ def Annulus(
         Upper = new_mesh.CoordinateSystem.unit_e_0
         Centre = None
 
-    new_mesh.boundary_normals = boundary_normals
+    # boundary_normals deprecated — use mesh.Gamma_P1 for boundary normals
 
     # Full annulus: rigid rotation about z-axis
     x, y = new_mesh.X
@@ -782,7 +782,7 @@ def SegmentofAnnulus(
         Upper = new_mesh.CoordinateSystem.unit_e_0
         Centre = None
 
-    new_mesh.boundary_normals = boundary_normals
+    # boundary_normals deprecated — use mesh.Gamma_P1 for boundary normals
 
     return new_mesh
 
@@ -1112,7 +1112,7 @@ def AnnulusWithSpokes(
         )
         Centre = None
 
-    new_mesh.boundary_normals = boundary_normals
+    # boundary_normals deprecated — use mesh.Gamma_P1 for boundary normals
 
     # Full annulus with spokes: rigid rotation about z-axis
     x, y = new_mesh.X
@@ -1407,7 +1407,7 @@ def AnnulusInternalBoundary(
         Internal = new_mesh.CoordinateSystem.unit_e_0
         Centre = None
 
-    new_mesh.boundary_normals = boundary_normals
+    # boundary_normals deprecated — use mesh.Gamma_P1 for boundary normals
     new_mesh.regions = regions
 
     # Full annulus with internal boundary: rigid rotation about z-axis
@@ -1691,7 +1691,7 @@ def DiscInternalBoundaries(
         Internal = new_mesh.CoordinateSystem.unit_e_0
         Centre = None
 
-    new_mesh.boundary_normals = boundary_normals
+    # boundary_normals deprecated — use mesh.Gamma_P1 for boundary normals
 
     # Full disc with internal boundaries: rigid rotation about z-axis
     x, y = new_mesh.X
