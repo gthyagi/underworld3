@@ -1414,7 +1414,7 @@ class SNES_Scalar(SolverBaseClass):
             return
 
         # Keep a note of the coordinates that we use for this setup
-        self.mesh_dm_coordinate_hash == mesh_dm_coord_hash
+        self.mesh_dm_coordinate_hash = mesh_dm_coord_hash
 
 
         degree = self.u.degree
@@ -2295,7 +2295,7 @@ class SNES_Vector(SolverBaseClass):
             return
 
         # Keep a note of the coordinates that we use for this setup
-        self.mesh_dm_coordinate_hash == mesh_dm_coord_hash
+        self.mesh_dm_coordinate_hash = mesh_dm_coord_hash
 
         cdef PtrContainer ext = self.compiled_extensions
 
@@ -4217,7 +4217,7 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
             print(f"{uw.mpi.rank}: Building dm for {self.name}")
 
         # Keep a note of the coordinates that we use for this setup
-        self.mesh_dm_coordinate_hash == mesh_dm_coord_hash
+        self.mesh_dm_coordinate_hash = mesh_dm_coord_hash
 
         cdef PtrContainer ext = self.compiled_extensions
 

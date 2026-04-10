@@ -160,6 +160,12 @@ PetscErrorCode UW_DMPlexSetSNESLocalFEM(DM dm, PetscBool flag, void *ctx)
 // PETSc's DMPlexComputeBdIntegral returns only the local contribution (no MPI
 // reduction), so this wrapper adds an Allreduce to produce the global integral.
 //
+// IMPORTANT: DMPlexComputeBdIntegral is collective (it calls DMGlobalToLocal
+// internally). All ranks MUST call it, even if their local boundary stratum is
+// empty — PETSc handles empty strata gracefully (skips the per-face loop).
+// Skipping the call on empty ranks causes a deadlock because the other ranks
+// block inside DMGlobalToLocal waiting for the missing participants.
+//
 // Ghost facet filtering is handled by our PETSc patch
 // (plexfem-internal-boundary-ownership-fix.patch) which filters SF leaves
 // inside DMPlexComputeBdIntegral, DMPlexComputeBdResidual_Internal, and
@@ -173,29 +179,16 @@ PetscErrorCode UW_DMPlexComputeBdIntegral(DM dm, Vec X,
 {
     PetscSection  section;
     PetscInt      Nf;
-    PetscInt      localCount = 0;
 
     PetscFunctionBeginUser;
 
     PetscCall(DMGetLocalSection(dm, &section));
     PetscCall(PetscSectionGetNumFields(section, &Nf));
 
-    // If the label is NULL or the requested boundary has no local entities on
-    // this rank, contribute 0 but still participate in the MPI Allreduce to
-    // avoid hangs. Parallel DMPlex boundary assembly can deadlock if some
-    // ranks enter with an empty local stratum.
-    if (label) {
-        for (PetscInt i = 0; i < numVals; ++i) {
-            PetscInt stratumSize = 0;
-            PetscCall(DMLabelGetStratumSize(label, vals[i], &stratumSize));
-            localCount += stratumSize;
-        }
-    }
-
-    if (!label || localCount == 0) {
-        PetscScalar zero = 0.0;
-        PetscCallMPI(MPIU_Allreduce(&zero, result, 1, MPIU_SCALAR, MPIU_SUM,
-                                    PetscObjectComm((PetscObject)dm)));
+    // NULL label means no boundary was found at all — no rank has work.
+    // Safe to return early since no rank enters the collective PETSc call.
+    if (!label) {
+        *result = 0.0;
         PetscFunctionReturn(PETSC_SUCCESS);
     }
 
@@ -207,6 +200,8 @@ PetscErrorCode UW_DMPlexComputeBdIntegral(DM dm, Vec X,
     PetscScalar *integral;
     PetscCall(PetscCalloc1(Nf, &integral));
 
+    // All ranks must call DMPlexComputeBdIntegral — it is collective.
+    // Ranks with empty local strata will simply contribute 0.
     // PETSc changed DMPlexComputeBdIntegral signature in v3.22.0:
     //   <= 3.21.x: void (*func)(...)     — single function pointer
     //   >= 3.22.0: void (**funcs)(...)    — array of Nf function pointers
