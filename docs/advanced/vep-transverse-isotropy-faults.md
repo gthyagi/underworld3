@@ -206,14 +206,14 @@ cm.Parameters.yield_stress = 0.15         # fault-plane yield stress
 
 # Director from fault normal (e.g., fault at 15 degrees from horizontal)
 theta = np.radians(15)
-cm.Parameters.director = sympy.Matrix([np.sin(theta), np.cos(theta)])
+cm.Parameters.director = sympy.Matrix([-np.sin(theta), np.cos(theta)])
 ```
 
 The director can also be a spatially varying field (e.g., from a `Surface` object's normals transferred to a mesh variable), and the yield stress can vary spatially using an influence function to localise yielding near the fault.
 
 ## Smooth Yield Approximations
 
-The `"softmin"` yield mode (default) uses a smooth approximation to $\min(\eta_{\text{ve}}, \eta_{\text{pl}})$ to avoid the non-differentiable kink that causes problems for the SNES solver. The approximation is:
+The `"softmin"` yield mode uses a smooth approximation to $\min(\eta_{\text{ve}}, \eta_{\text{pl}})$ to avoid the non-differentiable kink that causes problems for the SNES solver. The approximation is:
 
 $$g(f) = 1 + \text{softplus}(f-1) - \text{softplus}(-1), \qquad \eta_{\text{eff}} = \eta_{\text{ve}} / g(f)$$
 
@@ -235,7 +235,7 @@ The softmin is accurate when $\delta \ll f_{ss}$, i.e., when the viscous stress 
 | 0.1 | ~99% of $\tau_y$ | ~100% | low |
 | 0.01 | ~100% | ~100% | moderate |
 
-The default $\delta = 0.1$ is accurate for all cases where the viscous stress exceeds the yield stress by at least 50% ($f_{ss} > 1.5$). For problems where SNES convergence is difficult at yield onset, increase $\delta$ toward 0.3--0.5 as a relaxation parameter. Set it via `cm._yield_softness = 0.1`.
+The default $\delta = 0.1$ is accurate for all cases where the viscous stress exceeds the yield stress by at least 50% ($f_{ss} > 1.5$). For problems where SNES convergence is difficult at yield onset, increase $\delta$ toward 0.3--0.5 as a relaxation parameter. Set it via `cm.yield_softness = 0.1`.
 
 ## Benchmark Results
 

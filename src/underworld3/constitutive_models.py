@@ -1490,7 +1490,7 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
                 # Approaches exact Min as δ→0. No Min/Max in expression.
                 delta = self._yield_softness
                 f = effective_viscosity / vp_effective_viscosity
-                import math
+                import math  # float offset avoids sympy expression blowup in tensor
                 offset = (-1 + math.sqrt(1 + delta**2)) / 2
                 g = 1 + (f - 1 + sympy.sqrt((f - 1)**2 + delta**2)) / 2 - offset
                 effective_viscosity = effective_viscosity / g
@@ -2718,7 +2718,7 @@ class TransverseIsotropicVEPFlowModel(TransverseIsotropicFlowModel):
             elif self._yield_mode == "softmin":
                 delta = self._yield_softness
                 f = eta_1_eff / vp_eff
-                import math
+                import math  # float offset avoids sympy expression blowup in tensor
                 offset = (-1 + math.sqrt(1 + delta**2)) / 2
                 g = 1 + (f - 1 + sympy.sqrt((f - 1)**2 + delta**2)) / 2 - offset
                 eta_1_eff = eta_1_eff / g
@@ -2814,7 +2814,7 @@ class TransverseIsotropicVEPFlowModel(TransverseIsotropicFlowModel):
             elif self._yield_mode == "softmin":
                 delta = self._yield_softness
                 f = eta_1_eff / vp_eff
-                import math
+                import math  # float offset avoids sympy expression blowup in tensor
                 offset = (-1 + math.sqrt(1 + delta**2)) / 2
                 g = 1 + (f - 1 + sympy.sqrt((f - 1)**2 + delta**2)) / 2 - offset
                 eta_1_eff = eta_1_eff / g
@@ -2859,11 +2859,23 @@ class TransverseIsotropicVEPFlowModel(TransverseIsotropicFlowModel):
         return self.stress()
 
     def stress_projection(self):
-        """VE stress without plastic correction (for history storage)."""
+        """VE stress without plastic correction (for history storage).
+
+        Uses the anisotropic tensor with VE effective viscosities but
+        no yield limiting (η₁_ve, not η₁_eff). This is the stress that
+        should be stored in the DFDt history for the next timestep.
+        """
         edot = self.grad_u
-        # Use the full anisotropic tensor but without yield
         self._build_c_tensor_ve()
-        return self._q(edot)
+        # Contract with the VE-only tensor (not self._c which has yield)
+        c_ve = self._c_ve
+        if len(c_ve.shape) == 2:
+            flux = c_ve * edot
+        else:
+            flux = sympy.tensorcontraction(
+                sympy.tensorcontraction(sympy.tensorproduct(c_ve, edot), (1, 5)), (0, 3)
+            )
+        return sympy.Matrix(flux)
 
     def _build_c_tensor_ve(self):
         """Build anisotropic tensor with VE η₁ only (no yield)."""
