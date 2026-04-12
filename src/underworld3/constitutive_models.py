@@ -1110,7 +1110,7 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
         )
 
         self._order = order
-        self._yield_mode = "smooth"  # "min", "harmonic", "smooth", or "softmin"
+        self._yield_mode = "softmin"  # "min", "harmonic", "smooth", or "softmin"
         self._yield_softness = 0.1  # δ parameter for "softmin" mode
         self._bdf_blend = None  # auto: 1.0 for VE, 0.75 for VEP
 
@@ -2456,7 +2456,7 @@ class TransverseIsotropicVEPFlowModel(TransverseIsotropicFlowModel):
         )
 
         self._order = order
-        self._yield_mode = "smooth"
+        self._yield_mode = "softmin"
         self._yield_softness = 0.1
         self._bdf_blend = 0.5
         self._max_dt_ratio_for_higher_order = 2.0

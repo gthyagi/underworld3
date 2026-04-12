@@ -213,7 +213,7 @@ The director can also be a spatially varying field (e.g., from a `Surface` objec
 
 ## Smooth Yield Approximations
 
-The `"softmin"` yield mode uses a smooth approximation to $\min(\eta_{\text{ve}}, \eta_{\text{pl}})$ to avoid the non-differentiable kink that causes problems for the SNES solver. The approximation is:
+The `"softmin"` yield mode (default) uses a smooth approximation to $\min(\eta_{\text{ve}}, \eta_{\text{pl}})$ to avoid the non-differentiable kink that causes problems for the SNES solver. The approximation is:
 
 $$g(f) = 1 + \text{softplus}(f-1) - \text{softplus}(-1), \qquad \eta_{\text{eff}} = \eta_{\text{ve}} / g(f)$$
 
