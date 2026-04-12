@@ -1111,7 +1111,7 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
 
         self._order = order
         self._yield_mode = "smooth"  # "min", "harmonic", "smooth", or "softmin"
-        self._yield_softness = 0.5  # δ parameter for "softmin" mode
+        self._yield_softness = 0.1  # δ parameter for "softmin" mode
         self._bdf_blend = None  # auto: 1.0 for VE, 0.75 for VEP
 
         # Timestep — set by the solver before each solve(). Not a user parameter.
@@ -1484,12 +1484,15 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
             elif self._yield_mode == "softmin":
                 # Smooth approximation to Min(η_ve, η_pl):
                 #   η_eff = η_ve / g(f)
-                #   g(f) = (1+f)/2 + √((f-1)² + δ²)/2  ≈ max(1, f)
-                # where f = η_ve/η_pl and δ = yield_softness.
+                #   g(f) = 1 + softplus(f-1) - softplus(-1)  ≈ max(1, f)
+                # where softplus(x) = (x + √(x² + δ²))/2 and f = η_ve/η_pl.
+                # Corrected so g(0) = 1 exactly (no spurious yield below onset).
                 # Approaches exact Min as δ→0. No Min/Max in expression.
                 delta = self._yield_softness
                 f = effective_viscosity / vp_effective_viscosity
-                g = (1 + f) / 2 + sympy.sqrt((f - 1)**2 + delta**2) / 2
+                import math
+                offset = (-1 + math.sqrt(1 + delta**2)) / 2
+                g = 1 + (f - 1 + sympy.sqrt((f - 1)**2 + delta**2)) / 2 - offset
                 effective_viscosity = effective_viscosity / g
             else:
                 effective_viscosity = sympy.Min(effective_viscosity, vp_effective_viscosity)
@@ -1745,7 +1748,8 @@ class ViscoElasticPlasticFlowModel(ViscousFlowModel):
         Smaller values → sharper yield (closer to Min, less robust).
         Larger values → smoother transition (more robust, lower stress).
 
-        Default 0.5. Only used when ``yield_mode == "softmin"``.
+        Default 0.1. Only used when ``yield_mode == "softmin"``.
+        Increase toward 0.5 if SNES convergence is difficult at yield onset.
         """
         return self._yield_softness
 
@@ -2453,7 +2457,7 @@ class TransverseIsotropicVEPFlowModel(TransverseIsotropicFlowModel):
 
         self._order = order
         self._yield_mode = "smooth"
-        self._yield_softness = 0.5
+        self._yield_softness = 0.1
         self._bdf_blend = 0.5
         self._max_dt_ratio_for_higher_order = 2.0
 
@@ -2714,7 +2718,9 @@ class TransverseIsotropicVEPFlowModel(TransverseIsotropicFlowModel):
             elif self._yield_mode == "softmin":
                 delta = self._yield_softness
                 f = eta_1_eff / vp_eff
-                g = (1 + f) / 2 + sympy.sqrt((f - 1)**2 + delta**2) / 2
+                import math
+                offset = (-1 + math.sqrt(1 + delta**2)) / 2
+                g = 1 + (f - 1 + sympy.sqrt((f - 1)**2 + delta**2)) / 2 - offset
                 eta_1_eff = eta_1_eff / g
             else:
                 eta_1_eff = sympy.Min(eta_1_eff, vp_eff)
@@ -2808,7 +2814,9 @@ class TransverseIsotropicVEPFlowModel(TransverseIsotropicFlowModel):
             elif self._yield_mode == "softmin":
                 delta = self._yield_softness
                 f = eta_1_eff / vp_eff
-                g = (1 + f) / 2 + sympy.sqrt((f - 1)**2 + delta**2) / 2
+                import math
+                offset = (-1 + math.sqrt(1 + delta**2)) / 2
+                g = 1 + (f - 1 + sympy.sqrt((f - 1)**2 + delta**2)) / 2 - offset
                 eta_1_eff = eta_1_eff / g
             else:
                 eta_1_eff = sympy.Min(eta_1_eff, vp_eff)
@@ -2838,7 +2846,7 @@ class TransverseIsotropicVEPFlowModel(TransverseIsotropicFlowModel):
                             val = sympy.Mul(sympy.S.One, val, evaluate=False)
                         lambda_mat[i, j, k, l] = val
 
-        lambda_mat = sympy.simplify(uw.maths.tensor.rank4_to_mandel(lambda_mat, d))
+        lambda_mat = uw.maths.tensor.rank4_to_mandel(lambda_mat, d)
         self._c = uw.maths.tensor.mandel_to_rank4(lambda_mat, d)
 
         self._is_setup = True
@@ -2887,7 +2895,7 @@ class TransverseIsotropicVEPFlowModel(TransverseIsotropicFlowModel):
                             val = sympy.Mul(sympy.S.One, val, evaluate=False)
                         lambda_mat[i, j, k, l] = val
 
-        lambda_mat = sympy.simplify(uw.maths.tensor.rank4_to_mandel(lambda_mat, d))
+        lambda_mat = uw.maths.tensor.rank4_to_mandel(lambda_mat, d)
         self._c_ve = uw.maths.tensor.mandel_to_rank4(lambda_mat, d)
 
     def stress(self):
