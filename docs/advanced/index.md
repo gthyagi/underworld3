@@ -23,6 +23,12 @@ Implement advanced material models and constitutive laws.
 
 **[→ Complex Rheologies](complex-rheologies.md)**
 
+### VEP with Transverse Isotropy for Fault Mechanics
+Viscoelastic-plastic rheology with anisotropic weak planes and resolved
+fault-plane yield for modelling fault zones.
+
+**[→ VEP + Transverse Isotropy](vep-transverse-isotropy-faults.md)**
+
 ### Custom Meshes
 Create complex geometries with gmsh for research problems.
 
@@ -74,6 +80,7 @@ Ready to contribute to Underworld3?
 parallel-computing
 performance
 complex-rheologies
+vep-transverse-isotropy-faults
 custom-meshes
 curved-boundary-conditions
 mesh-adaptation
