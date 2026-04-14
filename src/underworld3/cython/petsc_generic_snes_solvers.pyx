@@ -1909,6 +1909,7 @@ class SNES_Scalar(SolverBaseClass):
         ierr = DMPlexSNESComputeBoundaryFEM(dm.dm, <void*>clvec.vec, NULL); CHKERRQ(ierr)
         self.u.vec.array[:] = lvec.array[:]
         self.mesh._stale_lvec = True
+        self.mesh._stale_gvec = True
 
         # Sync _gvec so downstream consumers (write, stats) see the result
         target_var = getattr(self.u, "_base_var", self.u)
@@ -2824,6 +2825,7 @@ class SNES_Vector(SolverBaseClass):
         ierr = DMPlexSNESComputeBoundaryFEM(dm.dm, <void*>clvec.vec, NULL); CHKERRQ(ierr)
         self.u.vec.array[:] = lvec.array[:]
         self.mesh._stale_lvec = True
+        self.mesh._stale_gvec = True
 
         # Sync _gvec so downstream consumers (write, stats) see the result
         target_var = getattr(self.u, "_base_var", self.u)
@@ -4806,6 +4808,7 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
             elif name=='pressure':
                 var.vec.array[:] = clvec.getSubVector(pressure_is).array[:]
         self.mesh._stale_lvec = True
+        self.mesh._stale_gvec = True
 
         # Sync _gvec so downstream consumers (write, stats) see the result
         for name, var in self.fields.items():

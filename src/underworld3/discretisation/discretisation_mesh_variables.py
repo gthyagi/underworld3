@@ -675,6 +675,7 @@ class _BaseMeshVariable(Stateful, uw_object):
 
             # Mark mesh local vector as stale so update_lvec() will rebuild it
             self.mesh._stale_lvec = True
+            self.mesh._stale_gvec = True
 
             # Sync parallel operations if requested
             if sync:
@@ -779,6 +780,7 @@ class _BaseMeshVariable(Stateful, uw_object):
 
             # Mark mesh local vector as stale so update_lvec() will rebuild it
             self.mesh._stale_lvec = True
+            self.mesh._stale_gvec = True
 
             # Sync parallel operations if requested
             if sync:
@@ -1448,6 +1450,11 @@ class _BaseMeshVariable(Stateful, uw_object):
                 self.mesh._lvec.destroy()
                 self.mesh._lvec = None
                 self.mesh._stale_lvec = True
+                self.mesh._stale_gvec = True
+            if self.mesh._gvec is not None:
+                self.mesh._gvec.destroy()
+                self.mesh._gvec = None
+                self.mesh._stale_gvec = True
 
             # Replace old DM with new one
             dm_old.destroy()

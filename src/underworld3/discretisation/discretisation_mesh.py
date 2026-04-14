@@ -661,7 +661,9 @@ class Mesh(Stateful, uw_object):
         self._dm_initialized = False
         self._quadrature = False
         self._stale_lvec = True
+        self._stale_gvec = True
         self._lvec = None
+        self._gvec = None
         self.petsc_fe = None
 
         # Rigid-body rotation null modes for this geometry.
@@ -1241,6 +1243,23 @@ class Mesh(Stateful, uw_object):
             self.dm.globalToLocal(a_global, self._lvec)
             self.dm.restoreGlobalVec(a_global)
             self._stale_lvec = False
+            self._stale_gvec = True
+
+    @timing.routine_timer_decorator
+    def update_gvec(self):
+        """
+        This method creates and/or updates the mesh variable global vector.
+        If the global vector is already up to date, this method will do nothing.
+        """
+
+        self.update_lvec()
+
+        if self._stale_gvec:
+            if not self._gvec:
+                self._gvec = self.dm.createGlobalVec()
+
+            self.dm.localToGlobal(self.lvec, self._gvec)
+            self._stale_gvec = False
 
     @property
     def lvec(self) -> PETSc.Vec:
@@ -1252,9 +1271,21 @@ class Mesh(Stateful, uw_object):
             raise RuntimeError("Mesh `lvec` needs to be updated using the update_lvec()` method.")
         return self._lvec
 
+    @property
+    def gvec(self) -> PETSc.Vec:
+        """
+        Returns a global Petsc vector containing the flattened array
+        of all the mesh variables.
+        """
+        if self._stale_gvec:
+            raise RuntimeError("Mesh `gvec` needs to be updated using the update_gvec()` method.")
+        return self._gvec
+
     def __del__(self):
         if hasattr(self, "_lvec") and self._lvec:
             self._lvec.destroy()
+        if hasattr(self, "_gvec") and self._gvec:
+            self._gvec.destroy()
 
     def _deform_mesh(self, new_coords: numpy.ndarray, verbose=False):
         """
@@ -1370,6 +1401,7 @@ class Mesh(Stateful, uw_object):
                         indexset.destroy()
                         subdm.destroy()
                         self.mesh._stale_lvec = True
+                        self.mesh._stale_gvec = True
 
                     var._data = None
                     var._set_vec(available=False)

@@ -15,6 +15,12 @@ cdef extern from "petsc.h" nogil:
     PetscErrorCode DMPlexComputeCellwiseIntegralFEM( PetscDM, PetscVec, PetscVec, void* )
 
 
+_bdintegral_getext_event = timing.create_event("BdIntegral.getext")
+_bdintegral_gvec_event = timing.create_event("BdIntegral.update_gvec")
+_bdintegral_label_event = timing.create_event("BdIntegral.label_lookup")
+_bdintegral_compute_event = timing.create_event("BdIntegral.compute")
+
+
 class Integral:
     """
     The `Integral` class constructs the volume integral
@@ -95,12 +101,10 @@ class Integral:
 
         # Pull out vec for variables, and go ahead with the integral
 
-        self.mesh.update_lvec()
-        a_global = self.dm.getGlobalVec()
-        self.dm.localToGlobal(self.mesh.lvec, a_global)
+        mesh.update_gvec()
 
         cdef Vec cgvec
-        cgvec = a_global
+        cgvec = mesh.gvec
 
         cdef DM dm = self.dm
         cdef DS ds = self.dm.getDS()
@@ -109,8 +113,6 @@ class Integral:
         # Now set callback...
         ierr = PetscDSSetObjective(ds.ds, 0, ext.fns_residual[0]); CHKERRQ(ierr)
         ierr = DMPlexComputeIntegralFEM(dm.dm, cgvec.vec, &(val_array[0]), NULL); CHKERRQ(ierr)
-
-        self.dm.restoreGlobalVec(a_global)
 
         # We're making an assumption here that PetscScalar is same as double.
         # Need to check where this may not be the case.
@@ -278,11 +280,9 @@ class CellWiseIntegral:
                                        self.mesh.vars.values()).ptrobj
 
         # Pull out vec for variables, and go ahead with the integral
-        self.mesh.update_lvec()
-        a_global = self.mesh.dm.getGlobalVec()
-        self.mesh.dm.localToGlobal(self.mesh.lvec, a_global)
+        self.mesh.update_gvec()
         cdef Vec cgvec
-        cgvec = a_global
+        cgvec = self.mesh.gvec
 
         ## Does this need to be consistent with everything else ?
 
@@ -296,7 +296,6 @@ class CellWiseIntegral:
 
         cdef Vec rvec = dmc.createGlobalVec()
         CHKERRQ( DMPlexComputeCellwiseIntegralFEM(dmc.dm, cgvec.vec, rvec.vec, NULL) )
-        self.mesh.dm.restoreGlobalVec(a_global)
 
         results = rvec.array.copy()
         rvec.destroy()
@@ -389,25 +388,35 @@ class BdIntegral:
         mesh = self.mesh
 
         # Compile integrand using the boundary residual slot (includes petsc_n[] in signature)
-        _getext_result = getext(
-            self.mesh, JITCallbackSet(bd_residual=(self.fn,)),
-            self.mesh.vars.values(), verbose=verbose)
+        _bdintegral_getext_event.begin()
+        try:
+            _getext_result = getext(
+                self.mesh, JITCallbackSet(bd_residual=(self.fn,)),
+                self.mesh.vars.values(), verbose=verbose)
+        finally:
+            _bdintegral_getext_event.end()
         cdef PtrContainer ext = _getext_result.ptrobj
 
         # Prepare the solution vector
-        self.mesh.update_lvec()
-        a_global = mesh.dm.getGlobalVec()
-        mesh.dm.localToGlobal(self.mesh.lvec, a_global)
+        _bdintegral_gvec_event.begin()
+        try:
+            mesh.update_gvec()
+        finally:
+            _bdintegral_gvec_event.end()
 
-        cdef Vec cgvec = a_global
+        cdef Vec cgvec = mesh.gvec
         cdef DM dm_c = mesh.dm
-
-        # Get the DMLabel and label value for the named boundary
-        boundary_enum = mesh.boundaries[self.boundary]
-        cdef PetscInt label_val = boundary_enum.value
+        cdef PetscInt label_val
         cdef PetscInt num_vals = 1
 
-        c_label = mesh.dm.getLabel(self.boundary)
+        # Get the DMLabel and label value for the named boundary
+        _bdintegral_label_event.begin()
+        try:
+            boundary_enum = mesh.boundaries[self.boundary]
+            label_val = boundary_enum.value
+            c_label = mesh.dm.getLabel(self.boundary)
+        finally:
+            _bdintegral_label_event.end()
 
         # Output value
         cdef PetscScalar result = 0.0
@@ -423,15 +432,17 @@ class BdIntegral:
             c_dmlabel = dmlabel.dmlabel
 
         # Call the boundary integral
-        ierr = UW_DMPlexComputeBdIntegral(
-            dm_c.dm, cgvec.vec,
-            c_dmlabel, num_vals, &label_val,
-            ext.fns_bd_residual[0],
-            &result, NULL
-        )
-        CHKERRQ(ierr)
-
-        mesh.dm.restoreGlobalVec(a_global)
+        _bdintegral_compute_event.begin()
+        try:
+            ierr = UW_DMPlexComputeBdIntegral(
+                dm_c.dm, cgvec.vec,
+                c_dmlabel, num_vals, &label_val,
+                ext.fns_bd_residual[0],
+                &result, NULL
+            )
+            CHKERRQ(ierr)
+        finally:
+            _bdintegral_compute_event.end()
 
         cdef double vald = <double> result
 
