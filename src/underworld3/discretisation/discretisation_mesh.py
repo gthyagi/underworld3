@@ -139,7 +139,7 @@ def _from_plexh5(
     if not return_sf:
         return h5plex
     else:
-        return None, h5plex
+        return h5plex.getPointSF(), h5plex
 
 
 class Mesh(Stateful, uw_object):
@@ -1140,7 +1140,7 @@ class Mesh(Stateful, uw_object):
 
         if PETSc.Sys.getVersion() <= (3, 20, 5) and PETSc.Sys.getVersionInfo()["release"] == True:
             self.dm.projectCoordinates(self.petsc_fe)
-        else:
+        elif hasattr(self.dm, "createCoordinateSpace"):
             # Use createCoordinateSpace rather than setCoordinateDisc.
             # setCoordinateDisc with a user-created FE leaves the coordinate
             # dual space without proper point subspaces, causing
@@ -1149,14 +1149,17 @@ class Mesh(Stateful, uw_object):
             # subspace initialisation.
             self.dm.createCoordinateSpace(self.degree, False, True)
 
-        # Issue #96 fix: Force coordinate field creation and strip boundary
-        # labels from the coordinate DM. createCoordinateSpace clears the
-        # coordinate field cache (via DMSetCoordinateField(NULL)). Without
-        # this call, DMPlexComputeBdIntegral lazily recreates the field by
-        # cloning mesh.dm — which now has boundary labels — causing
-        # DMCompleteBCLabels_Internal to fail with MPI errors.
-        from underworld3.cython.petsc_maths import dm_force_coordinate_field
-        dm_force_coordinate_field(self.dm)
+            # Issue #96 fix: Force coordinate field creation and strip
+            # boundary labels from the coordinate DM. createCoordinateSpace
+            # clears the coordinate field cache. Without this, BdIntegral
+            # lazily recreates the field by cloning mesh.dm (with boundary
+            # labels), causing DMCompleteBCLabels_Internal MPI errors.
+            from underworld3.cython.petsc_maths import dm_force_coordinate_field
+            dm_force_coordinate_field(self.dm)
+        elif PETSc.Sys.getVersion() >= (3, 24, 0):
+            self.dm.setCoordinateDisc(disc=self.petsc_fe, localized=False, project=False)
+        else:
+            self.dm.setCoordinateDisc(disc=self.petsc_fe, project=False)
 
         if verbose and uw.mpi.rank == 0:
             print(
