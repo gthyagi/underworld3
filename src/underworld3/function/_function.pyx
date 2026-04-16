@@ -490,8 +490,9 @@ def global_evaluate_nd(   expr,
     local_coords = evaluation_swarm._particle_coordinates.array[...].reshape(-1,evaluation_swarm.dim)
     values, extrapolated = evaluate_nd(expr, local_coords, rbf=rbf, evalf=evalf, verbose=verbose, check_extrapolated=True,)
 
-    data_container.array[...] = values[...]
-    is_extrapolated.array[:,0,0] = extrapolated[:]
+    if local_coords.shape[0] > 0:
+        data_container.array[...] = values[...]
+        is_extrapolated.array[:,0,0] = extrapolated[:]
 
     # set rank to old values and migrate back
     evaluation_swarm._rank_var.array[...] = original_rank.array[...]
