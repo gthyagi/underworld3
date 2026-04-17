@@ -293,8 +293,23 @@ run_petsc_cmd() {
                 exit 1
             fi
             $PIXI run -e "$(get_env)" "$SCRIPT_DIR/petsc-custom/build-petsc.sh" checkout "$arg"
+
+            # Nuke stale build artifacts and petsc4py. The next ./uw build's
+            # target-change detection can't fire because the still-installed
+            # petsc4py reports the OLD arch, so we force a full rebuild here.
             echo ""
-            echo "To complete the switch, rebuild:"
+            echo "Clearing stale build artifacts for clean rebuild..."
+            rm -rf "$SCRIPT_DIR"/build/lib.* "$SCRIPT_DIR"/build/temp.* "$SCRIPT_DIR"/build/bdist.* 2>/dev/null
+            rm -f "$SCRIPT_DIR/build/.petsc_target"
+            $PIXI run -e "$(get_env)" pip cache purge 2>/dev/null || true
+            if is_amr_env "$(get_env)"; then
+                echo "Uninstalling old petsc4py (linked to previous PETSc build)..."
+                $PIXI run -e "$(get_env)" pip uninstall -y petsc4py 2>/dev/null || true
+            fi
+
+            echo ""
+            echo "To complete the switch, rebuild PETSc then underworld3:"
+            echo "  ./uw petsc build"
             echo "  ./uw build"
             ;;
         active)
