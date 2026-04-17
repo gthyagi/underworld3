@@ -159,7 +159,7 @@ run_build() {
         # Step 2: Check/build petsc4py
         if ! petsc4py_installed "$env"; then
             echo "  Installing petsc4py for $env..."
-            $PIXI run -e "$env" pip install "$PETSC_CUSTOM/src/binding/petsc4py" --no-build-isolation || {
+            $PIXI run -e "$env" pip install "$PETSC_CUSTOM/src/binding/petsc4py" --no-build-isolation --no-cache-dir || {
                 echo -e "${YELLOW}petsc4py build failed${NC}"
                 exit 1
             }
@@ -297,11 +297,13 @@ run_petsc_cmd() {
             # Nuke stale build artifacts and petsc4py. The next ./uw build's
             # target-change detection can't fire because the still-installed
             # petsc4py reports the OLD arch, so we force a full rebuild here.
+            # (run_build already passes --no-cache-dir to pip install . so we
+            # don't need a global pip cache purge — only petsc4py's local-path
+            # install needs its own --no-cache-dir.)
             echo ""
             echo "Clearing stale build artifacts for clean rebuild..."
             rm -rf "$SCRIPT_DIR"/build/lib.* "$SCRIPT_DIR"/build/temp.* "$SCRIPT_DIR"/build/bdist.* 2>/dev/null
             rm -f "$SCRIPT_DIR/build/.petsc_target"
-            $PIXI run -e "$(get_env)" pip cache purge 2>/dev/null || true
             if is_amr_env "$(get_env)"; then
                 echo "Uninstalling old petsc4py (linked to previous PETSc build)..."
                 $PIXI run -e "$(get_env)" pip uninstall -y petsc4py 2>/dev/null || true
