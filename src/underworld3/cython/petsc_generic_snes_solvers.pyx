@@ -1012,11 +1012,16 @@ class SolverBaseClass(uw_object):
         if getattr(self, '_tau_use_multicomponent', False):
             # Symmetric tensor: flatten flux to a row of independent components,
             # solve one multi-component projection, fan result back to SYM_TENSOR.
-            import sympy
-            indep = self._tau_indep_indices
-            row = sympy.Matrix([[flux[i, j] for (i, j) in indep]])
-            self._tau_projector.uw_function = row
-            self._tau_projector.smoothing = 0.0
+            # Only set uw_function on first call — the expression structure is
+            # stable across timesteps, and constant values (dt_elastic, BDF coeffs)
+            # flow through PetscDS constants[] without recompilation.
+            if not getattr(self, '_tau_projector_initialised', False) or not self.constitutive_model._solver_is_setup:
+                import sympy
+                indep = self._tau_indep_indices
+                row = sympy.Matrix([[flux[i, j] for (i, j) in indep]])
+                self._tau_projector.uw_function = row
+                self._tau_projector.smoothing = 0.0
+                self._tau_projector_initialised = True
             self._tau_projector.solve()
             for k, (i, j) in enumerate(indep):
                 vals = self._tau_projector.u.array[:, 0, k]

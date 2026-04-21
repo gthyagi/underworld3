@@ -1268,17 +1268,20 @@ class SNES_Stokes(SNES_Stokes_SaddlePt):
             _advected_sigma_star = np.copy(self.DFDt.psi_star[0].array[...])
 
             if getattr(self.DFDt, '_psi_star_use_multicomponent', False):
-                # Multi-component projection: flatten flux to (1, Nc) row,
-                # solve all components at once, fan results back to tensor.
-                import sympy
-                flux = self.constitutive_model.flux
-                indep = self.DFDt._psi_star_indep_indices
-                row = sympy.Matrix([[flux[i, j] for (i, j) in indep]])
-                self.DFDt._psi_star_projection_solver.uw_function = row
-                self.DFDt._psi_star_projection_solver.smoothing = 0.0
+                # Multi-component projection: solve all components at once.
+                # Only set uw_function on first call — the flux expression
+                # structure is stable; constant values flow through PetscDS.
+                if not getattr(self.DFDt, '_psi_star_projector_initialised', False) or not self.constitutive_model._solver_is_setup:
+                    import sympy
+                    flux = self.constitutive_model.flux
+                    indep = self.DFDt._psi_star_indep_indices
+                    row = sympy.Matrix([[flux[i, j] for (i, j) in indep]])
+                    self.DFDt._psi_star_projection_solver.uw_function = row
+                    self.DFDt._psi_star_projection_solver.smoothing = 0.0
+                    self.DFDt._psi_star_projector_initialised = True
                 self.DFDt._psi_star_projection_solver.solve(verbose=verbose)
                 # Fan flat result back to psi_star[0] tensor variable
-                for k, (i, j) in enumerate(indep):
+                for k, (i, j) in enumerate(self.DFDt._psi_star_indep_indices):
                     vals = self.DFDt._psi_star_flat_var.array[:, 0, k]
                     self.DFDt.psi_star[0].array[:, i, j] = vals
                     if i != j:
