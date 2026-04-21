@@ -439,19 +439,45 @@ class SolverBaseClass(uw_object):
                     debug_name: str = None,
                     ):
 
-        if (not self.is_setup):
-            if self.dm is not None:
-                if verbose and uw.mpi.rank == 0:
-                    print(f"Destroy solver DM", flush=True)
+        if self.is_setup:
+            return
 
-                self.dm.destroy()
-                self.dm = None  # Should be able to avoid nuking this if we
-                            # can insert new functions in template (surface integrals problematic in
-                            # the current implementation )
-                if hasattr(self, "_stokes_nullspace"):
-                    self._stokes_nullspace = None
-                if hasattr(self, "_stokes_nullspace_basis"):
-                    self._stokes_nullspace_basis = ()
+        # Fast path: if the DM exists and we have a previous cache key,
+        # run _setup_pointwise_functions to check if the compiled code
+        # changed.  If the JIT cache key matches (only constant values
+        # differ, not expression structure), skip DM rebuild and just
+        # refresh the PetscDS constants array.
+        if self.dm is not None and hasattr(self, '_last_jit_cache_key'):
+            self._setup_pointwise_functions(verbose, debug=debug, debug_name=debug_name)
+
+            if hasattr(self, '_current_jit_cache_key') and \
+               self._current_jit_cache_key == self._last_jit_cache_key:
+                # Cache hit — compiled code unchanged, only constants differ.
+                self._update_constants()
+                self.is_setup = True
+                # Restore constitutive model flag so solve() doesn't
+                # re-trigger _build() on the next call.
+                if hasattr(self, "constitutive_model") and \
+                   self.constitutive_model is not None and \
+                   hasattr(self.constitutive_model, "_solver_is_setup"):
+                    self.constitutive_model._solver_is_setup = True
+                return
+
+            # Cache miss — structural change.  Fall through to full rebuild.
+            if verbose and uw.mpi.rank == 0:
+                print(f"JIT cache miss — full DM rebuild required", flush=True)
+
+        # Destroy existing DM for full rebuild
+        if self.dm is not None:
+            if verbose and uw.mpi.rank == 0:
+                print(f"Destroy solver DM", flush=True)
+
+            self.dm.destroy()
+            self.dm = None
+            if hasattr(self, "_stokes_nullspace"):
+                self._stokes_nullspace = None
+            if hasattr(self, "_stokes_nullspace_basis"):
+                self._stokes_nullspace_basis = ()
 
         # This is a workaround for some problem in the PETSc machinery
         # where we need a surface integral term somewhere on every process
@@ -475,6 +501,11 @@ class SolverBaseClass(uw_object):
         self._setup_solver(verbose)
 
         self.is_setup = True
+
+        # Record cache key after full build — used by the fast path
+        # on subsequent _build() calls to detect constants-only changes.
+        if hasattr(self, '_current_jit_cache_key'):
+            self._last_jit_cache_key = self._current_jit_cache_key
 
         return
 
@@ -1685,6 +1716,7 @@ class SNES_Scalar(SolverBaseClass):
         self.compiled_extensions = _getext_result.ptrobj
         self.ext_dict = _getext_result.fn_dicts
         self.constants_manifest = _getext_result.constants_manifest
+        self._current_jit_cache_key = _getext_result.cache_key
 
         return
 
@@ -2561,6 +2593,7 @@ class SNES_Vector(SolverBaseClass):
         self.compiled_extensions = _getext_result.ptrobj
         self.ext_dict = _getext_result.fn_dicts
         self.constants_manifest = _getext_result.constants_manifest
+        self._current_jit_cache_key = _getext_result.cache_key
 
         cdef PtrContainer ext = self.compiled_extensions
 
@@ -4184,6 +4217,7 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
         self.compiled_extensions = _getext_result.ptrobj
         self.ext_dict = _getext_result.fn_dicts
         self.constants_manifest = _getext_result.constants_manifest
+        self._current_jit_cache_key = _getext_result.cache_key
 
         self.is_setup = False
 
