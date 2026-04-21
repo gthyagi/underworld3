@@ -258,3 +258,56 @@ PetscErrorCode UW_DMPlexComputeBdIntegral(DM dm, Vec X,
 
     PetscFunctionReturn(PETSC_SUCCESS);
 }
+
+// Create a sandbox DM for BdIntegral that won't contaminate the
+// original DM's shared DM_Plex caches.
+//
+// DMClone shares DM_Plex by refcount, and DMPlexComputeBdIntegral
+// lazily initialises height-trace FE caches on the shared struct.
+// This corrupts any solver DM cloned from the same mesh.
+//
+// Strategy: DMClone (cheap, shares topology) then rebuild the
+// coordinate field from scratch.  The fresh coordinate field has its
+// own DMField_DS with empty height-trace caches, so the lazy init
+// during BdIntegral writes to the sandbox's caches, not the original's.
+PetscErrorCode UW_DMCreateBdIntegralSandbox(DM src, const char labelName[],
+                                            DM *sandbox)
+{
+    DM            sdm;
+    PetscInt      Nf, i;
+    PetscSection  srcSec;
+    Vec           auxVec;
+
+    PetscFunctionBeginUser;
+
+    // DMClone: shares DM_Plex topology, point SF, labels by reference.
+    // This is fine — the topology is read-only.  The corruption is in
+    // the coordinate DMField's cached height-trace FEs, which we replace.
+    PetscCall(DMClone(src, &sdm));
+
+    // Rebuild coordinate space from scratch — creates a new coordinate
+    // DMField_DS with empty height-trace caches, independent of src's.
+    PetscCall(DMPlexCreateCoordinateSpace(sdm, 1, PETSC_FALSE, PETSC_TRUE));
+    PetscCall(UW_DMForceCoordinateField(sdm));
+
+    // Copy fields + DS from src so the section layout matches
+    PetscCall(DMGetLocalSection(src, &srcSec));
+    PetscCall(PetscSectionGetNumFields(srcSec, &Nf));
+    for (i = 0; i < Nf; ++i) {
+        PetscObject obj;
+        DMLabel     label;
+        PetscCall(DMGetField(src, i, &label, &obj));
+        PetscCall(DMSetField(sdm, i, label, obj));
+    }
+    PetscCall(DMCreateDS(sdm));
+    PetscCall(DMSetLocalSection(sdm, srcSec));
+
+    // Copy auxiliary data (viscosity, etc.) — just a pointer, no mutation
+    PetscCall(DMGetAuxiliaryVec(src, NULL, 0, 0, &auxVec));
+    if (auxVec) {
+        PetscCall(DMSetAuxiliaryVec(sdm, NULL, 0, 0, auxVec));
+    }
+
+    *sandbox = sdm;
+    PetscFunctionReturn(PETSC_SUCCESS);
+}
