@@ -1283,6 +1283,20 @@ class Mesh(Stateful, uw_object):
         self.dm.setCoordinatesLocal(coord_vec)
         self.nuke_coords_and_rebuild()
 
+        # Rebuild the _coords array view.  nuke_coords_and_rebuild may
+        # replace the coordinate vector internally (createCoordinateSpace),
+        # leaving self._coords as a stale numpy view of the old buffer.
+        import underworld3.utilities
+        old_callbacks = getattr(self._coords, "_callbacks", [])
+        self._coords = underworld3.utilities.NDArray_With_Callback(
+            numpy.ndarray.view(
+                self.dm.getCoordinatesLocal().array.reshape(-1, self.cdim)
+            ),
+            owner=self,
+        )
+        for cb in old_callbacks:
+            self._coords.add_callback(cb)
+
         return
 
     def _legacy_access(self, *writeable_vars: "MeshVariable"):
