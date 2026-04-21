@@ -455,6 +455,12 @@ class SolverBaseClass(uw_object):
                 # Cache hit — compiled code unchanged, only constants differ.
                 self._update_constants()
                 self.is_setup = True
+                # Restore constitutive model flag so solve() doesn't
+                # re-trigger _build() on the next call.
+                if hasattr(self, "constitutive_model") and \
+                   self.constitutive_model is not None and \
+                   hasattr(self.constitutive_model, "_solver_is_setup"):
+                    self.constitutive_model._solver_is_setup = True
                 return
 
             # Cache miss — structural change.  Fall through to full rebuild.
@@ -2587,6 +2593,7 @@ class SNES_Vector(SolverBaseClass):
         self.compiled_extensions = _getext_result.ptrobj
         self.ext_dict = _getext_result.fn_dicts
         self.constants_manifest = _getext_result.constants_manifest
+        self._current_jit_cache_key = _getext_result.cache_key
 
         cdef PtrContainer ext = self.compiled_extensions
 
@@ -4210,6 +4217,7 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
         self.compiled_extensions = _getext_result.ptrobj
         self.ext_dict = _getext_result.fn_dicts
         self.constants_manifest = _getext_result.constants_manifest
+        self._current_jit_cache_key = _getext_result.cache_key
 
         self.is_setup = False
 
