@@ -40,6 +40,12 @@ class SolverBaseClass(uw_object):
         self.compiled_extensions = None
         self.constants_manifest = []
 
+        # Fine-grained rebuild flags backing the is_setup property. See the
+        # is_setup docstring and _build() for how these are consumed.
+        self._needs_dm_rebuild = True
+        self._needs_bc_reregister = True
+        self._needs_function_rewire = True
+
         self.Unknowns = self._Unknowns(self)
 
         self._order = 0
@@ -52,6 +58,44 @@ class SolverBaseClass(uw_object):
 
 
         return
+
+    @property
+    def is_setup(self):
+        """True when the solver's PETSc DM/DS/SNES state is consistent with
+        the current settings.
+
+        Backed by three fine-grained flags:
+
+        - ``_needs_dm_rebuild``       — mesh or field layout changed
+        - ``_needs_bc_reregister``    — boundary conditions changed
+        - ``_needs_function_rewire``  — only pointwise functions changed
+
+        Assigning ``self.is_setup = False`` pessimistically raises all three
+        (safe default — forces full DM teardown on next _build). Assigning
+        ``True`` clears all three.
+
+        Narrower opt-in: directly assign ``_needs_function_rewire = True`` when
+        only F0/F1/Jacobian pointwise functions changed (constitutive model or
+        time-derivative manager swap). _build() uses the in-place
+        PetscDSSetResidual/SetJacobian path for that case, skipping DM/SNES
+        teardown entirely.
+        """
+        return not (
+            self._needs_dm_rebuild
+            or self._needs_bc_reregister
+            or self._needs_function_rewire
+        )
+
+    @is_setup.setter
+    def is_setup(self, value):
+        if value:
+            self._needs_dm_rebuild = False
+            self._needs_bc_reregister = False
+            self._needs_function_rewire = False
+        else:
+            self._needs_dm_rebuild = True
+            self._needs_bc_reregister = True
+            self._needs_function_rewire = True
 
     class _Unknowns:
         """
@@ -124,7 +168,9 @@ class SolverBaseClass(uw_object):
         @DuDt.setter
         def DuDt(inner_self, new_DuDt):
             inner_self._DuDt = new_DuDt
-            inner_self._owning_solver.is_setup = False
+            # Time-derivative manager affects F0/F1 pointwise functions only;
+            # DM, fields, and BCs are unchanged. Use the in-place rewire path.
+            inner_self._owning_solver._needs_function_rewire = True
             return
 
         @property
@@ -135,7 +181,7 @@ class SolverBaseClass(uw_object):
         @DFDt.setter
         def DFDt(inner_self, new_DFDt):
             inner_self._DFDt = new_DFDt
-            inner_self._owning_solver.is_setup = False
+            inner_self._owning_solver._needs_function_rewire = True
             return
 
         @property
@@ -439,19 +485,37 @@ class SolverBaseClass(uw_object):
                     debug_name: str = None,
                     ):
 
-        if (not self.is_setup):
-            if self.dm is not None:
-                if verbose and uw.mpi.rank == 0:
-                    print(f"Destroy solver DM", flush=True)
+        if self.is_setup:
+            return
 
-                self.dm.destroy()
-                self.dm = None  # Should be able to avoid nuking this if we
-                            # can insert new functions in template (surface integrals problematic in
-                            # the current implementation )
-                if hasattr(self, "_stokes_nullspace"):
-                    self._stokes_nullspace = None
-                if hasattr(self, "_stokes_nullspace_basis"):
-                    self._stokes_nullspace_basis = ()
+        # Fast path: only the pointwise functions changed (constitutive model
+        # swap, DuDt/DFDt change). The DM, fields, and boundary conditions
+        # are unchanged, so we re-JIT the functions and call PetscDSSet* on
+        # the existing DS. No DM teardown, no SNES recreation.
+        if (self.dm is not None
+                and not self._needs_dm_rebuild
+                and not self._needs_bc_reregister
+                and self._needs_function_rewire):
+            if verbose and uw.mpi.rank == 0:
+                print(f"Rewire solver pointwise functions in place", flush=True)
+
+            self._setup_pointwise_functions(verbose, debug=debug, debug_name=debug_name)
+            self._setup_solver(verbose, _rewire_only=True)
+
+            self.is_setup = True
+            return
+
+        # Full rebuild path — teardown the DM and reconstruct everything.
+        if self.dm is not None:
+            if verbose and uw.mpi.rank == 0:
+                print(f"Destroy solver DM", flush=True)
+
+            self.dm.destroy()
+            self.dm = None
+            if hasattr(self, "_stokes_nullspace"):
+                self._stokes_nullspace = None
+            if hasattr(self, "_stokes_nullspace_basis"):
+                self._stokes_nullspace_basis = ()
 
         # This is a workaround for some problem in the PETSc machinery
         # where we need a surface integral term somewhere on every process
@@ -1726,7 +1790,7 @@ class SNES_Scalar(SolverBaseClass):
 
 
     @timing.routine_timer_decorator
-    def _setup_solver(self, verbose=False):
+    def _setup_solver(self, verbose=False, _rewire_only=False):
 
         if self.is_setup == True:
             if verbose and uw.mpi.rank == 0:
@@ -1800,27 +1864,29 @@ class SNES_Scalar(SolverBaseClass):
         # Set constants on DS before copying to coarse levels
         self._set_constants_on_ds(ds)
 
-        # Rebuild this lot
-
+        # Propagate the updated DS to coarse DMs (needed on both full and rewire
+        # paths — DS contains the pointwise function pointers we just changed).
         for coarse_dm in self.dm_hierarchy:
-            self.dm.copyFields(coarse_dm)
+            if not _rewire_only:
+                self.dm.copyFields(coarse_dm)
             self.dm.copyDS(coarse_dm)
 
-        # self.dm.createClosureIndex(None)
+        if not _rewire_only:
+            # DM/SNES construction — only needed on full rebuild. On the rewire
+            # path the existing DM/SNES stay attached; only the DS function
+            # pointers have been updated above.
+            for coarse_dm in self.dm_hierarchy:
+                coarse_dm.createClosureIndex(None)
 
-        for coarse_dm in self.dm_hierarchy:
-            coarse_dm.createClosureIndex(None)
+            self.dm.setUp()
 
-        self.dm.setUp()
-
-        self.snes = PETSc.SNES().create(PETSc.COMM_WORLD)
-        self.snes.setDM(self.dm)
-        self.snes.setOptionsPrefix(self.petsc_options_prefix)
-        self.snes.setFromOptions()
+            self.snes = PETSc.SNES().create(PETSc.COMM_WORLD)
+            self.snes.setDM(self.dm)
+            self.snes.setOptionsPrefix(self.petsc_options_prefix)
+            self.snes.setFromOptions()
 
 
-        cdef DM dm = self.dm
-        UW_DMPlexSetSNESLocalFEM(dm.dm, PETSC_FALSE, NULL)
+            UW_DMPlexSetSNESLocalFEM(cdm.dm, PETSC_FALSE, NULL)
 
         self.is_setup = True
         self.constitutive_model._solver_is_setup = True
@@ -1892,8 +1958,12 @@ class SNES_Scalar(SolverBaseClass):
         import petsc4py
 
 
-        if _force_setup or not self.constitutive_model._solver_is_setup:
+        if _force_setup:
             self.is_setup = False
+        elif not self.constitutive_model._solver_is_setup:
+            # Constitutive model swapped: pointwise functions change but the
+            # DM/fields/BCs are unchanged. In-place rewire is sufficient.
+            self._needs_function_rewire = True
 
         self._build(verbose, debug, debug_name)
 
@@ -2676,7 +2746,7 @@ class SNES_Vector(SolverBaseClass):
 
 
     @timing.routine_timer_decorator
-    def _setup_solver(self, verbose=False):
+    def _setup_solver(self, verbose=False, _rewire_only=False):
 
 
         if self.is_setup == True:
@@ -2788,24 +2858,25 @@ class SNES_Vector(SolverBaseClass):
         # Set constants on DS before copying to coarse levels
         self._set_constants_on_ds(ds)
 
-        # Rebuild this lot
-
+        # Propagate updated DS to coarse DMs (both paths need this — the DS
+        # holds the pointwise function pointers we just changed).
         for coarse_dm in self.dm_hierarchy:
-            self.dm.copyFields(coarse_dm)
+            if not _rewire_only:
+                self.dm.copyFields(coarse_dm)
             self.dm.copyDS(coarse_dm)
 
-        for coarse_dm in self.dm_hierarchy:
-            coarse_dm.createClosureIndex(None)
+        if not _rewire_only:
+            for coarse_dm in self.dm_hierarchy:
+                coarse_dm.createClosureIndex(None)
 
-        self.dm.setUp()
+            self.dm.setUp()
 
-        self.snes = PETSc.SNES().create(PETSc.COMM_WORLD)
-        self.snes.setDM(self.dm)
-        self.snes.setOptionsPrefix(self.petsc_options_prefix)
-        self.snes.setFromOptions()
+            self.snes = PETSc.SNES().create(PETSc.COMM_WORLD)
+            self.snes.setDM(self.dm)
+            self.snes.setOptionsPrefix(self.petsc_options_prefix)
+            self.snes.setFromOptions()
 
-        cdef DM dm = self.dm
-        UW_DMPlexSetSNESLocalFEM(dm.dm, PETSC_FALSE, NULL)
+            UW_DMPlexSetSNESLocalFEM(cdm.dm, PETSC_FALSE, NULL)
 
 
         self.is_setup = True
@@ -2854,8 +2925,12 @@ class SNES_Vector(SolverBaseClass):
         u : The solution vector field variable.
         """
 
-        if _force_setup or not self.constitutive_model._solver_is_setup:
+        if _force_setup:
             self.is_setup = False
+        elif not self.constitutive_model._solver_is_setup:
+            # Constitutive model swapped: pointwise functions change but the
+            # DM/fields/BCs are unchanged. In-place rewire is sufficient.
+            self._needs_function_rewire = True
 
         self._build(verbose, debug, debug_name)
 
@@ -3432,7 +3507,7 @@ class SNES_MultiComponent(SolverBaseClass):
         return
 
     @timing.routine_timer_decorator
-    def _setup_solver(self, verbose=False):
+    def _setup_solver(self, verbose=False, _rewire_only=False):
 
         if self.is_setup == True:
             if verbose and uw.mpi.rank == 0:
@@ -3532,21 +3607,22 @@ class SNES_MultiComponent(SolverBaseClass):
         self._set_constants_on_ds(ds)
 
         for coarse_dm in self.dm_hierarchy:
-            self.dm.copyFields(coarse_dm)
+            if not _rewire_only:
+                self.dm.copyFields(coarse_dm)
             self.dm.copyDS(coarse_dm)
 
-        for coarse_dm in self.dm_hierarchy:
-            coarse_dm.createClosureIndex(None)
+        if not _rewire_only:
+            for coarse_dm in self.dm_hierarchy:
+                coarse_dm.createClosureIndex(None)
 
-        self.dm.setUp()
+            self.dm.setUp()
 
-        self.snes = PETSc.SNES().create(PETSc.COMM_WORLD)
-        self.snes.setDM(self.dm)
-        self.snes.setOptionsPrefix(self.petsc_options_prefix)
-        self.snes.setFromOptions()
+            self.snes = PETSc.SNES().create(PETSc.COMM_WORLD)
+            self.snes.setDM(self.dm)
+            self.snes.setOptionsPrefix(self.petsc_options_prefix)
+            self.snes.setFromOptions()
 
-        cdef DM dm = self.dm
-        UW_DMPlexSetSNESLocalFEM(dm.dm, PETSC_FALSE, NULL)
+            UW_DMPlexSetSNESLocalFEM(cdm.dm, PETSC_FALSE, NULL)
 
         self.is_setup = True
         self.constitutive_model._solver_is_setup = True
@@ -3565,8 +3641,12 @@ class SNES_MultiComponent(SolverBaseClass):
         ``self.u.vec`` and made available through ``self.u.array``.
         """
 
-        if _force_setup or not self.constitutive_model._solver_is_setup:
+        if _force_setup:
             self.is_setup = False
+        elif not self.constitutive_model._solver_is_setup:
+            # Constitutive model swapped: pointwise functions change but the
+            # DM/fields/BCs are unchanged. In-place rewire is sufficient.
+            self._needs_function_rewire = True
 
         self._build(verbose, debug, debug_name)
 
@@ -5099,7 +5179,7 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
 
 
     @timing.routine_timer_decorator
-    def _setup_solver(self, verbose=False):
+    def _setup_solver(self, verbose=False, _rewire_only=False):
 
         if self.is_setup == True:
             if verbose and uw.mpi.rank == 0:
@@ -5280,34 +5360,35 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
         # Set constants on DS before copying to coarse levels
         self._set_constants_on_ds(ds)
 
-        # Rebuild this lot
-
+        # Propagate updated DS to coarse DMs (both paths need this — DS
+        # holds the pointwise function pointers we just changed).
         for coarse_dm in self.dm_hierarchy:
-            self.dm.copyFields(coarse_dm)
+            if not _rewire_only:
+                self.dm.copyFields(coarse_dm)
             self.dm.copyDS(coarse_dm)
             # coarse_dm.createDS()
 
-        for coarse_dm in self.dm_hierarchy:
-            coarse_dm.createClosureIndex(None)
+        if not _rewire_only:
+            for coarse_dm in self.dm_hierarchy:
+                coarse_dm.createClosureIndex(None)
 
-        self.snes = PETSc.SNES().create(PETSc.COMM_WORLD)
-        self.snes.setDM(self.dm)
-        self.snes.setOptionsPrefix(self.petsc_options_prefix)
-        self.snes.setFromOptions()
+            self.snes = PETSc.SNES().create(PETSc.COMM_WORLD)
+            self.snes.setDM(self.dm)
+            self.snes.setOptionsPrefix(self.petsc_options_prefix)
+            self.snes.setFromOptions()
 
-        cdef DM c_dm = self.dm
-        UW_DMPlexSetSNESLocalFEM(c_dm.dm, PETSC_FALSE, NULL)
+            UW_DMPlexSetSNESLocalFEM(cdm.dm, PETSC_FALSE, NULL)
 
-        # Setup subdms here too.
-        # These will be used to copy back/forth SNES solutions
-        # into user facing variables.
+            # Setup subdms here too.
+            # These will be used to copy back/forth SNES solutions
+            # into user facing variables.
 
-        names, isets, dms = self.dm.createFieldDecomposition()
-        self._subdict = {}
-        for index,name in enumerate(names):
-            self._subdict[name] = (isets[index],dms[index])
+            names, isets, dms = self.dm.createFieldDecomposition()
+            self._subdict = {}
+            for index,name in enumerate(names):
+                self._subdict[name] = (isets[index],dms[index])
 
-        self._attach_stokes_nullspace()
+            self._attach_stokes_nullspace()
 
         self.is_setup = True
         self.constitutive_model._solver_is_setup = True
@@ -5389,8 +5470,12 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
         constitutive_model : Viscosity and stress definitions.
         """
 
-        if _force_setup or not self.constitutive_model._solver_is_setup:
+        if _force_setup:
             self.is_setup = False
+        elif not self.constitutive_model._solver_is_setup:
+            # Constitutive model swapped: pointwise functions change but the
+            # DM/fields/BCs are unchanged. In-place rewire is sufficient.
+            self._needs_function_rewire = True
 
         self._build(verbose, debug, debug_name)
 
