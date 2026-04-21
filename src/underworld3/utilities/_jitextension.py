@@ -731,8 +731,8 @@ def getext(
 
 
 @timing.routine_timer_decorator
-def _createext(
-    name: str,
+def generate_c_source(
+    name,
     mesh: underworld3.discretisation.Mesh,
     callbacks: JITCallbackSet,
     primary_field_list,
@@ -741,23 +741,36 @@ def _createext(
     debug: Optional[bool] = False,
     debug_name=None,
 ):
-    """Create the JIT extension module with PETSc function pointers.
+    """Generate the setup.py / C header / Cython wrapper for a JIT bundle.
 
-    Note that it is not possible to replace loaded shared libraries
-    in Python, so we instead create a new extension for each new function.
+    This is the pure text-generation phase: sympy processing, C-code emission,
+    and assembly of the files that will make up the compiled module. No I/O,
+    no subprocess, no dynamic loading — those happen in ``compile_and_load``.
+
+    Keying a cache on a hash of the generated C source requires that this
+    function produce byte-identical output for byte-identical inputs.
 
     Parameters
     ----------
-    name : str
-        Name for the extension. It will be prepended with "fn_ptr_ext_".
+    name : str or int
+        Identifier used to build ``MODNAME = "fn_ptr_ext_" + str(name)``.
     mesh : Mesh
-        Supporting mesh for coordinate system and variable information.
     callbacks : JITCallbackSet
-        Structured callback expressions grouped by role.
     primary_field_list : list
         Variables that map to PETSc primary variable arrays (``petsc_u[]``).
-        All other variables map to auxiliary arrays (``petsc_a[]``).
-        Must be ordered by ``field_id``.
+    constants_subs_map : dict, optional
+        Mapping from UWexpression → ``_JITConstant`` placeholder.
+
+    Returns
+    -------
+    modname : str
+        Fully-qualified extension module name (``fn_ptr_ext_<name>``).
+    codeguys : list of [filename, content]
+        The files that make up the source bundle
+        (``setup.py``, ``cy_ext.h``, ``cy_ext.pyx``).
+    diagnostics : dict
+        Equation-range counts and the random symbol prefix, used by the caller
+        for verbose printing and for building the fn-layout manifest.
     """
     from sympy import symbols, Eq, MatrixSymbol
     from underworld3 import VarType
@@ -1228,15 +1241,54 @@ cpdef PtrContainer getptrobj():
     pyx_str += "    return clsguy"
     codeguys.append(["cy_ext.pyx", pyx_str])
 
-    # Write out files
-    import os
+    diagnostics = {
+        "randstr": randstr,
+        "eqn_count": eqn_count,
+        "count_residual_sig": count_residual_sig,
+        "count_bc_sig": count_bc_sig,
+        "count_jacobian_sig": count_jacobian_sig,
+        "count_bd_residual_sig": count_bd_residual_sig,
+        "count_bd_jacobian_sig": count_bd_jacobian_sig,
+        "residual_equations": residual_equations,
+        "boundary_equations": boundary_equations,
+        "jacobian_equations": jacobian_equations,
+        "boundary_residual_equations": boundary_residual_equations,
+        "boundary_jacobian_equations": boundary_jacobian_equations,
+    }
+    return MODNAME, codeguys, diagnostics
 
+
+def compile_and_load(modname, codeguys, verbose=False):
+    """Write ``codeguys`` files to a temp directory, build with Cython, and dynamically load.
+
+    Split out of the former ``_createext`` so that generation and compilation
+    can be hashed/cached independently.
+
+    Parameters
+    ----------
+    modname : str
+        Fully-qualified name of the extension module (``fn_ptr_ext_<name>``).
+    codeguys : list of [filename, content]
+        Source files from :func:`generate_c_source`.
+    verbose : bool, optional
+        Print build diagnostics on failure.
+
+    Returns
+    -------
+    module : loaded Python extension module exposing ``getptrobj()``.
+    tmpdir : str
+        Location of the generated sources, useful when a caller wants to
+        persist the ``.so`` elsewhere (e.g. a cross-session disk cache).
+    """
+    import os
+    import sys
     import time
     import random
+    import importlib.machinery
+    from importlib._bootstrap import _load
 
-    # Make directory name unique to avoid race conditions between parallel processes
     unique_suffix = f"{os.getpid()}_{int(time.time() * 1000)}_{random.randint(1000, 9999)}"
-    tmpdir = os.path.join("/tmp", f"{MODNAME}_{unique_suffix}")
+    tmpdir = os.path.join("/tmp", f"{modname}_{unique_suffix}")
 
     try:
         os.makedirs(tmpdir, exist_ok=True)
@@ -1244,14 +1296,12 @@ cpdef PtrContainer getptrobj():
         if verbose:
             print(f"Warning: Failed to create tmpdir {tmpdir}: {e}")
         raise RuntimeError(f"Cannot create temporary directory {tmpdir}") from e
+
     for thing in codeguys:
         filename = thing[0]
         strguy = thing[1]
         with open(os.path.join(tmpdir, filename), "w") as f:
             f.write(strguy)
-
-    # Build
-    import sys
 
     process = subprocess.Popen(
         [sys.executable] + "setup.py build_ext --inplace".split(),
@@ -1262,42 +1312,32 @@ cpdef PtrContainer getptrobj():
     )
     stdout, stderr = process.communicate()
 
-    # Check if build process failed
     if process.returncode != 0:
         if verbose:
             print(f"Warning: Build process failed with return code {process.returncode}")
             print(f"stdout: {stdout.decode() if stdout else 'None'}")
             print(f"stderr: {stderr.decode() if stderr else 'None'}")
 
-    # Load and add to dictionary
-    from importlib._bootstrap import _load
+    def load_dynamic(name, path):
+        """Load an extension module from ``path``.
 
-    def load_dynamic(name, path, file=None):
+        Borrowed from https://stackoverflow.com/a/55172547 — skips the
+        ``sys.modules`` reuse check so we always load a fresh extension.
         """
-        Load an extension module.
-        Borrowed from:
-            https://stackoverflow.com/a/55172547
-        """
-        import importlib.machinery
-
         loader = importlib.machinery.ExtensionFileLoader(name, path)
-
-        # Issue #24748: Skip the sys.modules check in _load_module_shims
-        # always load new extension
         spec = importlib.machinery.ModuleSpec(name=name, loader=loader, origin=path)
         return _load(spec)
 
-    # Check if tmpdir exists before trying to list it
+    module = None
     if os.path.exists(tmpdir):
         for _file in os.listdir(tmpdir):
             if _file.endswith(".so"):
-                _ext_dict[name] = load_dynamic(MODNAME, os.path.join(tmpdir, _file))
-    else:
-        # tmpdir doesn't exist, likely build process failed
-        if verbose:
-            print(f"Warning: tmpdir {tmpdir} does not exist - build process may have failed")
+                module = load_dynamic(modname, os.path.join(tmpdir, _file))
+                break
+    elif verbose:
+        print(f"Warning: tmpdir {tmpdir} does not exist - build process may have failed")
 
-    if name not in _ext_dict.keys():
+    if module is None:
         raise RuntimeError(
             f"The Underworld extension module does not appear to have been built successfully. "
             f"The generated module may be found at:\n    {str(tmpdir)}\n"
@@ -1309,31 +1349,67 @@ cpdef PtrContainer getptrobj():
             f"Please contact the developers if you are unable to resolve the issue."
         )
 
-    if underworld3.mpi.rank == 0 and verbose:
-        print(f"Location of compiled module: {str(tmpdir)}")
+    return module, tmpdir
 
+
+@timing.routine_timer_decorator
+def _createext(
+    name,
+    mesh: underworld3.discretisation.Mesh,
+    callbacks: JITCallbackSet,
+    primary_field_list,
+    constants_subs_map: Optional[dict] = None,
+    verbose: Optional[bool] = False,
+    debug: Optional[bool] = False,
+    debug_name=None,
+):
+    """Thin wrapper: generate source, compile, stash in ``_ext_dict[name]``.
+
+    Retained for backwards compatibility with :func:`getext`. New code
+    should call :func:`generate_c_source` and :func:`compile_and_load`
+    directly — splitting the two phases is what makes cache keys on the
+    generated C source possible.
+    """
+    modname, codeguys, diag = generate_c_source(
+        name,
+        mesh,
+        callbacks,
+        primary_field_list,
+        constants_subs_map=constants_subs_map,
+        verbose=verbose,
+        debug=debug,
+        debug_name=debug_name,
+    )
+    module, tmpdir = compile_and_load(modname, codeguys, verbose=verbose)
+    _ext_dict[name] = module
+
+    if underworld3.mpi.rank == 0 and verbose:
+        randstr = diag["randstr"]
+        print(f"Location of compiled module: {str(tmpdir)}")
+        print(f"{randstr} Equation count - {diag['eqn_count']}", flush=True)
         print(
-            f"{randstr} Equation count - {eqn_count}",
+            f"{randstr}   {diag['count_residual_sig']:5d}    residuals: "
+            f"{diag['residual_equations'][0]}:{diag['residual_equations'][1]}",
             flush=True,
         )
         print(
-            f"{randstr}   {count_residual_sig:5d}    residuals: {residual_equations[0]}:{residual_equations[1]}",
+            f"{randstr}   {diag['count_bc_sig']:5d}   boundaries: "
+            f"{diag['boundary_equations'][0]}:{diag['boundary_equations'][1]}",
             flush=True,
         )
         print(
-            f"{randstr}   {count_bc_sig:5d}   boundaries: {boundary_equations[0]}:{boundary_equations[1]}",
+            f"{randstr}   {diag['count_jacobian_sig']:5d}    jacobians: "
+            f"{diag['jacobian_equations'][0]}:{diag['jacobian_equations'][1]}",
             flush=True,
         )
         print(
-            f"{randstr}   {count_jacobian_sig:5d}    jacobians: {jacobian_equations[0]}:{jacobian_equations[1]}",
+            f"{randstr}   {diag['count_bd_residual_sig']:5d} boundary_res: "
+            f"{diag['boundary_residual_equations'][0]}:{diag['boundary_residual_equations'][1]}",
             flush=True,
         )
         print(
-            f"{randstr}   {count_bd_residual_sig:5d} boundary_res: {boundary_residual_equations[0]}:{boundary_residual_equations[1]}",
-            flush=True,
-        )
-        print(
-            f"{randstr}   {count_bd_jacobian_sig:5d} boundary_jac: {boundary_jacobian_equations[0]}:{boundary_jacobian_equations[1]}",
+            f"{randstr}   {diag['count_bd_jacobian_sig']:5d} boundary_jac: "
+            f"{diag['boundary_jacobian_equations'][0]}:{diag['boundary_jacobian_equations'][1]}",
             flush=True,
         )
 
