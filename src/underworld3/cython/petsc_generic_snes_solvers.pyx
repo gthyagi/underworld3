@@ -488,10 +488,26 @@ class SolverBaseClass(uw_object):
         if self.is_setup:
             return
 
-        # Fast path: only the pointwise functions changed (constitutive model
-        # swap, DuDt/DFDt change). The DM, fields, and boundary conditions
-        # are unchanged, so we re-JIT the functions and call PetscDSSet* on
-        # the existing DS. No DM teardown, no SNES recreation.
+        # === Fast path 1: constants-only change ===
+        # If JIT cache key matches, the compiled code is identical — only
+        # constant values (dt_elastic, scalar viscosity, BDF coeffs) differ.
+        # Refresh PetscDS constants and skip all rebuilding.
+        if self.dm is not None and hasattr(self, '_last_jit_cache_key'):
+            self._setup_pointwise_functions(verbose, debug=debug, debug_name=debug_name)
+
+            if hasattr(self, '_current_jit_cache_key') and \
+               self._current_jit_cache_key == self._last_jit_cache_key:
+                self._update_constants()
+                self.is_setup = True
+                if hasattr(self, "constitutive_model") and \
+                   self.constitutive_model is not None and \
+                   hasattr(self.constitutive_model, "_solver_is_setup"):
+                    self.constitutive_model._solver_is_setup = True
+                return
+
+        # === Fast path 2: function rewire in place ===
+        # Pointwise functions changed but DM structure is unchanged.
+        # Re-JIT and call PetscDSSet* on the existing DS.
         if (self.dm is not None
                 and not self._needs_dm_rebuild
                 and not self._needs_bc_reregister
@@ -505,7 +521,7 @@ class SolverBaseClass(uw_object):
             self.is_setup = True
             return
 
-        # Full rebuild path — teardown the DM and reconstruct everything.
+        # === Full rebuild path — teardown DM and reconstruct ===
         if self.dm is not None:
             if verbose and uw.mpi.rank == 0:
                 print(f"Destroy solver DM", flush=True)
@@ -539,6 +555,11 @@ class SolverBaseClass(uw_object):
         self._setup_solver(verbose)
 
         self.is_setup = True
+
+        # Record cache key after full build — used by the fast path
+        # on subsequent _build() calls to detect constants-only changes.
+        if hasattr(self, '_current_jit_cache_key'):
+            self._last_jit_cache_key = self._current_jit_cache_key
 
         return
 
@@ -1785,6 +1806,7 @@ class SNES_Scalar(SolverBaseClass):
         self.compiled_extensions = _getext_result.ptrobj
         self.ext_dict = _getext_result.fn_dicts
         self.constants_manifest = _getext_result.constants_manifest
+        self._current_jit_cache_key = _getext_result.cache_key
 
         return
 
@@ -2739,6 +2761,7 @@ class SNES_Vector(SolverBaseClass):
         self.compiled_extensions = _getext_result.ptrobj
         self.ext_dict = _getext_result.fn_dicts
         self.constants_manifest = _getext_result.constants_manifest
+        self._current_jit_cache_key = _getext_result.cache_key
 
         cdef PtrContainer ext = self.compiled_extensions
 
@@ -5005,6 +5028,7 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
         self.compiled_extensions = _getext_result.ptrobj
         self.ext_dict = _getext_result.fn_dicts
         self.constants_manifest = _getext_result.constants_manifest
+        self._current_jit_cache_key = _getext_result.cache_key
 
         self.is_setup = False
 
