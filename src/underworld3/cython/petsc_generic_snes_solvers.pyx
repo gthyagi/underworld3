@@ -519,6 +519,14 @@ class SolverBaseClass(uw_object):
             self._setup_solver(verbose, _rewire_only=True)
 
             self.is_setup = True
+
+            # _last_jit_cache_key must track "which bundle the solver is
+            # currently wired for", not "what the last full-build was".
+            # Otherwise a C → S → C transition can make fast path 1 trigger
+            # on a subsequent _build() call while the solver is still wired
+            # for S — returning S's result for a C solve.
+            if hasattr(self, '_current_jit_cache_key'):
+                self._last_jit_cache_key = self._current_jit_cache_key
             return
 
         # === Full rebuild path — teardown DM and reconstruct ===

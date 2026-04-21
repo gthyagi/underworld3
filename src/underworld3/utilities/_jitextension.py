@@ -125,22 +125,29 @@ def _petsc_build_env():
 #     deriv   = subfn_d.xreplace({uwderivdummy:fn2})  # sub out dummy
 #     return deriv
 
+# In-memory cache of compiled modules, keyed by a hex-string hash of the
+# generated C source (plus an ABI salt). Tests count ``len(_ext_dict)`` to
+# verify that a parameter-value change does not trigger a new compile.
 _ext_dict = {}
 
-# Per-function cache: maps (fn_hash, sig_type) -> _CachedFn
-_fn_cache = {}
 
+def _abi_salt():
+    """Return a string that invalidates the cache when binary compatibility changes.
 
-@dataclass
-class _CachedFn:
-    """Registry entry for a single cached compiled function pointer."""
-    ptr_container: object   # PtrContainer from the .so that compiled this fn
-    sig_type: str           # "residual" | "jacobian" | "bcs" | "bd_residual" | "bd_jacobian"
-    index: int              # index within that container's sig_type array
-
-
-# Signature type names used by the per-function cache
-_SIG_TYPES = ("residual", "bcs", "jacobian", "bd_residual", "bd_jacobian")
+    Keeps the salt conservative (PETSc version + underworld3 version). The
+    ``./uw`` build driver is responsible for wiping the on-disk cache when
+    the compiler toolchain or Python ABI changes (see design doc).
+    """
+    try:
+        from petsc4py import PETSc
+        petsc_ver = ".".join(str(x) for x in PETSc.Sys.getVersion())
+    except Exception:
+        petsc_ver = "unknown"
+    try:
+        uw_ver = underworld3.__version__
+    except AttributeError:
+        uw_ver = "unknown"
+    return f"petsc={petsc_ver}|uw={uw_ver}"
 
 
 # ============================================================================
@@ -326,13 +333,17 @@ def _extract_constants(all_fns, mesh):
     if not constant_exprs:
         return [], {}
 
-    # Sort by name for deterministic MPI-consistent ordering
-    sorted_constants = sorted(constant_exprs, key=lambda e: str(e))
+    # Sort by the user-given symbol name, not ``str(expr)`` — ``__str__`` on a
+    # UWexpression returns the current *value*, which shuffles the index
+    # assignment whenever a value changes. ``.name`` is stable.
+    sorted_constants = sorted(constant_exprs, key=lambda e: e.name)
 
     manifest = []
     subs_map = {}
     for i, expr in enumerate(sorted_constants):
-        jit_const = _JITConstant(i, name=f"_jit_const_{str(expr)}")
+        # Use ``expr.name`` (stable) instead of ``str(expr)`` (= current value)
+        # so the placeholder symbol's identity is independent of parameter value.
+        jit_const = _JITConstant(i, name=f"_jit_const_{expr.name}")
         manifest.append((i, expr))
         subs_map[expr] = jit_const
 
@@ -523,195 +534,84 @@ def getext(
         constants_manifest is a list of (index, uw_expression_ref) tuples
         for use with PetscDSSetConstants().
     """
-    import time
+    import hashlib
 
-    time_s = time.time()
     primary_field_list = tuple(primary_field_list)
 
-    # Extract constant UWexpressions that will go through constants[] array
+    # Extract constant UWexpressions that are routed through PETSc's
+    # constants[] array. Value changes don't affect the C source — they
+    # only alter what we pass to PetscDSSetConstants at solve time.
     constants_manifest, constants_subs_map = _extract_constants(callbacks.flat(), mesh)
 
-    # Build structurally-expanded functions for cache hashing.
-    # Constants are replaced with placeholder symbols (value-independent),
-    # so changing a constant value won't cause a cache miss.
-    expanded = callbacks.map(lambda fn: prepare_for_cache_key(fn, constants_subs_map))
-
     if debug and underworld3.mpi.rank == 0:
-        print(f"Expanded functions for compilation:")
-        for i, fn in enumerate(expanded.flat()):
-            print(f"{i}: {fn}")
         if constants_manifest:
             print(f"Constants manifest ({len(constants_manifest)} entries):")
             for idx, expr in constants_manifest:
-                print(f"  constants[{idx}] = {expr} (current value: {expr.data})")
+                print(f"  constants[{idx}] = {expr.name} (current value: {expr.data})")
 
-    import os
-
-    primary_field_signature = tuple(
-        (getattr(field, "field_id", None), getattr(field, "clean_name", None))
-        for field in primary_field_list
+    # Generate C source. The returned ``gen_modname``/``gen_randstr`` are
+    # implementation-dependent (often random) — we canonicalise them below
+    # so byte-identical inputs hash to the same key.
+    _PLACEHOLDER_NAME = "UWJITPLACEHOLDER"
+    gen_modname, codeguys, diag = generate_c_source(
+        _PLACEHOLDER_NAME,
+        mesh,
+        callbacks,
+        primary_field_list,
+        constants_subs_map=constants_subs_map,
+        verbose=verbose,
+        debug=debug,
+        debug_name=debug_name,
     )
+    gen_randstr = diag["randstr"]
 
-    if debug_name is not None:
-        jitname = debug_name
+    # Canonicalise: swap the call-specific identifiers for stable tokens so
+    # the hash is a function of *what the module does*, not what it happens
+    # to be named. The same trick lets us derive a unique-per-bundle, yet
+    # deterministic, C-symbol prefix below (required by some dlopen loaders
+    # that use RTLD_GLOBAL — see historical comment on ``randstr``).
+    _CAN_MOD = "__UW_JIT_MOD__"
+    _CAN_RS = "__UW_JIT_RS__"
+    canonical_codeguys = [
+        [
+            entry[0],
+            entry[1].replace(gen_modname, _CAN_MOD).replace(gen_randstr, _CAN_RS),
+        ]
+        for entry in codeguys
+    ]
+    canonical_source = "\n".join(entry[1] for entry in canonical_codeguys)
+    source_hash = hashlib.sha256(
+        (canonical_source + "\n---\n" + _abi_salt()).encode("utf-8")
+    ).hexdigest()[:16]
 
-    elif "UW_JITNAME" in os.environ:  # If var specified, probably testing.
-        jitname = os.environ["UW_JITNAME"]
-        # Note, extensions cannot be replaced, so need to append count to ensure
-        # unique modules.
-        jitname += "_" + str(len(_ext_dict.keys()))
+    # Derive the real modname/randstr from the hash — same source ⇒ same
+    # compiled artefact, different sources ⇒ disjoint symbol namespaces.
+    real_modname = f"fn_ptr_ext_{source_hash}"
+    real_randstr = "UW" + source_hash[:8].upper()
+    codeguys_final = [
+        [
+            entry[0],
+            entry[1].replace(_CAN_MOD, real_modname).replace(_CAN_RS, real_randstr),
+        ]
+        for entry in canonical_codeguys
+    ]
 
-    else:  # Name from structured hash — function role must be preserved.
-        jitname = abs(
-            hash((mesh, expanded.signature(), tuple(mesh.vars.keys()), primary_field_signature))
-        )
-
-    # ── Fast path: whole-bundle cache hit ──────────────────────────────────
-    if jitname in _ext_dict and cache:
+    # ── Cache lookup or build ─────────────────────────────────────────────
+    if cache and source_hash in _ext_dict:
         if verbose and underworld3.mpi.rank == 0:
-            print(f"JIT compiled module cached ... {jitname} ", flush=True)
+            print(f"JIT compiled module cached ... {source_hash}", flush=True)
+        module = _ext_dict[source_hash]
+    else:
+        if verbose and underworld3.mpi.rank == 0:
+            print(f"JIT compiling new module ... {source_hash}", flush=True)
+        module, _tmpdir = compile_and_load(real_modname, codeguys_final, verbose=verbose)
+        if cache:
+            _ext_dict[source_hash] = module
 
-        module = _ext_dict[jitname]
-        ptrobj = module.getptrobj()
+    ptrobj = module.getptrobj()
 
-        i_res = {fn: i for i, fn in enumerate(callbacks.residual)}
-        i_ebc = {fn: i for i, fn in enumerate(callbacks.bcs)}
-        i_jac = {fn: i for i, fn in enumerate(callbacks.jacobian)}
-        i_bd_res = {fn: i for i, fn in enumerate(callbacks.bd_residual)}
-        i_bd_jac = {fn: i for i, fn in enumerate(callbacks.bd_jacobian)}
-
-        extn_fn_dict = namedtuple(
-            "Functions", ["res", "jac", "ebc", "bd_res", "bd_jac"],
-        )
-        return _GextResult(
-            ptrobj,
-            extn_fn_dict(i_res, i_jac, i_ebc, i_bd_res, i_bd_jac),
-            constants_manifest,
-            cache_key=jitname,
-        )
-
-    # ── Per-function cache: check which individual functions are cached ──
-    # Build a hashable key for the constants manifest so it's part of
-    # every per-function hash (ensures constants[i] means the same thing).
-    constants_manifest_key = tuple(
-        (str(expr), idx) for idx, expr in constants_manifest
-    )
-
-    # Compute per-function hashes for each expression, grouped by sig_type
-    fn_hashes = {}  # maps (sig_type, slot_index) -> hash
-    for sig_type, slot_fns in zip(
-        _SIG_TYPES,
-        [expanded.residual, expanded.bcs, expanded.jacobian,
-         expanded.bd_residual, expanded.bd_jacobian],
-    ):
-        for i, fn_expanded in enumerate(slot_fns):
-            fn_hashes[(sig_type, i)] = abs(
-                hash((mesh, fn_expanded, tuple(mesh.vars.keys()),
-                      sig_type, constants_manifest_key, primary_field_signature))
-            )
-
-    # Partition into cached vs new
-    cached_hits = {}   # (sig_type, slot_index) -> _CachedFn
-    new_needed = {}    # (sig_type, slot_index) -> original expression
-    for sig_type, slot_fns in zip(
-        _SIG_TYPES,
-        [callbacks.residual, callbacks.bcs, callbacks.jacobian,
-         callbacks.bd_residual, callbacks.bd_jacobian],
-    ):
-        for i, fn_orig in enumerate(slot_fns):
-            key = (sig_type, i)
-            fn_hash = fn_hashes[key]
-            cache_key = (fn_hash, sig_type)
-            if cache_key in _fn_cache and cache:
-                cached_hits[key] = _fn_cache[cache_key]
-            else:
-                new_needed[key] = fn_orig
-
-    n_hits = len(cached_hits)
-    n_new = len(new_needed)
-
-    if verbose and underworld3.mpi.rank == 0:
-        total = n_hits + n_new
-        print(f"Per-function cache: {n_hits}/{total} hits, {n_new} new", flush=True)
-
-    # ── Compile new functions ───────────────────────────────────────────
-    new_ptr = None
-    new_indices = {}  # (sig_type, slot_index) -> index in new_ptr's arrays
-
-    if n_new > 0:
-        # Build a JITCallbackSet containing ONLY the new functions,
-        # preserving order within each sig_type.
-        new_by_type = {st: [] for st in _SIG_TYPES}
-        new_slot_map = {st: [] for st in _SIG_TYPES}  # tracks original slot indices
-        for (sig_type, slot_idx), fn_orig in sorted(new_needed.items()):
-            new_by_type[sig_type].append(fn_orig)
-            new_slot_map[sig_type].append(slot_idx)
-
-        new_callbacks = JITCallbackSet(
-            residual=tuple(new_by_type["residual"]),
-            bcs=tuple(new_by_type["bcs"]),
-            jacobian=tuple(new_by_type["jacobian"]),
-            bd_residual=tuple(new_by_type["bd_residual"]),
-            bd_jacobian=tuple(new_by_type["bd_jacobian"]),
-        )
-
-        # Compile the new functions
-        new_jitname = abs(hash((jitname, "partial", n_new, time.time())))
-        _createext(
-            new_jitname,
-            mesh,
-            new_callbacks,
-            primary_field_list,
-            constants_subs_map=constants_subs_map,
-            verbose=verbose,
-            debug=debug,
-            debug_name=debug_name,
-        )
-
-        new_module = _ext_dict[new_jitname]
-        new_ptr = new_module.getptrobj()
-
-        # Register each new function in the per-function cache
-        for sig_type in _SIG_TYPES:
-            for local_idx, slot_idx in enumerate(new_slot_map[sig_type]):
-                key = (sig_type, slot_idx)
-                fn_hash = fn_hashes[key]
-                cache_key = (fn_hash, sig_type)
-                entry = _CachedFn(
-                    ptr_container=new_ptr,
-                    sig_type=sig_type,
-                    index=local_idx,
-                )
-                _fn_cache[cache_key] = entry
-                cached_hits[key] = entry
-
-    # Also register the full bundle in _ext_dict if ALL functions were new
-    # (common case: first compile of a solver)
-    if n_new > 0 and n_hits == 0:
-        _ext_dict[jitname] = _ext_dict[new_jitname]
-
-    # ── Assemble PtrContainer from cached function pointers ─────────────
-    from underworld3.cython.petsc_types import PtrContainer
-
-    result_ptr = PtrContainer()
-    counts = callbacks.counts
-    result_ptr.allocate(*counts)
-
-    _copy_methods = {
-        "residual": result_ptr.copy_residual_from,
-        "bcs": result_ptr.copy_bcs_from,
-        "jacobian": result_ptr.copy_jacobian_from,
-        "bd_residual": result_ptr.copy_bd_residual_from,
-        "bd_jacobian": result_ptr.copy_bd_jacobian_from,
-    }
-
-    for sig_type, n_fns in zip(_SIG_TYPES, counts):
-        copy_fn = _copy_methods[sig_type]
-        for slot_idx in range(n_fns):
-            entry = cached_hits[(sig_type, slot_idx)]
-            copy_fn(slot_idx, entry.ptr_container, entry.index)
-
-    # ── Build fn_dicts (unchanged from original) ────────────────────────
+    # Build the slot-index dicts. Keys are the original callback objects so
+    # solvers can do ``ext.fns_residual[ext_dict.res[self._u_f0]]``.
     i_res = {fn: i for i, fn in enumerate(callbacks.residual)}
     i_ebc = {fn: i for i, fn in enumerate(callbacks.bcs)}
     i_jac = {fn: i for i, fn in enumerate(callbacks.jacobian)}
@@ -723,10 +623,10 @@ def getext(
     )
 
     return _GextResult(
-        result_ptr,
+        ptrobj,
         extn_fn_dict(i_res, i_jac, i_ebc, i_bd_res, i_bd_jac),
         constants_manifest,
-        cache_key=jitname,
+        cache_key=source_hash,
     )
 
 
