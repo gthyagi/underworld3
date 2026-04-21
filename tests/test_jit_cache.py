@@ -136,6 +136,85 @@ def test_value_cycle_produces_single_cache_entry():
     del poisson
 
 
+def test_disk_cache_roundtrip_skips_compile(tmp_path, monkeypatch):
+    """First solve compiles + writes to disk; clearing in-memory cache and
+    re-solving must reuse the on-disk artefact instead of recompiling.
+    """
+    from underworld3.utilities import _jit_cache as _jc
+    from underworld3.utilities import _jitextension as _jitext
+
+    monkeypatch.setenv("UW_JIT_CACHE_DIR", str(tmp_path))
+
+    # Earlier tests in this session may have populated _ext_dict with the same
+    # source_hash (Poisson-with-constant-K all canonicalise to similar C
+    # source). Force a cold path so the disk-store branch is exercised.
+    _jitext._ext_dict.clear()
+
+    mesh = uw.meshing.UnstructuredSimplexBox(cellSize=0.25)
+    u = uw.discretisation.MeshVariable("u_disk", mesh, 1, degree=2)
+    K = uw.expression("K_disk", 1.0)
+
+    poisson = uw.systems.Poisson(mesh, u_Field=u)
+    poisson.constitutive_model = uw.constitutive_models.DiffusionModel
+    poisson.constitutive_model.Parameters.diffusivity = K
+    poisson.f = -2.0
+    poisson.add_dirichlet_bc(0.0, "Bottom")
+    poisson.add_dirichlet_bc(1.0, "Top")
+
+    # First solve: cold cache, must compile and populate disk
+    poisson.solve()
+    source_hash = poisson._current_jit_cache_key
+
+    cache_dir = _jc.get_cache_dir()
+    so_path = cache_dir / f"{source_hash}.so"
+    manifest_path = cache_dir / f"{source_hash}.manifest.json"
+    assert so_path.exists(), f"disk cache .so missing after solve: {so_path}"
+    assert manifest_path.exists(), f"disk cache manifest missing: {manifest_path}"
+
+    # Clear the in-memory cache; the second solve must hit the disk cache
+    _jitext._ext_dict.clear()
+
+    compile_calls = []
+    real_compile = _jitext.compile_and_load
+
+    def watching_compile(*args, **kwargs):
+        compile_calls.append(args)
+        return real_compile(*args, **kwargs)
+
+    monkeypatch.setattr(_jitext, "compile_and_load", watching_compile)
+
+    # Reset solver state so it has to re-resolve the cache, not reuse an
+    # already-installed module pointer
+    poisson.is_setup = False
+    poisson.solve()
+
+    assert len(compile_calls) == 0, (
+        f"compile_and_load was called {len(compile_calls)} time(s) on a disk "
+        f"cache hit — disk cache lookup is not short-circuiting compile."
+    )
+
+    del poisson
+
+
+def test_disk_cache_disabled_by_env_var(tmp_path, monkeypatch):
+    """UW_JIT_CACHE=0 disables both load and store on the on-disk cache."""
+    from underworld3.utilities import _jit_cache as _jc
+
+    monkeypatch.setenv("UW_JIT_CACHE_DIR", str(tmp_path))
+    monkeypatch.setenv("UW_JIT_CACHE", "0")
+
+    assert _jc.get_cache_dir() is None
+
+    # store_module should be a no-op; load_module should always return None
+    class _FakeExpr:
+        name = "X"
+
+    assert _jc.load_module("deadbeef", "fn_ptr_ext_x", [(0, _FakeExpr())]) is None
+    _jc.store_module("deadbeef", "fn_ptr_ext_x", str(tmp_path), [(0, _FakeExpr())])
+    assert not (tmp_path / "deadbeef.so").exists()
+    assert not (tmp_path / "deadbeef.manifest.json").exists()
+
+
 def test_cache_key_is_deterministic_hex_string():
     """The cache_key on _GextResult is a 16-char hex string (source hash)."""
 

@@ -597,14 +597,30 @@ def getext(
     ]
 
     # ── Cache lookup or build ─────────────────────────────────────────────
+    # Three tiers, cheapest first:
+    #   (1) in-memory dict — same Python process
+    #   (2) on-disk cache — same machine, different process
+    #   (3) cold compile via Cython + cc
     if cache and source_hash in _ext_dict:
         if verbose and underworld3.mpi.rank == 0:
-            print(f"JIT compiled module cached ... {source_hash}", flush=True)
+            print(f"JIT compiled module cached (memory) ... {source_hash}", flush=True)
         module = _ext_dict[source_hash]
     else:
-        if verbose and underworld3.mpi.rank == 0:
-            print(f"JIT compiling new module ... {source_hash}", flush=True)
-        module, _tmpdir = compile_and_load(real_modname, codeguys_final, verbose=verbose)
+        from underworld3.utilities import _jit_cache as _jc
+
+        module = None
+        if cache:
+            module = _jc.load_module(source_hash, real_modname, constants_manifest)
+            if module is not None and verbose and underworld3.mpi.rank == 0:
+                print(f"JIT compiled module cached (disk) ... {source_hash}", flush=True)
+
+        if module is None:
+            if verbose and underworld3.mpi.rank == 0:
+                print(f"JIT compiling new module ... {source_hash}", flush=True)
+            module, tmpdir = compile_and_load(real_modname, codeguys_final, verbose=verbose)
+            if cache:
+                _jc.store_module(source_hash, real_modname, tmpdir, constants_manifest)
+
         if cache:
             _ext_dict[source_hash] = module
 
