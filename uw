@@ -1164,6 +1164,14 @@ worktree_create() {
         echo -e "    ${GREEN}✓${NC} petsc-custom/petsc → main repo (shared)"
     fi
 
+    # .petsc-version — copy (not symlink) so each worktree can pin its own
+    # PETSc version independently.  Initialised from the main repo's current
+    # version; the worktree can later run ./uw petsc switch to diverge.
+    if [ -f "$main_repo/petsc-custom/.petsc-version" ]; then
+        cp "$main_repo/petsc-custom/.petsc-version" "$wt_path/petsc-custom/.petsc-version"
+        echo -e "    ${GREEN}✓${NC} .petsc-version copied ($(cat "$main_repo/petsc-custom/.petsc-version"))"
+    fi
+
     # .pixi-env — copy so ./uw knows which environment to use
     if [ -f "$main_repo/.pixi-env" ]; then
         cp "$main_repo/.pixi-env" "$wt_path/.pixi-env"
