@@ -82,8 +82,19 @@ class SolverBaseClass(uw_object):
 
         if hasattr(self, '_constitutive_model') and self._constitutive_model is not None:
             cm = self._constitutive_model
-            if hasattr(cm, 'flux') and cm.flux is not None and hasattr(cm.flux, 'atoms'):
-                exprs.append(cm.flux)
+            # Check parameter expressions rather than cm.flux — the flux
+            # property triggers tensor contraction which can fail for
+            # some model/solver combinations before setup is complete.
+            if hasattr(cm, 'Parameters'):
+                for attr_name in dir(cm.Parameters):
+                    if attr_name.startswith('_'):
+                        continue
+                    try:
+                        val = getattr(cm.Parameters, attr_name)
+                        if hasattr(val, 'atoms'):
+                            exprs.append(val)
+                    except (AttributeError, TypeError):
+                        pass
 
         # Extract all meshes from all expressions
         foreign_meshes = set()
