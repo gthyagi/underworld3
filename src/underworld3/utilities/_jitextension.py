@@ -653,6 +653,8 @@ def getext(
                     module, tmpdir = compile_and_load(
                         real_modname, codeguys_final, verbose=verbose
                     )
+                    if verbose:
+                        print(f"Location of compiled module: {tmpdir}", flush=True)
                     _jc.store_module(
                         source_hash, real_modname, tmpdir, constants_manifest
                     )
@@ -678,6 +680,10 @@ def getext(
                 module, tmpdir = compile_and_load(
                     real_modname, codeguys_final, verbose=verbose
                 )
+                if verbose and underworld3.mpi.rank == 0:
+                    # Tests in test_0004_pointwise_fns parse this exact prefix
+                    # to find the per-call build directory.
+                    print(f"Location of compiled module: {tmpdir}", flush=True)
                 if cache:
                     _jc.store_module(
                         source_hash, real_modname, tmpdir, constants_manifest
