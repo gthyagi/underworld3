@@ -1164,6 +1164,16 @@ worktree_create() {
         echo -e "    ${GREEN}✓${NC} petsc-custom/petsc → main repo (shared)"
     fi
 
+    # .petsc-version — copy (not symlink) so each worktree can select a
+    # different already-built PETSC_ARCH (e.g. petsc-324-uw-openmpi vs
+    # petsc-325-uw-openmpi).  Built arch directories coexist in the
+    # shared PETSc source tree; .petsc-version just picks which one
+    # the activation script uses for PETSC_ARCH.
+    if [ -f "$main_repo/petsc-custom/.petsc-version" ]; then
+        cp "$main_repo/petsc-custom/.petsc-version" "$wt_path/petsc-custom/.petsc-version"
+        echo -e "    ${GREEN}✓${NC} .petsc-version copied ($(cat "$main_repo/petsc-custom/.petsc-version"))"
+    fi
+
     # .pixi-env — copy so ./uw knows which environment to use
     if [ -f "$main_repo/.pixi-env" ]; then
         cp "$main_repo/.pixi-env" "$wt_path/.pixi-env"
