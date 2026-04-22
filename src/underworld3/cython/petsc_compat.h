@@ -258,3 +258,64 @@ PetscErrorCode UW_DMPlexComputeBdIntegral(DM dm, Vec X,
 
     PetscFunctionReturn(PETSC_SUCCESS);
 }
+
+// Create a sandbox DM for BdIntegral that won't contaminate the
+// original DM's shared DM_Plex caches.
+//
+// DMClone shares DM_Plex by refcount, and DMPlexComputeBdIntegral
+// lazily initialises height-trace FE caches on the shared struct.
+// This corrupts any solver DM cloned from the same mesh.
+//
+// Strategy: DMClone (cheap, shares topology) then rebuild the
+// coordinate field from scratch.  The fresh coordinate field has its
+// own DMField_DS with empty height-trace caches, so the lazy init
+// during BdIntegral writes to the sandbox's caches, not the original's.
+PetscErrorCode UW_DMCreateBdIntegralSandbox(DM src, DM *sandbox)
+{
+    DM            sdm;
+    PetscInt      Nf, i;
+    PetscSection  srcSec;
+    Vec           auxVec;
+
+    PetscFunctionBeginUser;
+
+    // DMClone shares DM_Plex topology, point SF, and labels by reference.
+    // The topology itself is read-only — the problem is the coordinate
+    // DMField's lazily-cached height-trace FEs.  We replace the coordinate
+    // field below so those caches are independent.
+    PetscCall(DMClone(src, &sdm));
+
+    // Rebuild coordinate space from scratch — creates a new coordinate
+    // DMField_DS with empty height-trace caches, independent of src's.
+    // Degree 1 (P1/Q1) matches UW3's mesh coordinate convention.
+    // Signature changed in PETSc 3.25: (dm, degree, localized, project)
+    // vs 3.24: (dm, degree, project, snapFunc)
+#if PETSC_VERSION_GE(3, 25, 0)
+    PetscCall(DMPlexCreateCoordinateSpace(sdm, 1, PETSC_FALSE, PETSC_TRUE));
+#else
+    PetscCall(DMPlexCreateCoordinateSpace(sdm, 1, PETSC_FALSE, NULL));
+#endif
+    PetscCall(UW_DMForceCoordinateField(sdm));
+
+    // Replicate the field layout and section from src so that the
+    // solution vector is compatible with the sandbox's DS.
+    PetscCall(DMGetLocalSection(src, &srcSec));
+    PetscCall(PetscSectionGetNumFields(srcSec, &Nf));
+    for (i = 0; i < Nf; ++i) {
+        PetscObject obj;
+        DMLabel     label;
+        PetscCall(DMGetField(src, i, &label, &obj));
+        PetscCall(DMSetField(sdm, i, label, obj));
+    }
+    PetscCall(DMCreateDS(sdm));
+    PetscCall(DMSetLocalSection(sdm, srcSec));
+
+    // Copy auxiliary data (viscosity, etc.) — just a pointer, no mutation
+    PetscCall(DMGetAuxiliaryVec(src, NULL, 0, 0, &auxVec));
+    if (auxVec) {
+        PetscCall(DMSetAuxiliaryVec(sdm, NULL, 0, 0, auxVec));
+    }
+
+    *sandbox = sdm;
+    PetscFunctionReturn(PETSC_SUCCESS);
+}

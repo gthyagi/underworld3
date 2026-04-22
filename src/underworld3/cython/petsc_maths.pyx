@@ -410,43 +410,46 @@ class BdIntegral:
             self.mesh.vars.values(), verbose=verbose)
         cdef PtrContainer ext = _getext_result.ptrobj
 
-        # Prepare the solution vector
+        # Prepare the solution vector on the original mesh DM
         self.mesh.update_lvec()
         a_global = mesh.dm.getGlobalVec()
         mesh.dm.localToGlobal(self.mesh.lvec, a_global)
 
         cdef Vec cgvec = a_global
-        cdef DM dm_c = mesh.dm
 
-        # Get the DMLabel and label value for the named boundary
+        # Create a sandbox DM via DMClone + fresh coordinate space.
+        # DMPlexComputeBdIntegral lazily initialises height-trace FE caches
+        # on the coordinate DMField, which is shared via DMClone's refcount.
+        # This corrupts solver DMs cloned from the same mesh.  The sandbox
+        # gets its own coordinate field with empty caches, so the lazy init
+        # writes there instead of on the original mesh DM.
+        cdef PetscDM sandbox_dm = NULL
+        CHKERRQ(UW_DMCreateBdIntegralSandbox(
+            (<DM>mesh.dm).dm, &sandbox_dm))
+
+        # Get the boundary label from the sandbox (shared with mesh.dm via DMClone)
         boundary_enum = mesh.boundaries[self.boundary]
         cdef PetscInt label_val = boundary_enum.value
         cdef PetscInt num_vals = 1
+        cdef bytes boundary_bytes = self.boundary.encode('utf-8')
 
-        c_label = mesh.dm.getLabel(self.boundary)
+        cdef PetscDMLabel sandbox_label = NULL
+        CHKERRQ(DMGetLabel(sandbox_dm, boundary_bytes, &sandbox_label))
 
         # Output value
         cdef PetscScalar result = 0.0
 
-        # Label can be None if this boundary has no facets on this process
-        # (normal in parallel) or if the DM doesn't carry the label at all.
-        # The C wrapper handles NULL labels gracefully (contributes 0 to the
-        # MPI reduction so all ranks still participate).
-        cdef PetscDMLabel c_dmlabel = NULL
-        cdef DMLabel dmlabel
-        if c_label:
-            dmlabel = c_label
-            c_dmlabel = dmlabel.dmlabel
-
-        # Call the boundary integral
+        # Call the boundary integral on the SANDBOX DM
         ierr = UW_DMPlexComputeBdIntegral(
-            dm_c.dm, cgvec.vec,
-            c_dmlabel, num_vals, &label_val,
+            sandbox_dm, cgvec.vec,
+            sandbox_label, num_vals, &label_val,
             ext.fns_bd_residual[0],
             &result, NULL
         )
         CHKERRQ(ierr)
 
+        # Clean up sandbox
+        CHKERRQ(DMDestroy(&sandbox_dm))
         mesh.dm.restoreGlobalVec(a_global)
 
         cdef double vald = <double> result
