@@ -674,7 +674,7 @@ def SegmentedSphericalShell(
         )
         Centre = None
 
-    new_mesh.boundary_normals = boundary_normals
+    # boundary_normals deprecated — use mesh.Gamma_P1 for boundary normals
 
     # Full segmented spherical shell: 3 rigid rotation modes
     x, y, z = new_mesh.X
@@ -1094,7 +1094,7 @@ def SegmentedSphericalBall(
         )
         Centre = None
 
-    new_mesh.boundary_normals = boundary_normals
+    # boundary_normals deprecated — use mesh.Gamma_P1 for boundary normals
 
     # Solid sphere: 3 rigid rotation modes
     x, y, z = new_mesh.X

@@ -56,6 +56,62 @@ class SolverBaseClass(uw_object):
         self.petsc_options_prefix = self.name
         self.petsc_options = PETSc.Options(self.petsc_options_prefix)
 
+    def _check_expression_meshes(self):
+        """Check that all MeshVariable symbols in solver expressions
+        belong to this solver's mesh.
+
+        Raises a clear error if variables from a different mesh are
+        found, rather than letting the JIT fail with a cryptic message.
+        """
+        from underworld3.function.expressions import extract_meshes
+
+        solver_mesh = self.mesh
+
+        # Collect all sympy expressions from the solver
+        exprs = []
+
+        if hasattr(self, 'bodyforce') and self.bodyforce is not None:
+            if hasattr(self.bodyforce, 'atoms'):
+                exprs.append(self.bodyforce)
+
+        for bc in getattr(self, 'natural_bcs', []):
+            for attr in ('fn_f', 'fn_F', 'fn_p'):
+                fn = getattr(bc, attr, None)
+                if fn is not None and hasattr(fn, 'atoms'):
+                    exprs.append(fn)
+
+        if hasattr(self, '_constitutive_model') and self._constitutive_model is not None:
+            cm = self._constitutive_model
+            # Check parameter expressions rather than cm.flux — the flux
+            # property triggers tensor contraction which can fail for
+            # some model/solver combinations before setup is complete.
+            if hasattr(cm, 'Parameters'):
+                for attr_name in dir(cm.Parameters):
+                    if attr_name.startswith('_'):
+                        continue
+                    try:
+                        val = getattr(cm.Parameters, attr_name)
+                        if hasattr(val, 'atoms'):
+                            exprs.append(val)
+                    except (AttributeError, TypeError):
+                        pass
+
+        # Extract all meshes from all expressions
+        foreign_meshes = set()
+        for expr in exprs:
+            meshes = extract_meshes(expr)
+            for m in meshes:
+                if m is not solver_mesh:
+                    foreign_meshes.add(m)
+
+        if foreign_meshes:
+            raise ValueError(
+                f"Solver expressions contain MeshVariable symbols from "
+                f"{len(foreign_meshes)} foreign mesh(es). All variables in "
+                f"a solver expression must belong to the solver's mesh. "
+                f"Use var.copy_into() to transfer data before building expressions."
+            )
+
 
         return
 
@@ -484,6 +540,8 @@ class SolverBaseClass(uw_object):
                     debug: bool = False,
                     debug_name: str = None,
                     ):
+
+        self._check_expression_meshes()
 
         if self.is_setup:
             return
@@ -2329,9 +2387,10 @@ class SNES_Vector(SolverBaseClass):
         mesh = self.mesh
         dim = mesh.dim
 
-        # Surface normal components (normalised)
-        Gamma_N = mesh.Gamma_N
-        n = [Gamma_N[i] for i in range(dim)]
+        # Surface normal components — use projected P1 normals by default.
+        # These are smooth, consistently oriented, and converge in 3D.
+        Gamma_P1 = mesh.Gamma_P1
+        n = [Gamma_P1[i] for i in range(dim)]
 
         # Constraint direction: defaults to surface normal
         if direction is not None:
@@ -4006,7 +4065,7 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
     #     BC = namedtuple('EssentialBC', ['components', 'fn', 'boundary', 'boundary_label_val', 'type', 'PETScID'])
     #     self.essential_p_bcs.append(BC(components, sympy_fn, boundary, -1,  'essential', -1))
 
-    def add_nitsche_bc(self, boundary, g=None, direction=None, normal=None, gamma=10.0, theta=1):
+    def add_nitsche_bc(self, boundary, g=None, direction=None, normal=None, gamma=10.0, theta=1, mask=None):
         r"""Add Nitsche weak enforcement of a velocity constraint along a direction.
 
         Nitsche's method provides a variationally consistent alternative to
@@ -4050,6 +4109,11 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
              1: symmetric (default — optimal convergence and solver efficiency)
              0: incomplete (no symmetry term)
             -1: skew-symmetric (unconditionally stable but slower convergence)
+        mask : sympy expression, optional
+            Element-wise mask for one-sided application on internal
+            boundaries. Use a DG MeshVariable that is 1 on the active
+            side and 0 on the inactive side. The mask multiplies all
+            Nitsche terms so that only the active-side cell contributes.
 
         Examples
         --------
@@ -4084,15 +4148,16 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
         mesh = self.mesh
         dim = mesh.dim
 
-        # Surface normal components. By default use normalised PETSc facet normal.
+        # Surface normal components. By default use projected P1 normals
+        # (smooth, consistently oriented, converges in 3D).
         if normal is not None:
             if isinstance(normal, sympy.MatrixBase):
                 n = [normal[i] for i in range(dim)]
             else:
                 n = list(normal)
         else:
-            Gamma_N = mesh.Gamma_N
-            n = [Gamma_N[i] for i in range(dim)]
+            Gamma_P1 = mesh.Gamma_P1
+            n = [Gamma_P1[i] for i in range(dim)]
 
         # Constraint direction: defaults to surface normal
         if direction is not None:
@@ -4115,7 +4180,11 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
 
         # n.d — how much of the constraint direction is normal to the surface
         # Controls pressure coupling (vanishes when d is purely tangential)
+        # Use Abs to ensure sign-consistent pressure coupling regardless
+        # of whether PETSc face normal points inward or outward
         n_dot_d = sum(n[i] * d[i] for i in range(dim))
+        # n_dot_d is always positive when n = d (it's |n|²),
+        # so sign of PETSc face normal doesn't affect this term
 
         # Mesh size (global estimate via UWexpression constant)
         h = uw.function.expression(
@@ -4163,6 +4232,17 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
         # Enforces continuity: (n.d)(u.d - g) on boundary
         # Vanishes when constraint direction is purely tangential
         fn_p = sympy.Matrix([n_dot_d * constraint]).as_immutable()
+
+        # Apply mask for one-sided internal boundary application
+        if mask is not None:
+            if hasattr(mask, 'sym'):
+                mask_expr = mask.sym[0, 0]
+            else:
+                mask_expr = mask
+            fn_f = (fn_f * mask_expr).as_immutable()
+            if fn_F is not None:
+                fn_F = (fn_F * mask_expr).as_immutable()
+            fn_p = (fn_p * mask_expr).as_immutable()
 
         # Create the NaturalBC with all terms populated
         BC = namedtuple('NaturalBC', [
@@ -5422,9 +5502,72 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
 
             self._attach_stokes_nullspace()
 
+        # Apply region DS if active_region was set
+        if hasattr(self, '_inactive_region_label') and self._inactive_region_label is not None:
+            self._setup_region_ds()
+
         self.is_setup = True
         self.constitutive_model._solver_is_setup = True
 
+    def set_active_region(self, region_label_name, region_label_value):
+        """Configure the solver to assemble only on cells in the given region.
+
+        Cells NOT in the specified region get a trivial DS (no volume
+        contributions) and their DOFs should be pinned via Dirichlet BCs.
+
+        Parameters
+        ----------
+        region_label_name : str
+            DM label name for the INACTIVE region (e.g., "Outer").
+        region_label_value : int
+            Label stratum value for the inactive region (e.g., 102).
+        """
+        self._inactive_region_label = region_label_name
+        self._inactive_region_value = region_label_value
+        self.is_setup = False
+
+    def _setup_region_ds(self):
+        """Register a trivial DS for the inactive region.
+
+        After _setup_solver populates the default DS with Stokes weak forms,
+        this creates an empty DS for cells in the inactive region. PETSc's
+        DMGetCellDS dispatches per-cell: inactive cells get the empty DS
+        (zero volume contributions), active cells get the default DS.
+        """
+        cdef DM c_dm = self.dm
+        cdef DS ds_default = self.dm.getDS()
+        cdef DMLabel c_label
+
+        # Get the inactive region label
+        label_name = self._inactive_region_label
+        bc_label = self.dm.getLabel(label_name)
+        if bc_label is None:
+            raise ValueError(f"DM label '{label_name}' not found")
+        c_label = bc_label
+
+        # Create a new DS with the same fields but no weak forms
+        cdef DS air_ds = PETSc.DS().create(comm=self.dm.comm)
+
+        # Copy field discretisations from the DM's fields
+        cdef PetscInt nfields
+        nfields = self.dm.getNumFields()
+
+        for f in range(nfields):
+            fe, _ = self.dm.getField(f)
+            air_ds.setDiscretisation(f, fe)
+
+        # Set coordinate dimension to match the default DS
+        CHKERRQ( PetscDSSetCoordinateDimension(air_ds.ds, self.mesh.dim) )
+
+        # Register the empty DS for the inactive region
+        CHKERRQ( DMSetRegionDS(c_dm.dm, c_label.dmlabel, NULL, air_ds.ds, NULL) )
+
+        # Copy to coarse levels too
+        for coarse_dm in self.dm_hierarchy:
+            self.dm.copyDS(coarse_dm)
+
+        if uw.mpi.rank == 0 and self.verbose:
+            print(f"Region DS: inactive region '{label_name}' gets trivial DS", flush=True)
 
     @timing.routine_timer_decorator
     def solve(self,

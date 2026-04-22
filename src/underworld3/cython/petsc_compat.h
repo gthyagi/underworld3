@@ -1,5 +1,19 @@
 #include "petsc.h"
 
+// Version-compatible wrapper for DMPlexFilter.
+// PETSc 3.25 added an MPI_Comm argument before the SF pointer.
+static inline PetscErrorCode UW_DMPlexFilter(DM dm, DMLabel label, PetscInt value,
+                                             PetscBool useClosure, PetscBool ignoreClosure,
+                                             DM *subdm)
+{
+#if PETSC_VERSION_GE(3, 25, 0)
+    return DMPlexFilter(dm, label, value, useClosure, ignoreClosure,
+                        PetscObjectComm((PetscObject)dm), NULL, subdm);
+#else
+    return DMPlexFilter(dm, label, value, useClosure, ignoreClosure, NULL, subdm);
+#endif
+}
+
 // Add 1 boundary condition at a time (1 boundary, 1 component etc etc)
 
 PetscErrorCode PetscDSAddBoundary_UW(DM dm,

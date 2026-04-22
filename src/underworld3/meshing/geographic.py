@@ -385,7 +385,7 @@ def RegionalSphericalBox(
             sympy.Piecewise((1.0, new_mesh.CoordinateSystem.R[0] > 0.99 * radiusOuter), (0.0, True))
         )
 
-    new_mesh.boundary_normals = boundary_normals
+    # boundary_normals deprecated — use mesh.Gamma_P1 for boundary normals
 
     return new_mesh
 
@@ -823,6 +823,6 @@ def RegionalGeographicBox(
         East = new_mesh.CoordinateSystem.geo.unit_east  # Eastward at east boundary
         West = new_mesh.CoordinateSystem.geo.unit_west  # Westward at west boundary
 
-    new_mesh.boundary_normals = boundary_normals
+    # boundary_normals deprecated — use mesh.Gamma_P1 for boundary normals
 
     return new_mesh

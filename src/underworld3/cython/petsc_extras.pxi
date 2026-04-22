@@ -70,7 +70,17 @@ cdef extern from "petsc.h" nogil:
     PetscErrorCode PetscDSAddBdResidual( PetscDS, PetscInt, PetscDSBdResidualFn, PetscDSBdResidualFn )
 
     PetscErrorCode DMPlexCreateSubmesh(PetscDM, PetscDMLabel label, PetscInt value, PetscBool markedFaces, PetscDM *subdm)
+    PetscErrorCode UW_DMPlexFilter(PetscDM, PetscDMLabel, PetscInt, PetscBool, PetscBool, PetscDM *)
     PetscErrorCode DMGetLabel(PetscDM dm, const char name[], PetscDMLabel *label)
+
+    # Region DS — per-cell discrete system dispatch
+    PetscErrorCode DMSetRegionDS(PetscDM dm, PetscDMLabel label, PetscIS fields, PetscDS ds, PetscDS dsIn)
+    PetscErrorCode DMGetRegionDS(PetscDM dm, PetscDMLabel label, PetscIS *fields, PetscDS *ds, PetscDS *dsIn)
+    PetscErrorCode DMGetRegionNumDS(PetscDM dm, PetscInt num, PetscDMLabel *label, PetscIS *fields, PetscDS *ds, PetscDS *dsIn)
+    PetscErrorCode DMSetRegionNumDS(PetscDM dm, PetscInt num, PetscDMLabel label, PetscIS fields, PetscDS ds, PetscDS dsIn)
+    PetscErrorCode DMGetNumDS(PetscDM dm, PetscInt *num)
+    PetscErrorCode DMGetCellDS(PetscDM dm, PetscInt point, PetscDS *ds, PetscDS *dsIn)
+    PetscErrorCode PetscDSSetCoordinateDimension(PetscDS ds, PetscInt dim)
 
     # These do not appear to be in the 3.17.2 release
     PetscErrorCode DMProjectCoordinates(PetscDM dm, PetscFE disc)
