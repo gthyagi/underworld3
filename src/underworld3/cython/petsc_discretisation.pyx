@@ -129,10 +129,8 @@ def petsc_dm_filter_by_label(incoming_dm, label_name, label_value):
         if dmlabel == NULL:
             raise ValueError(f"Label '{label_name}' not found on DM")
 
-        # DMPlexFilter(dm, label, value, useClosure, ignoreClosure, &sf, &subdm)
-        # useClosure=True: include closure of matching cells
-        # Pass NULL for sf (we don't need the point mapping yet)
-        CHKERRQ( DMPlexFilter(c_dm.dm, dmlabel, value, PETSC_TRUE, PETSC_FALSE, NULL, &subdm.dm) )
+        # UW_DMPlexFilter handles the PETSc version difference (3.25 added MPI_Comm arg)
+        CHKERRQ( UW_DMPlexFilter(c_dm.dm, dmlabel, value, PETSC_TRUE, PETSC_FALSE, &subdm.dm) )
 
         return subdm
 

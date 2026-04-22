@@ -70,7 +70,7 @@ cdef extern from "petsc.h" nogil:
     PetscErrorCode PetscDSAddBdResidual( PetscDS, PetscInt, PetscDSBdResidualFn, PetscDSBdResidualFn )
 
     PetscErrorCode DMPlexCreateSubmesh(PetscDM, PetscDMLabel label, PetscInt value, PetscBool markedFaces, PetscDM *subdm)
-    PetscErrorCode DMPlexFilter(PetscDM, PetscDMLabel, PetscInt, PetscBool, PetscBool, void *, PetscDM *)
+    PetscErrorCode UW_DMPlexFilter(PetscDM, PetscDMLabel, PetscInt, PetscBool, PetscBool, PetscDM *)
     PetscErrorCode DMGetLabel(PetscDM dm, const char name[], PetscDMLabel *label)
 
     # Region DS — per-cell discrete system dispatch
