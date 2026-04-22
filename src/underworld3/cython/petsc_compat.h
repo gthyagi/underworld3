@@ -287,7 +287,13 @@ PetscErrorCode UW_DMCreateBdIntegralSandbox(DM src, const char labelName[],
 
     // Rebuild coordinate space from scratch — creates a new coordinate
     // DMField_DS with empty height-trace caches, independent of src's.
+    // Signature changed in PETSc 3.25: (dm, degree, localized, project)
+    // vs 3.24: (dm, degree, project, snapFunc)
+#if PETSC_VERSION_GE(3, 25, 0)
     PetscCall(DMPlexCreateCoordinateSpace(sdm, 1, PETSC_FALSE, PETSC_TRUE));
+#else
+    PetscCall(DMPlexCreateCoordinateSpace(sdm, 1, PETSC_FALSE, NULL));
+#endif
     PetscCall(UW_DMForceCoordinateField(sdm));
 
     // Copy fields + DS from src so the section layout matches
