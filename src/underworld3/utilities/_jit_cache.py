@@ -21,6 +21,8 @@ gating and ``flock``-based inter-process synchronisation in this same module.
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import importlib.machinery
 import json
 import os
@@ -53,6 +55,37 @@ def _so_path(cache_dir: Path, source_hash: str) -> Path:
 
 def _manifest_path(cache_dir: Path, source_hash: str) -> Path:
     return cache_dir / f"{source_hash}.manifest.json"
+
+
+def _lock_path(cache_dir: Path, source_hash: str) -> Path:
+    return cache_dir / f".{source_hash}.lock"
+
+
+@contextlib.contextmanager
+def _file_lock(path: Path):
+    """Per-hash advisory lock so two processes don't race on the same entry.
+
+    Uses :func:`fcntl.flock` (POSIX). The lockfile is created if missing
+    and kept around — wiping the cache directory removes it cleanly.
+    Best-effort: if flock isn't supported (rare on POSIX), the body still
+    runs; correctness then relies on the atomic ``os.replace`` in
+    :func:`store_module`.
+    """
+    fd = None
+    try:
+        fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        except OSError:
+            pass
+        yield
+    finally:
+        if fd is not None:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            os.close(fd)
 
 
 def _manifest_from_constants(constants_manifest):
@@ -151,35 +184,44 @@ def store_module(source_hash: str, modname: str, tmpdir, constants_manifest) -> 
         return
     src_so = so_files[0]
     dst_so = _so_path(cache_dir, source_hash)
-
-    try:
-        tf = tempfile.NamedTemporaryFile(
-            dir=str(cache_dir), prefix=".inprogress_", suffix=".so", delete=False
-        )
-        tf_path = Path(tf.name)
-        tf.close()
-        shutil.copy2(src_so, tf_path)
-        os.replace(tf_path, dst_so)
-    except OSError:
-        return
-
-    manifest = {
-        "version": MANIFEST_VERSION,
-        "modname": modname,
-        "constants": _manifest_from_constants(constants_manifest),
-    }
     manifest_path = _manifest_path(cache_dir, source_hash)
-    try:
-        with tempfile.NamedTemporaryFile(
-            dir=str(cache_dir),
-            prefix=".inprogress_",
-            suffix=".json",
-            delete=False,
-            mode="w",
-            encoding="utf-8",
-        ) as tf:
-            json.dump(manifest, tf)
+    lock_path = _lock_path(cache_dir, source_hash)
+
+    # flock prevents a concurrent process (different mpirun, etc.) from
+    # interleaving its write with ours. The recheck-inside-lock pattern
+    # avoids redundant copies when another process has already populated
+    # the entry while we were waiting on the lock.
+    with _file_lock(lock_path):
+        if dst_so.exists() and manifest_path.exists():
+            return
+
+        try:
+            tf = tempfile.NamedTemporaryFile(
+                dir=str(cache_dir), prefix=".inprogress_", suffix=".so", delete=False
+            )
             tf_path = Path(tf.name)
-        os.replace(tf_path, manifest_path)
-    except OSError:
-        return
+            tf.close()
+            shutil.copy2(src_so, tf_path)
+            os.replace(tf_path, dst_so)
+        except OSError:
+            return
+
+        manifest = {
+            "version": MANIFEST_VERSION,
+            "modname": modname,
+            "constants": _manifest_from_constants(constants_manifest),
+        }
+        try:
+            with tempfile.NamedTemporaryFile(
+                dir=str(cache_dir),
+                prefix=".inprogress_",
+                suffix=".json",
+                delete=False,
+                mode="w",
+                encoding="utf-8",
+            ) as tf:
+                json.dump(manifest, tf)
+                tf_path = Path(tf.name)
+            os.replace(tf_path, manifest_path)
+        except OSError:
+            return

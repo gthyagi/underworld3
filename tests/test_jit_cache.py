@@ -215,6 +215,66 @@ def test_disk_cache_disabled_by_env_var(tmp_path, monkeypatch):
     assert not (tmp_path / "deadbeef.manifest.json").exists()
 
 
+def test_abi_salt_change_invalidates_cache(tmp_path, monkeypatch):
+    """Mutating the ABI salt must produce a different cache key and miss."""
+    from underworld3.utilities import _jitextension as _jitext
+
+    monkeypatch.setenv("UW_JIT_CACHE_DIR", str(tmp_path))
+    _jitext._ext_dict.clear()
+
+    # Monkey-patch the salt to a known value, solve, capture key
+    monkeypatch.setattr(_jitext, "_abi_salt", lambda: "salt-A")
+
+    mesh = uw.meshing.UnstructuredSimplexBox(cellSize=0.3)
+    u = uw.discretisation.MeshVariable("u_abi", mesh, 1, degree=2)
+    K = uw.expression("K_abi", 1.0)
+
+    poisson = uw.systems.Poisson(mesh, u_Field=u)
+    poisson.constitutive_model = uw.constitutive_models.DiffusionModel
+    poisson.constitutive_model.Parameters.diffusivity = K
+    poisson.f = 0.0
+    poisson.add_dirichlet_bc(0.0, "Top")
+    poisson.add_dirichlet_bc(1.0, "Bottom")
+    poisson.solve()
+    key_A = poisson._current_jit_cache_key
+
+    # Change the salt, force a fresh solver, expect a different key
+    _jitext._ext_dict.clear()
+    monkeypatch.setattr(_jitext, "_abi_salt", lambda: "salt-B")
+    poisson.is_setup = False
+    poisson.solve()
+    key_B = poisson._current_jit_cache_key
+
+    assert key_A != key_B, (
+        f"Different ABI salts must produce different cache keys; both got {key_A}"
+    )
+
+    del poisson
+
+
+def test_store_module_creates_lockfile(tmp_path, monkeypatch):
+    """store_module must create the per-hash lockfile next to the entry."""
+    from underworld3.utilities import _jit_cache as _jc
+
+    monkeypatch.setenv("UW_JIT_CACHE_DIR", str(tmp_path))
+
+    # Build a fake "compiled" tmpdir with a placeholder .so so store_module
+    # doesn't need to invoke cc.
+    fake_tmp = tmp_path / "fake_build"
+    fake_tmp.mkdir()
+    fake_so = fake_tmp / "fn_ptr_ext_xyz.so"
+    fake_so.write_bytes(b"not a real .so but enough for the copy step")
+
+    class _FakeExpr:
+        name = "K_lock"
+
+    _jc.store_module("abc1234567abcdef", "fn_ptr_ext_xyz", str(fake_tmp), [(0, _FakeExpr())])
+
+    # Lockfile uses the leading-dot pattern documented in _lock_path
+    lock = tmp_path / ".abc1234567abcdef.lock"
+    assert lock.exists(), f"lockfile not created: {lock}"
+
+
 def test_cache_key_is_deterministic_hex_string():
     """The cache_key on _GextResult is a 16-char hex string (source hash)."""
 

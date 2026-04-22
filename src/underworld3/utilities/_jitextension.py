@@ -584,6 +584,21 @@ def getext(
         (canonical_source + "\n---\n" + _abi_salt()).encode("utf-8")
     ).hexdigest()[:16]
 
+    # Determinism check: all ranks must agree on the hash. A mismatch means
+    # generate_c_source isn't deterministic across ranks (typically caused
+    # by set/dict-iteration order leaking into the emitted C). Caching
+    # cannot work correctly if ranks disagree, so fail loudly rather than
+    # let stale entries propagate.
+    if underworld3.mpi.size > 1:
+        all_hashes = underworld3.mpi.comm.allgather(source_hash)
+        if any(h != source_hash for h in all_hashes):
+            raise RuntimeError(
+                f"JIT C-source hash differs across MPI ranks: {set(all_hashes)}. "
+                f"This indicates non-determinism in generate_c_source — likely "
+                f"a set or dict whose iteration order leaks into the C output. "
+                f"Treating this as a hard error since cache reuse would be unsound."
+            )
+
     # Derive the real modname/randstr from the hash — same source ⇒ same
     # compiled artefact, different sources ⇒ disjoint symbol namespaces.
     real_modname = f"fn_ptr_ext_{source_hash}"

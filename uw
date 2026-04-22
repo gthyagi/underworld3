@@ -272,6 +272,39 @@ run_build() {
         fi
     fi
 
+    # JIT cache env-fingerprint check.
+    #
+    # The on-disk JIT cache (~/.cache/underworld3/jit/) holds compiled .so
+    # files keyed by C-source hash + (PETSc, UW3) version salt. Anything
+    # outside that salt — compiler identity, CFLAGS, Python ABI, pixi env —
+    # could silently invalidate cached binaries (e.g. switching pixi env
+    # from default to amr-dev links against different libc++ shims).
+    #
+    # We detect such changes by writing an env fingerprint to the cache dir
+    # and wiping the cache on mismatch.
+    local jit_cache_dir="${UW_JIT_CACHE_DIR:-$HOME/.cache/underworld3/jit}"
+    local fp_file="$jit_cache_dir/.env-fingerprint"
+    local cc_id python_id pixi_env_id
+    cc_id=$(${CC:-cc} --version 2>/dev/null | head -1)
+    python_id=$($PIXI run -e "$env" python -c "import sys; print(sys.implementation.name, sys.version)" 2>/dev/null)
+    pixi_env_id="$env"
+    local fp
+    fp=$(printf '%s\nCC=%s\nCFLAGS=%s\nPYTHON=%s\nPIXI_ENV=%s\n' \
+            "fingerprint-v1" "$cc_id" "${CFLAGS:-}" "$python_id" "$pixi_env_id" \
+            | shasum -a 256 | cut -c1-32)
+    if [ -f "$fp_file" ]; then
+        local prev_fp
+        prev_fp=$(cat "$fp_file" 2>/dev/null)
+        if [ "$prev_fp" != "$fp" ]; then
+            echo "  Compiler / Python / pixi env changed; wiping JIT cache..."
+            find "$jit_cache_dir" -maxdepth 1 \
+                \( -name '*.so' -o -name '*.manifest.json' -o -name '.*.lock' \
+                   -o -name '.inprogress_*' \) -delete 2>/dev/null
+        fi
+    fi
+    mkdir -p "$jit_cache_dir"
+    echo "$fp" > "$fp_file"
+
     echo ""
     echo -e "${GREEN}${BOLD}Build complete!${NC}"
     echo ""
