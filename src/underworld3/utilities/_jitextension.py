@@ -615,7 +615,7 @@ def getext(
     # Three tiers, cheapest first:
     #   (1) in-memory dict — same Python process
     #   (2) on-disk cache — same machine, different process
-    #   (3) cold compile via Cython + cc
+    #   (3) cold compile via Cython + cc (rank 0 only when MPI > 1)
     if cache and source_hash in _ext_dict:
         if verbose and underworld3.mpi.rank == 0:
             print(f"JIT compiled module cached (memory) ... {source_hash}", flush=True)
@@ -623,6 +623,8 @@ def getext(
     else:
         from underworld3.utilities import _jit_cache as _jc
 
+        # Disk lookup is cheap and rank-local — every rank checks
+        # independently. UW assumes a shared filesystem for the cache dir.
         module = None
         if cache:
             module = _jc.load_module(source_hash, real_modname, constants_manifest)
@@ -630,11 +632,56 @@ def getext(
                 print(f"JIT compiled module cached (disk) ... {source_hash}", flush=True)
 
         if module is None:
-            if verbose and underworld3.mpi.rank == 0:
-                print(f"JIT compiling new module ... {source_hash}", flush=True)
-            module, tmpdir = compile_and_load(real_modname, codeguys_final, verbose=verbose)
-            if cache:
-                _jc.store_module(source_hash, real_modname, tmpdir, constants_manifest)
+            # Cold compile path. With MPI, only rank 0 invokes cc and
+            # publishes; the other ranks barrier-wait and then load the
+            # freshly-published .so from disk. This avoids the N× cc
+            # storm on cold-start under mpirun -np N.
+            #
+            # Falls back to "every rank compiles" only when the disk
+            # cache is disabled (no way to share a build), in which
+            # case the wasted cc cost is on the user's chosen path.
+            multi_rank = underworld3.mpi.size > 1
+            disk_enabled = cache and _jc.get_cache_dir() is not None
+
+            if multi_rank and disk_enabled:
+                if underworld3.mpi.rank == 0:
+                    if verbose:
+                        print(
+                            f"JIT compiling new module on rank 0 ... {source_hash}",
+                            flush=True,
+                        )
+                    module, tmpdir = compile_and_load(
+                        real_modname, codeguys_final, verbose=verbose
+                    )
+                    _jc.store_module(
+                        source_hash, real_modname, tmpdir, constants_manifest
+                    )
+                # Synchronisation point: rank 0 has now published the
+                # entry; other ranks may load it.
+                underworld3.mpi.comm.Barrier()
+                if underworld3.mpi.rank != 0:
+                    module = _jc.load_module(
+                        source_hash, real_modname, constants_manifest
+                    )
+                    if module is None:
+                        # Defensive: rank-0 publish failed (e.g. write
+                        # error). Fall back to a local compile so this
+                        # rank is at least correct, even if wasteful.
+                        module, _tmpdir = compile_and_load(
+                            real_modname, codeguys_final, verbose=verbose
+                        )
+            else:
+                if verbose and underworld3.mpi.rank == 0:
+                    print(
+                        f"JIT compiling new module ... {source_hash}", flush=True
+                    )
+                module, tmpdir = compile_and_load(
+                    real_modname, codeguys_final, verbose=verbose
+                )
+                if cache:
+                    _jc.store_module(
+                        source_hash, real_modname, tmpdir, constants_manifest
+                    )
 
         if cache:
             _ext_dict[source_hash] = module
