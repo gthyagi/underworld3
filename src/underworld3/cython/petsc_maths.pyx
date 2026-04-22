@@ -417,22 +417,21 @@ class BdIntegral:
 
         cdef Vec cgvec = a_global
 
-        # Create a sandbox DM that is topologically identical to mesh.dm
-        # but has an independent DM_Plex struct.  DMPlexComputeBdIntegral
-        # mutates shared DM_Plex caches (height-trace FEs, closure indices)
-        # which corrupts solver DMs that were cloned from the same mesh.
-        # Running the integral on a disposable sandbox avoids this.
+        # Create a sandbox DM via DMClone + fresh coordinate space.
+        # DMPlexComputeBdIntegral lazily initialises height-trace FE caches
+        # on the coordinate DMField, which is shared via DMClone's refcount.
+        # This corrupts solver DMs cloned from the same mesh.  The sandbox
+        # gets its own coordinate field with empty caches, so the lazy init
+        # writes there instead of on the original mesh DM.
         cdef PetscDM sandbox_dm = NULL
-        cdef bytes boundary_bytes = self.boundary.encode('utf-8')
         CHKERRQ(UW_DMCreateBdIntegralSandbox(
-            (<DM>mesh.dm).dm, boundary_bytes, &sandbox_dm))
+            (<DM>mesh.dm).dm, &sandbox_dm))
 
-        # Get the label from the sandbox DM
-        cdef PetscDMLabel c_dmlabel = NULL
-        cdef DMLabel dmlabel
+        # Get the boundary label from the sandbox (shared with mesh.dm via DMClone)
         boundary_enum = mesh.boundaries[self.boundary]
         cdef PetscInt label_val = boundary_enum.value
         cdef PetscInt num_vals = 1
+        cdef bytes boundary_bytes = self.boundary.encode('utf-8')
 
         cdef PetscDMLabel sandbox_label = NULL
         CHKERRQ(DMGetLabel(sandbox_dm, boundary_bytes, &sandbox_label))

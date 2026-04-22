@@ -270,8 +270,7 @@ PetscErrorCode UW_DMPlexComputeBdIntegral(DM dm, Vec X,
 // coordinate field from scratch.  The fresh coordinate field has its
 // own DMField_DS with empty height-trace caches, so the lazy init
 // during BdIntegral writes to the sandbox's caches, not the original's.
-PetscErrorCode UW_DMCreateBdIntegralSandbox(DM src, const char labelName[],
-                                            DM *sandbox)
+PetscErrorCode UW_DMCreateBdIntegralSandbox(DM src, DM *sandbox)
 {
     DM            sdm;
     PetscInt      Nf, i;
@@ -280,13 +279,15 @@ PetscErrorCode UW_DMCreateBdIntegralSandbox(DM src, const char labelName[],
 
     PetscFunctionBeginUser;
 
-    // DMClone: shares DM_Plex topology, point SF, labels by reference.
-    // This is fine — the topology is read-only.  The corruption is in
-    // the coordinate DMField's cached height-trace FEs, which we replace.
+    // DMClone shares DM_Plex topology, point SF, and labels by reference.
+    // The topology itself is read-only — the problem is the coordinate
+    // DMField's lazily-cached height-trace FEs.  We replace the coordinate
+    // field below so those caches are independent.
     PetscCall(DMClone(src, &sdm));
 
     // Rebuild coordinate space from scratch — creates a new coordinate
     // DMField_DS with empty height-trace caches, independent of src's.
+    // Degree 1 (P1/Q1) matches UW3's mesh coordinate convention.
     // Signature changed in PETSc 3.25: (dm, degree, localized, project)
     // vs 3.24: (dm, degree, project, snapFunc)
 #if PETSC_VERSION_GE(3, 25, 0)
@@ -296,7 +297,8 @@ PetscErrorCode UW_DMCreateBdIntegralSandbox(DM src, const char labelName[],
 #endif
     PetscCall(UW_DMForceCoordinateField(sdm));
 
-    // Copy fields + DS from src so the section layout matches
+    // Replicate the field layout and section from src so that the
+    // solution vector is compatible with the sandbox's DS.
     PetscCall(DMGetLocalSection(src, &srcSec));
     PetscCall(PetscSectionGetNumFields(srcSec, &Nf));
     for (i = 0; i < Nf; ++i) {
