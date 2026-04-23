@@ -1653,10 +1653,10 @@ class Mesh(Stateful, uw_object):
         # Invalidate projected boundary normals (rebuilt lazily on access)
         self._projected_normals = None
 
-        # TODO(BUG): issue #130 — refill the coord cache for every already-
-        # registered variable. Variables created before this rebuild would
-        # otherwise have their cache entry (from __init__) wiped above and
-        # refill lazily from rank-local code paths (rbf_interpolate), which
+        # BUGFIX(#130): refill the coord cache for every already-registered
+        # variable. Variables created before this rebuild would otherwise
+        # have their cache entry (from __init__) wiped above and refill
+        # lazily from rank-local code paths (rbf_interpolate), which
         # deadlocks when the collectives inside _get_coords_for_basis are
         # reached by only a subset of ranks.
         for _var in list(self.vars.values()):
@@ -2733,6 +2733,12 @@ class Mesh(Stateful, uw_object):
 
         dmnew.restoreGlobalVec(coordsNewG)
         dmnew.restoreLocalVec(coordsNewL)
+        # Clean up the PETSc interpolation objects built above. Without this
+        # they accumulate until Python GC runs — noticeable in long adapt
+        # loops that re-fill the coord cache per variable.
+        matInterp.destroy()
+        if vecScale is not None:
+            vecScale.destroy()
         dmnew.destroy()
         dmfe.destroy()
 

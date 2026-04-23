@@ -27,12 +27,12 @@ from underworld3.function import expression
 pytestmark = [
     pytest.mark.level_2,
     pytest.mark.tier_a,
-    pytest.mark.mpi(min_size=2),
+    pytest.mark.mpi(min_size=4),
     pytest.mark.timeout(60),
 ]
 
 
-@pytest.mark.mpi(min_size=2)
+@pytest.mark.mpi(min_size=4)
 def test_ve_stokes_first_solve_does_not_deadlock():
     """
     First VE_Stokes.solve() must complete under MPI on a partition-sensitive

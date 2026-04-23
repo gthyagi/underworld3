@@ -388,8 +388,8 @@ class _BaseMeshVariable(Stateful, uw_object):
         self.mesh.vars[self.clean_name] = self
         self._setup_ds()
 
-        # TODO(BUG): issue #130 — pre-populate the mesh's coordinate cache
-        # for this variable's basis. mesh._get_coords_for_basis contains MPI
+        # BUGFIX(#130): pre-populate the mesh's coordinate cache for this
+        # variable's basis. mesh._get_coords_for_basis contains MPI
         # collectives (DMClone, createInterpolation, globalToLocal) that
         # deadlock when triggered lazily from rank-local code paths (e.g.
         # rbf_interpolate inside global_evaluate_nd's per-particle loop):
