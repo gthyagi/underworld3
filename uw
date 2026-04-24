@@ -42,24 +42,57 @@ get_env() {
     fi
 }
 
+petsc_version_short() {
+    # Read active PETSc version from .petsc-version, or detect from checkout.
+    local ver_file="$SCRIPT_DIR/petsc-custom/.petsc-version"
+    if [ -f "$ver_file" ]; then
+        cat "$ver_file" | tr -d '[:space:]'
+        return
+    fi
+    # Detect from git tag
+    if [ -d "$PETSC_CUSTOM/.git" ]; then
+        local tag
+        tag=$(cd "$PETSC_CUSTOM" && git describe --tags --abbrev=0 2>/dev/null || echo "")
+        if [ -n "$tag" ]; then
+            echo "$tag" | sed -E 's/^v([0-9]+)\.([0-9]+).*/\1\2/'
+            return
+        fi
+    fi
+    echo "324"  # default
+}
+
 petsc_arch_for_env() {
-    # Derive the PETSC_ARCH from the environment name.
-    # Primary AMR envs (amr, amr-runtime, amr-dev) use platform-default MPI.
-    # Override envs (amr-mpich*, amr-openmpi*) force a specific MPI.
+    # Derive the PETSC_ARCH from the environment name and active PETSc version.
+    # Format: petsc-{version}-uw-{mpi}  (e.g. petsc-324-uw-openmpi)
     local env="$1"
+    local ver=$(petsc_version_short)
+    local mpi=""
+
     case "$env" in
-        amr-mpich*)   echo "petsc-4-uw-mpich" ;;
-        amr-openmpi*) echo "petsc-4-uw-openmpi" ;;
+        amr-mpich*)   mpi="mpich" ;;
+        amr-openmpi*) mpi="openmpi" ;;
         amr*)
             # Platform-default MPI
             if [[ "$(uname -s)" == "Darwin" ]]; then
-                echo "petsc-4-uw-openmpi"
+                mpi="openmpi"
             else
-                echo "petsc-4-uw-mpich"
+                mpi="mpich"
             fi
             ;;
-        *)            echo "" ;;  # conda-forge, no custom PETSc
+        *)            echo ""; return ;;  # conda-forge, no custom PETSc
     esac
+
+    # Check for versioned arch first, fall back to legacy unversioned
+    local versioned="petsc-${ver}-uw-${mpi}"
+    local legacy="petsc-4-uw-${mpi}"
+    if [ -d "$PETSC_CUSTOM/${versioned}" ]; then
+        echo "${versioned}"
+    elif [ -d "$PETSC_CUSTOM/${legacy}" ]; then
+        echo "${legacy}"
+    else
+        # No build exists yet — return the versioned name for new builds
+        echo "${versioned}"
+    fi
 }
 
 petsc_built() {
@@ -126,7 +159,7 @@ run_build() {
         # Step 2: Check/build petsc4py
         if ! petsc4py_installed "$env"; then
             echo "  Installing petsc4py for $env..."
-            $PIXI run -e "$env" pip install "$PETSC_CUSTOM/src/binding/petsc4py" --no-build-isolation || {
+            $PIXI run -e "$env" pip install "$PETSC_CUSTOM/src/binding/petsc4py" --no-build-isolation --no-cache-dir || {
                 echo -e "${YELLOW}petsc4py build failed${NC}"
                 exit 1
             }
@@ -167,13 +200,38 @@ run_build() {
     echo "$current_target" > "$petsc_marker"
 
     echo "  Building underworld3..."
+    # Determine the ACTUAL site-packages that Python will search.
+    # pip may resolve a different path (e.g. through worktree symlinks),
+    # so we ask Python directly and install with --target.
+    local site_packages
+    site_packages=$($PIXI run -e "$env" python -c "import site; print(site.getsitepackages()[0])" 2>/dev/null)
+    if [ -z "$site_packages" ]; then
+        echo -e "${YELLOW}Could not determine site-packages path${NC}"
+        exit 1
+    fi
+
+    # Remove any stale editable install markers (pip install -e leaves .pth files
+    # that redirect imports to the source tree, breaking environment isolation)
+    find "$site_packages" -maxdepth 1 -name "__editable__*underworld*" -delete 2>/dev/null
+
+    # Remove any stale .so from the source tree (left by editable installs)
+    find "$SCRIPT_DIR/src/underworld3" -name "*.so" -delete 2>/dev/null
+
     # --no-cache-dir: UW3 is always version 0.0.0, so pip's wheel cache
     # treats every build as "already cached" and silently reuses stale code.
-    # --force-reinstall: pip also skips reinstalling .py files if it thinks
-    # the package is already installed at the same version. This ensures
-    # all source files (not just compiled .pyx) are copied to site-packages.
-    $PIXI run -e "$env" pip install . --no-build-isolation --no-cache-dir --force-reinstall || {
+    # --target: install to where Python ACTUALLY looks, not where pip thinks.
+    # NEVER use -e (editable) — it breaks worktree and environment isolation.
+    $PIXI run -e "$env" pip install . --no-build-isolation --no-cache-dir \
+        --upgrade --target="$site_packages" || {
         echo -e "${YELLOW}underworld3 build failed${NC}"
+        exit 1
+    }
+
+    # Verify the install is importable
+    $PIXI run -e "$env" python -c "import underworld3" 2>/dev/null || {
+        echo -e "${YELLOW}underworld3 installed but cannot be imported!${NC}"
+        echo "  site-packages: $site_packages"
+        echo "  Check for stale .pth files or .so mismatches."
         exit 1
     }
 
@@ -214,11 +272,98 @@ run_build() {
         fi
     fi
 
+    # JIT cache env-fingerprint check.
+    #
+    # The on-disk JIT cache (~/.cache/underworld3/jit/) holds compiled .so
+    # files keyed by C-source hash + (PETSc, UW3) version salt. Anything
+    # outside that salt — compiler identity, CFLAGS, Python ABI, pixi env —
+    # could silently invalidate cached binaries (e.g. switching pixi env
+    # from default to amr-dev links against different libc++ shims).
+    #
+    # We detect such changes by writing an env fingerprint to the cache dir
+    # and wiping the cache on mismatch.
+    local jit_cache_dir="${UW_JIT_CACHE_DIR:-$HOME/.cache/underworld3/jit}"
+    local fp_file="$jit_cache_dir/.env-fingerprint"
+    local cc_id python_id pixi_env_id
+    cc_id=$(${CC:-cc} --version 2>/dev/null | head -1)
+    python_id=$($PIXI run -e "$env" python -c "import sys; print(sys.implementation.name, sys.version)" 2>/dev/null)
+    pixi_env_id="$env"
+    local fp
+    fp=$(printf '%s\nCC=%s\nCFLAGS=%s\nPYTHON=%s\nPIXI_ENV=%s\n' \
+            "fingerprint-v1" "$cc_id" "${CFLAGS:-}" "$python_id" "$pixi_env_id" \
+            | shasum -a 256 | cut -c1-32)
+    if [ -f "$fp_file" ]; then
+        local prev_fp
+        prev_fp=$(cat "$fp_file" 2>/dev/null)
+        if [ "$prev_fp" != "$fp" ]; then
+            echo "  Compiler / Python / pixi env changed; wiping JIT cache..."
+            find "$jit_cache_dir" -maxdepth 1 \
+                \( -name '*.so' -o -name '*.manifest.json' -o -name '.*.lock' \
+                   -o -name '.inprogress_*' \) -delete 2>/dev/null
+        fi
+    fi
+    mkdir -p "$jit_cache_dir"
+    echo "$fp" > "$fp_file"
+
     echo ""
     echo -e "${GREEN}${BOLD}Build complete!${NC}"
     echo ""
     echo "Next: ./uw test    (run tests)"
     echo "      ./uw doctor  (check configuration)"
+}
+
+run_petsc_cmd() {
+    local petsc_cmd="${1:-versions}"
+    local arg="$2"
+    case "$petsc_cmd" in
+        versions|list)
+            $PIXI run -e "$(get_env)" "$SCRIPT_DIR/petsc-custom/build-petsc.sh" versions
+            ;;
+        switch)
+            if [ -z "$arg" ]; then
+                echo "Usage: ./uw petsc switch <version-tag>"
+                echo "  e.g.: ./uw petsc switch v3.25.0"
+                exit 1
+            fi
+            $PIXI run -e "$(get_env)" "$SCRIPT_DIR/petsc-custom/build-petsc.sh" checkout "$arg"
+
+            # Nuke stale build artifacts and petsc4py. The next ./uw build's
+            # target-change detection can't fire because the still-installed
+            # petsc4py reports the OLD arch, so we force a full rebuild here.
+            # (run_build already passes --no-cache-dir to pip install . so we
+            # don't need a global pip cache purge — only petsc4py's local-path
+            # install needs its own --no-cache-dir.)
+            echo ""
+            echo "Clearing stale build artifacts for clean rebuild..."
+            rm -rf "$SCRIPT_DIR"/build/lib.* "$SCRIPT_DIR"/build/temp.* "$SCRIPT_DIR"/build/bdist.* 2>/dev/null
+            rm -f "$SCRIPT_DIR/build/.petsc_target"
+            if is_amr_env "$(get_env)"; then
+                echo "Uninstalling old petsc4py (linked to previous PETSc build)..."
+                $PIXI run -e "$(get_env)" pip uninstall -y petsc4py 2>/dev/null || true
+            fi
+
+            echo ""
+            echo "To complete the switch, rebuild PETSc then underworld3:"
+            echo "  ./uw petsc build"
+            echo "  ./uw build"
+            ;;
+        active)
+            local ver=$(petsc_version_short)
+            local arch=$(petsc_arch_for_env "$(get_env)")
+            echo "Active PETSc: ${ver} (arch: ${arch})"
+            ;;
+        build)
+            $PIXI run -e "$(get_env)" "$SCRIPT_DIR/petsc-custom/build-petsc.sh"
+            ;;
+        *)
+            echo "Usage: ./uw petsc [versions|switch <tag>|active|build]"
+            echo ""
+            echo "  versions     List available PETSc builds"
+            echo "  switch <tag> Checkout a PETSc version (e.g. v3.25.0)"
+            echo "  active       Show active PETSc version and arch"
+            echo "  build        Build PETSc for the active version"
+            ;;
+    esac
 }
 
 # Standalone diagnostics (works even if underworld3 not built)
@@ -833,7 +978,7 @@ COMMANDS
     type-check          Run mypy
 
   Worktrees:
-    worktree create <name> [prefix]   Create worktree (symlinks .pixi + PETSc)
+    worktree create <name> [prefix]   Create worktree (own .pixi, shared PETSc)
     worktree shell <name>             Start shell in worktree directory
     worktree list                     List worktrees with status
     worktree remove <name>            Remove worktree and branch
@@ -978,9 +1123,9 @@ run_update() {
 
 # ── Worktree management ──────────────────────────────────────────────
 #
-# Worktrees share the main repo's pixi environment and PETSc build
-# via symlinks.  `./uw build` from inside a worktree installs the
-# worktree's source into the shared env.
+# Each worktree gets its OWN pixi environment (isolated site-packages).
+# Only PETSc is shared via symlink (non-relocatable, expensive to rebuild).
+# `./uw build` from inside a worktree installs into that worktree's env.
 
 WORKTREE_ROOT="$SCRIPT_DIR/.claude/worktrees"
 
@@ -1052,21 +1197,32 @@ worktree_create() {
         echo -e "    ${GREEN}✓${NC} petsc-custom/petsc → main repo (shared)"
     fi
 
+    # .petsc-version — copy (not symlink) so each worktree can select a
+    # different already-built PETSC_ARCH (e.g. petsc-324-uw-openmpi vs
+    # petsc-325-uw-openmpi).  Built arch directories coexist in the
+    # shared PETSc source tree; .petsc-version just picks which one
+    # the activation script uses for PETSC_ARCH.
+    if [ -f "$main_repo/petsc-custom/.petsc-version" ]; then
+        cp "$main_repo/petsc-custom/.petsc-version" "$wt_path/petsc-custom/.petsc-version"
+        echo -e "    ${GREEN}✓${NC} .petsc-version copied ($(cat "$main_repo/petsc-custom/.petsc-version"))"
+    fi
+
     # .pixi-env — copy so ./uw knows which environment to use
     if [ -f "$main_repo/.pixi-env" ]; then
         cp "$main_repo/.pixi-env" "$wt_path/.pixi-env"
         echo -e "    ${GREEN}✓${NC} .pixi-env copied ($(cat "$main_repo/.pixi-env"))"
     fi
 
-    # Install pixi environment (own copy, not symlinked)
+    # Install pixi environment (own copy — NEVER symlink)
     local env=$(cat "$wt_path/.pixi-env" 2>/dev/null || echo "runtime")
     echo "  Installing pixi environment ($env) — this may take a moment..."
     (cd "$wt_path" && $PIXI install -e "$env" 2>/dev/null) && \
         echo -e "    ${GREEN}✓${NC} .pixi/ installed (isolated)" || {
-        echo -e "    ${YELLOW}pixi install failed — falling back to symlink${NC}"
-        rm -rf "$wt_path/.pixi"
-        ln -s "$main_repo/.pixi" "$wt_path/.pixi"
-        echo -e "    ${YELLOW}✓${NC} .pixi → main repo (shared fallback)"
+        echo -e "    ${RED}pixi install failed for worktree${NC}"
+        echo -e "    The worktree requires its own pixi environment."
+        echo -e "    Fix the pixi install error above, then run:"
+        echo -e "      cd $wt_path && pixi install -e $env"
+        exit 1
     }
 
     # 4b. Install petsc4py for AMR environments
@@ -1457,6 +1613,10 @@ case "${1:-}" in
         rm -rf "$SCRIPT_DIR"/build/lib.* "$SCRIPT_DIR"/build/temp.* "$SCRIPT_DIR"/build/bdist.*
         rm -f "$SCRIPT_DIR/build/.petsc_target"
         echo -e "${GREEN}Done${NC}. Run './uw build' to rebuild."
+        ;;
+    petsc)
+        # PETSc version management: ./uw petsc [versions|switch|active]
+        run_petsc_cmd "$2" "$3"
         ;;
     doctor)
         run_doctor

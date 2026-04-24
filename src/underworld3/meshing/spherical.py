@@ -341,6 +341,10 @@ def SphericalShellInternalBoundary(
         Internal = 12
         Upper = 13
 
+    class regions(Enum):
+        Inner = 101
+        Outer = 102
+
     import gmsh
 
     if filename is None:
@@ -360,67 +364,96 @@ def SphericalShellInternalBoundary(
         gmsh.option.setNumber("General.Verbosity", gmsh_verbosity)
         gmsh.model.add("SphereShell_with_Internal_Surface")
 
-        p1 = gmsh.model.geo.add_point(0.0, 0.0, 0.0, meshSize=cellSize)
+        # Create three concentric spheres and use OCC fragment to split
+        # into two non-overlapping shell volumes sharing the internal surface
+        ball_outer = gmsh.model.occ.addSphere(0, 0, 0, radiusOuter)
+        ball_internal = gmsh.model.occ.addSphere(0, 0, 0, radiusInternal)
+        ball_inner = gmsh.model.occ.addSphere(0, 0, 0, radiusInner)
 
-        ball1_tag = gmsh.model.occ.addSphere(0, 0, 0, radiusOuter)
-        ball2_tag = gmsh.model.occ.addSphere(0, 0, 0, radiusInner)
-        # Cut the inner sphere from the outer sphere to create a shell
-        gmsh.model.occ.cut([(3, ball1_tag)], [(3, ball2_tag)], removeObject=True, removeTool=True)
+        # Fragment creates non-overlapping pieces from the boolean intersection
+        out_dimtags, out_map = gmsh.model.occ.fragment(
+            [(3, ball_outer)],
+            [(3, ball_internal), (3, ball_inner)],
+        )
 
-        ball3_tag = gmsh.model.occ.addSphere(0.0, 0.0, 0.0, radiusInternal)
-        ball4_tag = gmsh.model.occ.addSphere(0, 0, 0, radiusInner)
-        # Create another inner sphere with radius r_i (for the internal sphere)
-        gmsh.model.occ.cut([(3, ball3_tag)], [(3, ball4_tag)], removeObject=True, removeTool=True)
-
-        # Set the maximum characteristic length (mesh size) for the mesh elements
+        gmsh.model.occ.synchronize()
         gmsh.option.setNumber("Mesh.CharacteristicLengthMax", cellSize)
-        gmsh.model.occ.synchronize()
 
-        # Embed a 2D surface into a 3D volume
-        # Here, 2D entities with tag 6 are embedded into a 3D entity with tag 1
-        gmsh.model.mesh.embed(2, [6], 3, 1)
-        # Remove specific entities from the model (these repetitions)
-        gmsh.model.remove_entities([(3, 2)], [(2, 5)])
-        gmsh.model.occ.remove([(3, 2)], [(2, 5)])
-
-        # Get all surface entities (2D) and the first volume entity (3D)
+        # Identify volumes and surfaces by bounding box
+        # For a sphere, bbox diagonal = sqrt(3) * radius
+        volumes = gmsh.model.getEntities(3)
         surfaces = gmsh.model.getEntities(2)
-        volume = gmsh.model.getEntities(3)[0]
 
-        # Loop through all surface entities to categorize them based on their bounding box
+        def bbox_radius(dimtag):
+            """Estimate the sphere radius from a bounding box diagonal."""
+            bb = gmsh.model.get_bounding_box(dimtag[0], dimtag[1])
+            return np.sqrt(bb[3]**2 + bb[4]**2 + bb[5]**2) / np.sqrt(3.0)
+
+        inner_vols = []
+        outer_vols = []
+        solid_ball_vols = []  # r < radiusInner — to be removed
+
+        for vol in volumes:
+            r_est = bbox_radius(vol)
+            if np.isclose(r_est, radiusInner, atol=cellSize):
+                solid_ball_vols.append(vol)
+            elif np.isclose(r_est, radiusInternal, atol=cellSize):
+                inner_vols.append(vol)
+            elif np.isclose(r_est, radiusOuter, atol=cellSize):
+                outer_vols.append(vol)
+
+        # Remove the solid inner ball (r < radiusInner)
+        if solid_ball_vols:
+            gmsh.model.occ.remove(solid_ball_vols, recursive=True)
+            gmsh.model.occ.synchronize()
+
+        # Re-query after removal
+        volumes = gmsh.model.getEntities(3)
+        surfaces = gmsh.model.getEntities(2)
+
+        # Classify surfaces by bounding box radius
         for surface in surfaces:
-            if np.isclose(gmsh.model.get_bounding_box(surface[0], surface[1])[-1], radiusInner):
+            r_est = bbox_radius(surface)
+            if np.isclose(r_est, radiusInner, atol=cellSize * 0.5):
                 gmsh.model.addPhysicalGroup(
-                    surface[0],
-                    [surface[1]],
-                    boundaries.Lower.value,
-                    name=boundaries.Lower.name,
+                    surface[0], [surface[1]],
+                    boundaries.Lower.value, name=boundaries.Lower.name,
                 )
-                print("Created inner boundary surface")
-            elif np.isclose(gmsh.model.get_bounding_box(surface[0], surface[1])[-1], radiusOuter):
+            elif np.isclose(r_est, radiusOuter, atol=cellSize * 0.5):
                 gmsh.model.addPhysicalGroup(
-                    surface[0],
-                    [surface[1]],
-                    boundaries.Upper.value,
-                    name=boundaries.Upper.name,
+                    surface[0], [surface[1]],
+                    boundaries.Upper.value, name=boundaries.Upper.name,
                 )
-                print("Created outer boundary surface")
-            elif np.isclose(
-                gmsh.model.get_bounding_box(surface[0], surface[1])[-1], radiusInternal
-            ):
+            elif np.isclose(r_est, radiusInternal, atol=cellSize * 0.5):
                 gmsh.model.addPhysicalGroup(
-                    surface[0],
-                    [surface[1]],
-                    boundaries.Internal.value,
-                    name=boundaries.Internal.name,
+                    surface[0], [surface[1]],
+                    boundaries.Internal.value, name=boundaries.Internal.name,
                 )
-                print("Created internal boundary surface")
 
-        # Add the volume entity to a physical group with a high tag number (99999) and name it "Elements"
-        gmsh.model.addPhysicalGroup(volume[0], [volume[1]], 99999)
-        gmsh.model.setPhysicalName(volume[1], 99999, "Elements")
+        # Classify remaining volumes into Inner and Outer
+        inner_vol_tags = [v[1] for v in inner_vols if v not in solid_ball_vols]
+        outer_vol_tags = [v[1] for v in outer_vols]
+        # Re-classify from current volumes in case tags changed after removal
+        inner_vol_tags = []
+        outer_vol_tags = []
+        for vol in volumes:
+            r_est = bbox_radius(vol)
+            if r_est < radiusInternal + cellSize * 0.5:
+                inner_vol_tags.append(vol[1])
+            else:
+                outer_vol_tags.append(vol[1])
 
-        gmsh.model.occ.synchronize()
+        # Region physical groups
+        if inner_vol_tags:
+            gmsh.model.addPhysicalGroup(3, inner_vol_tags,
+                                        regions.Inner.value, name=regions.Inner.name)
+        if outer_vol_tags:
+            gmsh.model.addPhysicalGroup(3, outer_vol_tags,
+                                        regions.Outer.value, name=regions.Outer.name)
+
+        # Combined elements group
+        all_vol_tags = inner_vol_tags + outer_vol_tags
+        gmsh.model.addPhysicalGroup(3, all_vol_tags, 99999, "Elements")
 
         gmsh.model.mesh.generate(3)
         gmsh.write(uw_filename)
@@ -477,11 +510,9 @@ def SphericalShellInternalBoundary(
         verbose=verbose,
     )
 
-    class boundary_normals(Enum):
-        Lower = 11
-        Internal = 12
-        Upper = 13
-        Centre = 1
+    # boundary_normals deprecated — use mesh.Gamma_P1 for boundary normals
+
+    new_mesh.regions = regions
 
     # Full spherical shell with internal boundary: 3 rigid rotation modes
     x, y, z = new_mesh.X
@@ -1025,7 +1056,7 @@ def CubedSphere(
         Lower = new_mesh.CoordinateSystem.unit_e_0
         Upper = new_mesh.CoordinateSystem.unit_e_0
 
-    new_mesh.boundary_normals = boundary_normals
+    # boundary_normals deprecated — use mesh.Gamma_P1 for boundary normals
 
     # Full cubed sphere: 3 rigid rotation modes
     x, y, z = new_mesh.X

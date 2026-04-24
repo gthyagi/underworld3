@@ -128,22 +128,18 @@ def _from_plexh5(
     if comm == None:
         comm = PETSc.COMM_WORLD
 
-    viewer = PETSc.ViewerHDF5().create(filename, "r", comm=comm)
+    # Use createFromFile for a single-call load (issue #96: the separate
+    # topologyLoad + coordinatesLoad + labelsLoad pipeline leaves the
+    # coordinate DM in a state that DMPlexComputeBdIntegral cannot handle).
+    h5plex = PETSc.DMPlex().createFromFile(filename, interpolate=True, comm=comm)
 
-    # h5plex = PETSc.DMPlex().createFromFile(filename, comm=comm)
-    h5plex = PETSc.DMPlex().create(comm=comm)
-    sf0 = h5plex.topologyLoad(viewer)
-    h5plex.coordinatesLoad(viewer, sf0)
-    h5plex.labelsLoad(viewer, sf0)
-
-    # Do this as well
     h5plex.setName("uw_mesh")
     h5plex.markBoundaryFaces("All_Boundaries", 1001)
 
     if not return_sf:
         return h5plex
     else:
-        return sf0, h5plex
+        return h5plex.getPointSF(), h5plex
 
 
 class Mesh(Stateful, uw_object):
@@ -288,9 +284,11 @@ class Mesh(Stateful, uw_object):
         self._mesh_version = 0
         self._registered_swarms = weakref.WeakSet()
         self._registered_surfaces = weakref.WeakSet()  # Surfaces using this mesh
+        self._registered_submeshes = weakref.WeakSet()  # Submeshes from extract_region
         self._mesh_update_lock = threading.RLock()
 
         comm = PETSc.COMM_WORLD
+        regions = None  # May be set from h5 metadata or mesh generator
 
         if isinstance(plex_or_meshfile, PETSc.DMPlex):
             isDistributed = plex_or_meshfile.isDistributed()
@@ -359,6 +357,26 @@ class Mesh(Stateful, uw_object):
                 except KeyError:
                     pass
 
+                regions = None
+                try:
+                    json_str = f["metadata"].attrs["regions"]
+                    rgn_dict = json.loads(json_str)
+                    regions = Enum("Regions", rgn_dict)
+                except KeyError:
+                    pass
+
+                # Restore ellipsoid with quantities for geographic meshes
+                self._checkpoint_ellipsoid = None
+                try:
+                    json_str = f["metadata"].attrs["ellipsoid"]
+                    ellipsoid_raw = json.loads(json_str)
+                    for k, v in ellipsoid_raw.items():
+                        if isinstance(v, dict) and "value" in v and "unit" in v:
+                            ellipsoid_raw[k] = uw.quantity(v["value"], v["unit"])
+                    self._checkpoint_ellipsoid = ellipsoid_raw
+                except KeyError:
+                    pass
+
                 f.close()
 
                 # This needs to be done when reading a dm from a checkpoint
@@ -395,6 +413,9 @@ class Mesh(Stateful, uw_object):
         self.filename = filename
         self.boundaries = boundaries
         self.boundary_normals = boundary_normals
+        self.regions = regions
+        self.parent = None       # Set by extract_region() for submeshes
+        self.subpoint_is = None  # IS mapping submesh points -> parent points
 
         # Wrapped imported DMPlex meshes may only expose generic Gmsh labels
         # such as "Face Sets". Rebuild named boundary labels from those sets so
@@ -614,6 +635,11 @@ class Mesh(Stateful, uw_object):
 
         # Now add the appropriate coordinate system for the mesh's natural geometry
         # This step will usually over-write the defaults we just defined
+        # For geographic meshes loaded from checkpoint, pre-set the ellipsoid
+        # so the CoordinateSystem __init__ picks it up.
+        if hasattr(self, "_checkpoint_ellipsoid") and self._checkpoint_ellipsoid is not None:
+            self._checkpoint_ellipsoid_pending = self._checkpoint_ellipsoid
+
         self._CoordinateSystem = CoordinateSystem(self, coordinate_system_type)
 
         # This was in the _jit extension but ... if
@@ -1097,6 +1123,419 @@ class Mesh(Stateful, uw_object):
 
         return new_dm_hierarchy
 
+    def extract_region(self, label_name, label_value=None):
+        """Extract a submesh containing only cells with the given region label.
+
+        Uses ``DMPlexFilter`` to create a new mesh sharing exact node
+        positions with the parent. The submesh carries a ``subpoint_is``
+        mapping back to the parent for restrict/prolongate operations,
+        and a ``parent`` reference.
+
+        Boundary labels from the parent survive the filter. For example,
+        an "Internal" boundary on the parent becomes an exterior boundary
+        on the submesh and can be referenced by the same name.
+
+        Parameters
+        ----------
+        label_name : str
+            DM label name identifying the region (e.g., ``"Inner"``).
+        label_value : int, optional
+            Stratum value within the label. If ``None``, uses
+            ``mesh.regions.<label_name>.value`` when available.
+
+        Returns
+        -------
+        Mesh
+            A new mesh covering only the specified region.
+
+        Examples
+        --------
+        >>> full_mesh = uw.meshing.AnnulusInternalBoundary(...)
+        >>> rock_mesh = full_mesh.extract_region("Inner")
+        >>> rock_mesh.parent is full_mesh
+        True
+        """
+        from underworld3.cython.petsc_discretisation import petsc_dm_filter_by_label
+
+        # Resolve label value
+        if label_value is None:
+            if self.regions is not None:
+                try:
+                    label_value = self.regions[label_name].value
+                except KeyError:
+                    raise ValueError(
+                        f"Region '{label_name}' not found. "
+                        f"Available: {[r.name for r in self.regions]}"
+                    )
+            else:
+                raise ValueError(
+                    "No regions defined on this mesh. Provide label_value explicitly."
+                )
+
+        # Filter the DM
+        subdm = petsc_dm_filter_by_label(self.dm, label_name, label_value)
+        subdm.markBoundaryFaces("All_Boundaries", 1001)
+
+        # Build boundaries enum from labels that survived the filter
+        # (DMPlexFilter preserves parent labels on the submesh)
+        surviving = {}
+        if self.boundaries is not None:
+            for b in self.boundaries:
+                if b.name in ("Null_Boundary", "All_Boundaries"):
+                    continue
+                label = subdm.getLabel(b.name)
+                if label:
+                    sis = label.getStratumIS(b.value)
+                    if sis and sis.getSize() > 0:
+                        surviving[b.name] = b.value
+
+        if self.regions is not None:
+            for r in self.regions:
+                label = subdm.getLabel(r.name)
+                if label:
+                    sis = label.getStratumIS(r.value)
+                    if sis and sis.getSize() > 0:
+                        surviving[r.name] = r.value
+
+        sub_boundaries = Enum("Boundaries", surviving) if surviving else None
+
+        # Get the subpoint IS before wrapping (the Mesh constructor may modify the DM)
+        subpoint_is = subdm.getSubpointIS()
+
+        # Construct the submesh
+        sub_mesh = Mesh(
+            subdm,
+            degree=self.degree,
+            qdegree=self.qdegree,
+            boundaries=sub_boundaries,
+            coordinate_system_type=self.CoordinateSystemType,
+            verbose=False,
+        )
+
+        # Store lineage
+        sub_mesh.parent = self
+        sub_mesh.subpoint_is = subpoint_is
+        sub_mesh._parent_mesh_version = self._mesh_version
+        sub_mesh._extract_label_name = label_name
+        sub_mesh._extract_label_value = label_value
+
+        # Inherit regions from parent (for nested extraction)
+        sub_mesh.regions = self.regions
+
+        # Cache for DOF mappings (built lazily on first restrict/prolongate)
+        sub_mesh._dof_maps = {}
+
+        # Build and cache the vertex map now (before any deformation)
+        sub_mesh._build_vertex_map()
+
+        # Register with parent for coordinate sync notifications
+        self._registered_submeshes.add(sub_mesh)
+
+        return sub_mesh
+
+    def _build_vertex_map(self):
+        """Build vertex index mapping between submesh and parent.
+
+        Uses coordinate matching at extraction time (before any
+        deformation). Cached permanently since topology doesn't change.
+        """
+        if hasattr(self, '_vertex_map') and self._vertex_map is not None:
+            return self._vertex_map
+
+        from scipy.spatial import cKDTree
+
+        tree = cKDTree(self.X.coords)
+        dists, indices = tree.query(self.parent.X.coords)
+        matched = dists < 1.0e-10
+
+        # parent_rows[i] -> sub_rows[i]: matched vertex pairs
+        parent_rows = numpy.where(matched)[0]
+        sub_rows = indices[matched]
+
+        self._vertex_map = (sub_rows, parent_rows)
+        return self._vertex_map
+
+    def sync_coordinates_from_parent(self):
+        """Update submesh coordinates from the parent mesh.
+
+        Called automatically when the parent mesh deforms. Uses the
+        cached vertex map to copy parent vertex positions to the
+        submesh, then calls ``_deform_mesh`` to rebuild geometry.
+
+        Raises
+        ------
+        ValueError
+            If this mesh has no parent.
+        """
+        if self.parent is None:
+            raise ValueError("sync_coordinates_from_parent requires a submesh")
+
+        sub_rows, parent_rows = self._build_vertex_map()
+
+        new_sub_coords = numpy.array(self.X.coords)
+        new_sub_coords[sub_rows] = self.parent.X.coords[parent_rows]
+
+        self._deform_mesh(new_sub_coords)
+        self._parent_mesh_version = self.parent._mesh_version
+
+    def _re_extract_from_parent(self, verbose=False):
+        """Re-extract this submesh from the adapted parent mesh.
+
+        Called automatically when the parent mesh adapts. Replaces the
+        DM, rebuilds coordinates and vertex map, and reinitialises all
+        MeshVariables on the new submesh (reset to zero).
+
+        The Python object is updated in-place — external references
+        to this submesh remain valid.
+        """
+        import underworld3 as uw
+        from underworld3.cython.petsc_discretisation import petsc_dm_filter_by_label
+
+        if self.parent is None:
+            raise ValueError("_re_extract_from_parent requires a submesh")
+
+        # Find which region label this submesh was extracted from
+        # (stored at extraction time)
+        if not hasattr(self, '_extract_label_name') or not hasattr(self, '_extract_label_value'):
+            raise RuntimeError(
+                "Cannot re-extract: submesh doesn't know its extraction label. "
+                "Was it created with extract_region()?"
+            )
+
+        label_name = self._extract_label_name
+        label_value = self._extract_label_value
+
+        if verbose:
+            uw.pprint(0, f"Re-extracting submesh '{label_name}' from adapted parent...")
+
+        # Extract new DM
+        new_subdm = petsc_dm_filter_by_label(self.parent.dm, label_name, label_value)
+        new_subdm.markBoundaryFaces("All_Boundaries", 1001)
+
+        # Back up old variable data and coordinates for interpolation
+        old_vars = {}
+        old_var_backups = {}
+        for var_name, var in self._vars.items():
+            if var is not None:
+                old_vars[var_name] = var
+                try:
+                    if var._lvec is not None and var.data.size > 0:
+                        old_var_backups[var_name] = (
+                            numpy.array(var.coords),  # old DOF coords
+                            numpy.array(var.data),     # old DOF values
+                        )
+                except Exception:
+                    pass
+
+        # Update DM in-place
+        with self._mesh_update_lock:
+            self.dm = new_subdm
+            self.subpoint_is = new_subdm.getSubpointIS()
+
+            # Rebuild coordinates
+            self._coords = uw.utilities.NDArray_With_Callback(
+                numpy.ndarray.view(self.dm.getCoordinatesLocal().array.reshape(-1, self.cdim)),
+                owner=self,
+            )
+
+            def mesh_update_callback(array, change_context):
+                coords = array.reshape(-1, array.owner.cdim)
+                self._deform_mesh(coords, verbose=False)
+                with self._mesh_update_lock:
+                    self._mesh_version += 1
+                return
+
+            self._coords.add_callback(mesh_update_callback)
+
+            self._mesh_version += 1
+            self._topology_version += 1
+            self.nuke_coords_and_rebuild(verbose=False)
+
+        # Rebuild vertex map (for restrict/prolongate)
+        self._vertex_map = None
+        self._build_vertex_map()
+
+        # Invalidate DOF maps
+        self._dof_maps = {}
+
+        # Reinitialise variables on the new DM
+        for var_name, old_var in old_vars.items():
+            try:
+                if old_var._lvec is not None:
+                    old_var._lvec.destroy()
+                    old_var._lvec = None
+                if old_var._gvec is not None:
+                    old_var._gvec.destroy()
+                    old_var._gvec = None
+                if hasattr(old_var, '_canonical_data'):
+                    old_var._canonical_data = None
+                if hasattr(old_var, '_cached_data_array'):
+                    old_var._cached_data_array = None
+
+                old_var._setup_ds()
+                old_var._set_vec(available=True)
+
+                # Interpolate from backed-up data via kd-tree IDW
+                if var_name in old_var_backups:
+                    try:
+                        from scipy.spatial import cKDTree
+                        old_coords, old_data = old_var_backups[var_name]
+                        new_coords = old_var.coords
+
+                        tree = cKDTree(old_coords)
+                        nnn = 3 if self.dim == 2 else 4
+                        dists, indices = tree.query(new_coords, k=nnn)
+
+                        # Inverse distance weighting
+                        weights = 1.0 / (dists + 1e-30)
+                        weights /= weights.sum(axis=1, keepdims=True)
+                        new_data = numpy.zeros_like(old_var.data)
+                        for i in range(nnn):
+                            new_data += weights[:, i:i+1] * old_data[indices[:, i]]
+
+                        old_var.pack_raw_data_to_petsc(new_data, sync=True)
+                        if verbose:
+                            uw.pprint(0, f"  Submesh variable '{var_name}' transferred")
+                    except Exception as e2:
+                        if verbose:
+                            uw.pprint(0, f"  Submesh variable '{var_name}' reset (transfer failed: {e2})")
+                else:
+                    if verbose:
+                        uw.pprint(0, f"  Submesh variable '{var_name}' reset")
+            except Exception as e:
+                if verbose:
+                    uw.pprint(0, f"  Warning: failed to reinitialise '{var_name}': {e}")
+
+        # Mark solvers for rebuild
+        for solver in self._equation_systems_register:
+            if solver is not None and hasattr(solver, 'is_setup'):
+                solver.is_setup = False
+
+        # Clear caches
+        self._evaluation_hash = None
+        self._evaluation_interpolated_results = None
+        if hasattr(self, '_dminterpolation_cache'):
+            self._dminterpolation_cache.invalidate_all(reason="submesh_re_extraction")
+
+        self._parent_mesh_version = self.parent._mesh_version
+
+        if verbose:
+            uw.pprint(0, f"  Submesh re-extracted: {self.dm.getChart()}")
+
+    def _build_dof_map(self, parent_var, sub_var):
+        """Build a DOF-level index mapping between parent and submesh variables.
+
+        Uses coordinate matching on DOF coordinates (exact match from
+        DMPlexFilter shared nodes). Cached per variable pair.
+
+        Returns (sub_rows, parent_rows) — numpy arrays of matching DOF indices.
+        """
+        import numpy as np
+        from scipy.spatial import cKDTree
+
+        key = (id(parent_var), id(sub_var))
+        if key in self._dof_maps:
+            return self._dof_maps[key]
+
+        tree = cKDTree(sub_var.coords)
+        dists, indices = tree.query(parent_var.coords)
+        matched = dists < 1.0e-10
+
+        # indices[matched] maps parent row → sub row
+        parent_rows = np.where(matched)[0]
+        sub_rows = indices[matched]
+
+        if len(sub_rows) != sub_var.data.shape[0]:
+            import warnings
+            warnings.warn(
+                f"DOF mapping: matched {len(sub_rows)} of "
+                f"{sub_var.data.shape[0]} submesh DOFs"
+            )
+
+        result = (sub_rows, parent_rows)
+        self._dof_maps[key] = result
+        return result
+
+    def restrict(self, parent_var, sub_var, mode="replace"):
+        """Copy data from a parent-mesh variable to a submesh variable.
+
+        Parameters
+        ----------
+        parent_var : MeshVariable
+            Source variable on the parent mesh.
+        sub_var : MeshVariable
+            Destination variable on this (sub)mesh.
+        mode : str
+            ``"replace"`` overwrites submesh values (INSERT_VALUES).
+            ``"add"`` adds parent values into submesh (ADD_VALUES).
+
+        Raises
+        ------
+        ValueError
+            If this mesh has no parent, or the variable meshes don't match.
+        """
+        if self.parent is None:
+            raise ValueError("restrict requires a submesh (parent is None)")
+        if parent_var.mesh is not self.parent:
+            raise ValueError("parent_var must be on this mesh's parent")
+        if sub_var.mesh is not self:
+            raise ValueError("sub_var must be on this mesh")
+
+        sub_rows, parent_rows = self._build_dof_map(parent_var, sub_var)
+
+        # Copy, modify, then write through pack_raw_data_to_petsc
+        # to properly sync the PETSc Vec without callback issues
+        new_data = numpy.array(sub_var.data)
+
+        if mode == "replace":
+            new_data[sub_rows] = parent_var.data[parent_rows]
+        elif mode == "add":
+            new_data[sub_rows] += parent_var.data[parent_rows]
+        else:
+            raise ValueError(f"mode must be 'replace' or 'add', got '{mode}'")
+
+        sub_var.pack_raw_data_to_petsc(new_data, sync=True)
+
+    def prolongate(self, sub_var, parent_var, mode="replace"):
+        """Copy data from a submesh variable to a parent-mesh variable.
+
+        Parameters
+        ----------
+        sub_var : MeshVariable
+            Source variable on this (sub)mesh.
+        parent_var : MeshVariable
+            Destination variable on the parent mesh.
+        mode : str
+            ``"replace"`` overwrites parent values at submesh DOFs.
+            ``"add"`` adds submesh values into parent.
+
+        Raises
+        ------
+        ValueError
+            If this mesh has no parent, or the variable meshes don't match.
+        """
+        if self.parent is None:
+            raise ValueError("prolongate requires a submesh (parent is None)")
+        if parent_var.mesh is not self.parent:
+            raise ValueError("parent_var must be on this mesh's parent")
+        if sub_var.mesh is not self:
+            raise ValueError("sub_var must be on this mesh")
+
+        sub_rows, parent_rows = self._build_dof_map(parent_var, sub_var)
+
+        new_data = numpy.array(parent_var.data)
+
+        if mode == "replace":
+            new_data[parent_rows] = sub_var.data[sub_rows]
+        elif mode == "add":
+            new_data[parent_rows] += sub_var.data[sub_rows]
+        else:
+            raise ValueError(f"mode must be 'replace' or 'add', got '{mode}'")
+
+        parent_var.pack_raw_data_to_petsc(new_data, sync=True)
+
+        parent_var._data_is_dirty = True
+
     def nuke_coords_and_rebuild(
         self,
         verbose=False,
@@ -1144,11 +1583,25 @@ class Mesh(Stateful, uw_object):
 
         if PETSc.Sys.getVersion() <= (3, 20, 5) and PETSc.Sys.getVersionInfo()["release"] == True:
             self.dm.projectCoordinates(self.petsc_fe)
+        elif hasattr(self.dm, "createCoordinateSpace"):
+            # Use createCoordinateSpace rather than setCoordinateDisc.
+            # setCoordinateDisc with a user-created FE leaves the coordinate
+            # dual space without proper point subspaces, causing
+            # DMPlexComputeBdIntegral to segfault/deadlock (issue #96).
+            # createCoordinateSpace builds the FE internally with correct
+            # subspace initialisation.
+            self.dm.createCoordinateSpace(self.degree, False, True)
+
+            # Issue #96 fix: Force coordinate field creation and strip
+            # boundary labels from the coordinate DM. createCoordinateSpace
+            # clears the coordinate field cache. Without this, BdIntegral
+            # lazily recreates the field by cloning mesh.dm (with boundary
+            # labels), causing DMCompleteBCLabels_Internal MPI errors.
+            from underworld3.cython.petsc_maths import dm_force_coordinate_field
+            dm_force_coordinate_field(self.dm)
         elif PETSc.Sys.getVersion() >= (3, 24, 0):
-            # PETSc 3.24+ added 'localized' parameter (for DG coordinate spaces)
             self.dm.setCoordinateDisc(disc=self.petsc_fe, localized=False, project=False)
         else:
-            # PETSc 3.21-3.23: older signature without localized parameter
             self.dm.setCoordinateDisc(disc=self.petsc_fe, project=False)
 
         if verbose and uw.mpi.rank == 0:
@@ -1193,7 +1646,21 @@ class Mesh(Stateful, uw_object):
             self._search_lengths,
         ) = self._get_mesh_sizes()
 
-        self.dm.copyDS(self.dm_hierarchy[-1])
+        # Skip self-copy when hierarchy is trivial (issue #96 investigation)
+        if self.dm is not self.dm_hierarchy[-1]:
+            self.dm.copyDS(self.dm_hierarchy[-1])
+
+        # Invalidate projected boundary normals (rebuilt lazily on access)
+        self._projected_normals = None
+
+        # BUGFIX(#130): refill the coord cache for every already-registered
+        # variable. Variables created before this rebuild would otherwise
+        # have their cache entry (from __init__) wiped above and refill
+        # lazily from rank-local code paths (rbf_interpolate), which
+        # deadlocks when the collectives inside _get_coords_for_basis are
+        # reached by only a subset of ranks.
+        for _var in list(self.vars.values()):
+            self._get_coords_for_var(_var)
 
         if verbose and uw.mpi.rank == 0:
             print(
@@ -1202,6 +1669,46 @@ class Mesh(Stateful, uw_object):
             )
 
         return
+
+    def _update_projected_normals(self):
+        """Project PETSc face normals (Gamma) onto a P1 field and normalise.
+
+        Creates ``_projected_normals`` on first call, updates in-place
+        thereafter. The result is a smooth, consistently-oriented unit
+        normal field that works well for penalty and Nitsche BCs on
+        curved boundaries.
+        """
+        import underworld3 as uw
+
+        Gamma = self.Gamma
+
+        if not hasattr(self, '_projected_normals') or self._projected_normals is None:
+            self._projected_normals = uw.discretisation.MeshVariable(
+                "_n_proj", self, self.cdim, degree=1,
+            )
+
+        n = self._projected_normals
+        for i in range(self.cdim):
+            n.data[:, i] = uw.function.evaluate(Gamma[i], n.coords).flatten()
+
+        mag = numpy.sqrt(numpy.sum(n.data ** 2, axis=1))
+        nonzero = mag > 1.0e-30
+        n.data[nonzero] /= mag[nonzero, numpy.newaxis]
+
+    @property
+    def Gamma_P1(self):
+        """Projected P1 boundary normals as a sympy Matrix.
+
+        Returns the normalised, vertex-averaged PETSc face normals
+        as a smooth P1 field. Preferred over :attr:`Gamma_N` for
+        penalty and Nitsche BCs on curved boundaries — gives
+        consistent orientation and better convergence in 3D.
+
+        Automatically updated when the mesh deforms.
+        """
+        if not hasattr(self, '_projected_normals') or self._projected_normals is None:
+            self._update_projected_normals()
+        return self._projected_normals.sym
 
     @timing.routine_timer_decorator
     def update_lvec(self):
@@ -1270,6 +1777,24 @@ class Mesh(Stateful, uw_object):
 
         self.dm.setCoordinatesLocal(coord_vec)
         self.nuke_coords_and_rebuild()
+
+        # Rebuild the _coords array view.  nuke_coords_and_rebuild may
+        # replace the coordinate vector internally (createCoordinateSpace),
+        # leaving self._coords as a stale numpy view of the old buffer.
+        import underworld3.utilities
+        old_callbacks = getattr(self._coords, "_callbacks", [])
+        self._coords = underworld3.utilities.NDArray_With_Callback(
+            numpy.ndarray.view(
+                self.dm.getCoordinatesLocal().array.reshape(-1, self.cdim)
+            ),
+            owner=self,
+        )
+        for cb in old_callbacks:
+            self._coords.add_callback(cb)
+
+        # Propagate coordinate changes to registered submeshes
+        for submesh in self._registered_submeshes:
+            submesh.sync_coordinates_from_parent()
 
         return
 
@@ -2065,11 +2590,28 @@ class Mesh(Stateful, uw_object):
                 boundaries_dict = {i.name: i.value for i in self.boundaries}
                 g.attrs["boundaries"] = json.dumps(boundaries_dict)
 
+                if self.regions is not None:
+                    regions_dict = {i.name: i.value for i in self.regions}
+                    g.attrs["regions"] = json.dumps(regions_dict)
+
                 coordinates_type_dict = {
                     "name": self.CoordinateSystemType.name,
                     "value": self.CoordinateSystemType.value,
                 }
                 g.attrs["coordinate_system_type"] = json.dumps(coordinates_type_dict)
+
+                # Save ellipsoid metadata for geographic meshes
+                if hasattr(self.CoordinateSystem, "ellipsoid"):
+                    ellipsoid_ser = {}
+                    for k, v in self.CoordinateSystem.ellipsoid.items():
+                        if hasattr(v, "to"):  # uw.quantity
+                            ellipsoid_ser[k] = {
+                                "value": float(v.magnitude),
+                                "unit": str(v.units),
+                            }
+                        else:
+                            ellipsoid_ser[k] = v
+                    g.attrs["ellipsoid"] = json.dumps(ellipsoid_ser)
 
                 # Add coordinate units metadata
                 if hasattr(self, "coordinate_units"):
@@ -2191,6 +2733,12 @@ class Mesh(Stateful, uw_object):
 
         dmnew.restoreGlobalVec(coordsNewG)
         dmnew.restoreLocalVec(coordsNewL)
+        # Clean up the PETSc interpolation objects built above. Without this
+        # they accumulate until Python GC runs — noticeable in long adapt
+        # loops that re-fill the coord cache per variable.
+        matInterp.destroy()
+        if vecScale is not None:
+            vecScale.destroy()
         dmnew.destroy()
         dmfe.destroy()
 
@@ -2568,11 +3116,19 @@ class Mesh(Stateful, uw_object):
                 control_points_list.append(inside_control_point)
                 control_point_sign_list.append(1)
 
-        control_point_kdtree = uw.kdtree.KDTree(numpy.array(control_points_list))
+        control_points_array = numpy.array(control_points_list)
+        control_point_kdtree = uw.kdtree.KDTree(control_points_array)
         control_point_sign = numpy.array(control_point_sign_list)
 
         self.boundary_face_control_points_kdtree = control_point_kdtree
         self.boundary_face_control_points_sign = control_point_sign
+
+        # Domain bounding radius (squared): distance from centroid to farthest
+        # control point. Points beyond this distance from their nearest control
+        # point cannot be inside the domain.
+        domain_centroid = control_points_array.mean(axis=0)
+        radii_sq = numpy.sum((control_points_array - domain_centroid) ** 2, axis=1)
+        self._domain_radius_squared = float(radii_sq.max())
 
         return
 
@@ -2611,10 +3167,16 @@ class Mesh(Stateful, uw_object):
         dist2, closest_control_points_ext = self.boundary_face_control_points_kdtree.query(
             model_points, k=1, sqr_dists=True
         )
+        dist2 = numpy.asarray(dist2).ravel()  # kd-tree returns (n,1) for k=1
         in_or_not = self.boundary_face_control_points_sign[closest_control_points_ext] > 0
 
-        ## This choice of distance needs some more thought
+        # Points very far from the nearest boundary face are definitely exterior.
+        # The sign heuristic only works for points within the domain's neighbourhood;
+        # beyond that, "nearest control point" is arbitrary.
+        far_from_domain = dist2 > self._domain_radius_squared
+        in_or_not[far_from_domain] = False
 
+        # Points close to the boundary need the expensive cell-location check
         near_boundary = numpy.where(dist2 < 2 * max_radius**2)[0]
         near_boundary_points = model_points[near_boundary]
 
@@ -3084,6 +3646,26 @@ class Mesh(Stateful, uw_object):
         # Stack boundary labels for adaptation
         adaptivity._dm_stack_bcs(self.dm, self.boundaries, "CombinedBoundaries")
 
+        # Create cell region label if regions exist — this tells MMG to
+        # preserve the interface between regions during adaptation
+        rgLabel_name = None
+        if self.regions is not None:
+            depth_label = self.dm.getLabel("depth")
+            cell_is = depth_label.getStratumIS(self.dim)
+            if cell_is:
+                cells = cell_is.getIndices()
+                self.dm.createLabel("_CellRegions_")
+                rg = self.dm.getLabel("_CellRegions_")
+                for region in self.regions:
+                    lab = self.dm.getLabel(region.name)
+                    if lab:
+                        region_is = lab.getStratumIS(region.value)
+                        if region_is:
+                            region_cells = set(region_is.getIndices()) & set(cells)
+                            for c in region_cells:
+                                rg.setValue(c, region.value)
+                rgLabel_name = "_CellRegions_"
+
         # Create the metric from the field
         hvec = metric_field._lvec
         metric_vec = self.dm.metricCreateIsotropic(hvec, metric_field.field_id)
@@ -3093,10 +3675,25 @@ class Mesh(Stateful, uw_object):
             print(f"[{uw.mpi.rank}] Mesh adaptation starting (nodes: ~{n_nodes_old})...", flush=True)
 
         # Perform the actual mesh adaptation
-        new_dm = self.dm.adaptMetric(metric_vec, bdLabel="CombinedBoundaries")
+        new_dm = self.dm.adaptMetric(
+            metric_vec,
+            bdLabel="CombinedBoundaries",
+            rgLabel=rgLabel_name,
+        )
 
         # Unstack boundary labels on the new dm
         adaptivity._dm_unstack_bcs(new_dm, self.boundaries, "CombinedBoundaries")
+
+        # Reconstruct region labels from cell tags on the adapted mesh
+        if rgLabel_name and self.regions is not None:
+            rg_new = new_dm.getLabel(rgLabel_name)
+            if rg_new:
+                for region in self.regions:
+                    new_dm.createLabel(region.name)
+                    region_label = new_dm.getLabel(region.name)
+                    region_is = rg_new.getStratumIS(region.value)
+                    if region_is:
+                        region_label.setStratumIS(region.value, region_is)
 
         if verbose:
             n_nodes_new = new_dm.getChart()[1] - new_dm.getChart()[0]
@@ -3114,24 +3711,24 @@ class Mesh(Stateful, uw_object):
             boundaries=self.boundaries,
         )
 
-        # Note: Variable transfer is complex and may hang with large meshes.
-        # For now, we skip automatic transfer. Users can reinitialize variables
-        # after adaptation using old_var.rbf_interpolate() if needed.
-        if verbose and old_vars_data:
-            print(f"[{uw.mpi.rank}] Found {len(old_vars_data)} variables. "
-                  "Variables will be reset; reinitialize manually if needed.", flush=True)
+        # Transfer variable data from old mesh to new mesh via evaluate.
+        # The old variables are still on `self` (old DM). Evaluate them at
+        # the new mesh coordinates (from temp_mesh) to get interpolated values.
+        new_coords = temp_mesh.X.coords
+        transferred_data = {}
 
-        # Store old data for potential manual recovery
-        old_var_data_backup = {}
         for var_name, old_var in old_vars_data.items():
             try:
-                # Back up old data before adaptation
-                if old_var._lvec is not None:
-                    old_var_data_backup[var_name] = old_var._lvec.array.copy()
-            except Exception:
-                pass
+                if old_var._lvec is not None and old_var.data.size > 0:
+                    if verbose:
+                        print(f"[{uw.mpi.rank}] Transferring '{var_name}'...", flush=True)
+                    transferred_data[var_name] = uw.function.evaluate(
+                        old_var.sym, new_coords
+                    )
+            except Exception as e:
+                if verbose:
+                    print(f"[{uw.mpi.rank}] Warning: transfer of '{var_name}' failed: {e}", flush=True)
 
-        # Clean up temp mesh (we created it but won't use it for transfer)
         del temp_mesh
 
         # Now update this mesh's internal state
@@ -3188,8 +3785,21 @@ class Mesh(Stateful, uw_object):
                 old_var._setup_ds()
                 old_var._set_vec(available=True)
 
-                if verbose:
-                    print(f"[{uw.mpi.rank}] Variable '{var_name}' reset on adapted mesh", flush=True)
+                # Restore transferred data if available
+                if var_name in transferred_data:
+                    try:
+                        data = transferred_data[var_name]
+                        # evaluate returns (N, a, b) shaped array; pack to (N, ncomp)
+                        data_flat = data.reshape(old_var.data.shape)
+                        old_var.pack_raw_data_to_petsc(data_flat, sync=True)
+                        if verbose:
+                            print(f"[{uw.mpi.rank}] Variable '{var_name}' transferred to adapted mesh", flush=True)
+                    except Exception as e2:
+                        if verbose:
+                            print(f"[{uw.mpi.rank}] Variable '{var_name}' reset (transfer failed: {e2})", flush=True)
+                else:
+                    if verbose:
+                        print(f"[{uw.mpi.rank}] Variable '{var_name}' reset on adapted mesh", flush=True)
             except Exception as e:
                 if verbose:
                     print(f"[{uw.mpi.rank}] Warning: Failed to reinitialize '{var_name}': {e}", flush=True)
@@ -3209,6 +3819,14 @@ class Mesh(Stateful, uw_object):
         self._evaluation_interpolated_results = None
         if hasattr(self, '_dminterpolation_cache'):
             self._dminterpolation_cache.invalidate_all(reason="mesh_adaptation")
+
+        # Re-extract registered submeshes from the adapted parent
+        for submesh in list(self._registered_submeshes):
+            try:
+                submesh._re_extract_from_parent(verbose=verbose)
+            except Exception as e:
+                if verbose:
+                    print(f"[{uw.mpi.rank}] Warning: submesh re-extraction failed: {e}", flush=True)
 
         if verbose:
             print(f"[{uw.mpi.rank}] Mesh adaptation complete", flush=True)

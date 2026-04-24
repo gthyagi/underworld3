@@ -60,24 +60,79 @@ def petsc_fvm_get_local_cell_sizes(mesh) -> np.array:
         return cell_radii, cell_centroids
 
 
-def petsc_dm_create_submesh_from_label(incoming_dm, boundary_label_name, boundary_label_value, marked_faces=True) -> float:
+def petsc_dm_create_submesh_from_label(incoming_dm, label_name, label_value, marked_faces=False):
         """
-        Wraps DMPlexCreateSubmesh
-        """
+        Extract a submesh from a DMPlex using a label.
 
+        Wraps DMPlexCreateSubmesh: returns a new DMPlex containing only
+        cells (and their closures) that have the given value in the
+        specified label.
+
+        Parameters
+        ----------
+        incoming_dm : PETSc.DM
+            The source DMPlex.
+        label_name : str
+            Name of the DM label to filter on.
+        label_value : int
+            Stratum value to select.
+        marked_faces : bool
+            If True, the label marks faces; if False, marks cells.
+
+        Returns
+        -------
+        PETSc.DM
+            The submesh DMPlex.
+        """
 
         cdef DM c_dm = incoming_dm
-        cdef DM subdm
+        cdef DM subdm = PETSc.DMPlex()
         cdef PetscDMLabel dmlabel
-        cdef PetscInt value = boundary_label_value
-        cdef PetscBool markedFaces = marked_faces
+        cdef PetscInt value = label_value
+        cdef PetscBool mf = marked_faces
 
-        subdm = PETSc.DM()
+        DMGetLabel(c_dm.dm, label_name.encode('utf8'), &dmlabel)
+        if dmlabel == NULL:
+            raise ValueError(f"Label '{label_name}' not found on DM")
 
-        DMGetLabel(c_dm.dm, "Boundary", &dmlabel)
-        # DMPlexCreateSubmesh(dm.dm, dmlabel, value, markedFaces, &subdm.dm)
+        CHKERRQ( DMPlexCreateSubmesh(c_dm.dm, dmlabel, value, mf, &subdm.dm) )
 
-        return
+        return subdm
+
+
+def petsc_dm_filter_by_label(incoming_dm, label_name, label_value):
+        """
+        Extract a full-dimension submesh containing only cells with the
+        given label value. Uses DMPlexFilter.
+
+        Parameters
+        ----------
+        incoming_dm : PETSc.DM
+            The source DMPlex.
+        label_name : str
+            Name of the DM label to filter on.
+        label_value : int
+            Stratum value to select.
+
+        Returns
+        -------
+        PETSc.DM
+            The filtered submesh (same dimension as input).
+        """
+
+        cdef DM c_dm = incoming_dm
+        cdef DM subdm = PETSc.DMPlex()
+        cdef PetscDMLabel dmlabel
+        cdef PetscInt value = label_value
+
+        DMGetLabel(c_dm.dm, label_name.encode('utf8'), &dmlabel)
+        if dmlabel == NULL:
+            raise ValueError(f"Label '{label_name}' not found on DM")
+
+        # UW_DMPlexFilter handles the PETSc version difference (3.25 added MPI_Comm arg)
+        CHKERRQ( UW_DMPlexFilter(c_dm.dm, dmlabel, value, PETSC_TRUE, PETSC_FALSE, &subdm.dm) )
+
+        return subdm
 
 
 

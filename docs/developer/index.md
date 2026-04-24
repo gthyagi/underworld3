@@ -155,6 +155,7 @@ CHANGELOG
 subsystems/meshing
 subsystems/discretisation
 subsystems/solvers
+subsystems/petsc-jacobian-layout
 subsystems/constitutive-models
 subsystems/constitutive-models-theory
 subsystems/constitutive-models-anisotropy
@@ -164,6 +165,7 @@ subsystems/expressions-functions
 subsystems/containers
 subsystems/checkpointing-system
 subsystems/model-orchestration
+subsystems/jit-cache
 ```
 
 ```{toctree}

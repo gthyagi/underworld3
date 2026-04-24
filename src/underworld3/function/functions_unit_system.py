@@ -143,6 +143,17 @@ def evaluate(
         rbf_flag = rbf if rbf is not None else False
         force_l2_flag = force_l2 if force_l2 is not None else False
 
+    # Step 0: CHECK for mixed-mesh expressions
+    # All MeshVariable symbols must belong to the same mesh.
+    from .expressions import extract_meshes
+    expr_meshes = extract_meshes(expr)
+    if len(expr_meshes) > 1:
+        raise ValueError(
+            f"Expression contains MeshVariable symbols from {len(expr_meshes)} "
+            f"different meshes. All variables in an expression must belong to "
+            f"the same mesh. Use var.copy_into() to transfer data first."
+        )
+
     # Step 1: UNWRAP to canonical form (preprocessing/compiler IR)
     # This converts ALL expressions to a standardized form:
     # - UWexpressions substituted with base SI numeric values

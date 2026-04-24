@@ -284,6 +284,50 @@ def extract_expressions(fn):
     return atoms
 
 
+def extract_meshes(fn):
+    """Extract all meshes referenced by MeshVariable symbols in an expression.
+
+    Searches for UnderworldFunction (applied function) atoms and
+    coordinate BaseScalar atoms, collecting the meshes they belong to.
+
+    Parameters
+    ----------
+    fn : sympy.Expr, sympy.Matrix, or UWexpression
+        Expression to search.
+
+    Returns
+    -------
+    set
+        Set of Mesh objects referenced by the expression.
+    """
+    import underworld3
+
+    if isinstance(fn, underworld3.function.expression):
+        fn = fn.sym
+
+    if not hasattr(fn, 'atoms'):
+        return set()
+
+    meshes = set()
+
+    # Check applied functions (e.g., {Tf}(N.x, N.y)) — the function CLASS
+    # carries a weakref to the MeshVariable via 'meshvar'
+    for atom in fn.atoms(sympy.Function):
+        func_class = type(atom)
+        if hasattr(func_class, 'meshvar'):
+            ref = func_class.meshvar
+            var = ref() if callable(ref) else ref  # dereference weakref
+            if var is not None and hasattr(var, 'mesh') and var.mesh is not None:
+                meshes.add(var.mesh)
+
+    # Check coordinate base scalars (N.x, N.y, Gamma.x, etc.)
+    for atom in fn.atoms(sympy.vector.scalar.BaseScalar):
+        if hasattr(atom, 'mesh'):
+            meshes.add(atom.mesh)
+
+    return meshes
+
+
 def extract_expressions_and_functions(fn):
     """Extract all UWexpression, Function, and coordinate atoms.
 

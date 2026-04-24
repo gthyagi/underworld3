@@ -479,6 +479,69 @@ class EnhancedMeshVariable(DimensionalityMixin, MathematicalMixin):
         """Read timestep data."""
         return self._base_var.read_timestep(*args, **kwargs)
 
+    def copy_into(self, target):
+        """Copy this variable's data into a variable on a related mesh.
+
+        Detects the parent/submesh relationship and calls restrict or
+        prolongate as appropriate. Both meshes must be related via
+        ``extract_region``.
+
+        Parameters
+        ----------
+        target : MeshVariable
+            Destination variable. Must be on the parent or a submesh
+            of this variable's mesh.
+
+        Examples
+        --------
+        >>> v_full.copy_into(v_rock)   # restrict: parent → submesh
+        >>> v_rock.copy_into(v_full)   # prolongate: submesh → parent
+        """
+        src_mesh = self._base_var.mesh
+        tgt_mesh = target._base_var.mesh if hasattr(target, '_base_var') else target.mesh
+
+        if hasattr(tgt_mesh, 'parent') and tgt_mesh.parent is src_mesh:
+            # target is submesh of source → restrict
+            tgt_mesh.restrict(self, target, mode="replace")
+        elif hasattr(src_mesh, 'parent') and src_mesh.parent is tgt_mesh:
+            # source is submesh of target → prolongate
+            src_mesh.prolongate(self, target, mode="replace")
+        else:
+            raise ValueError(
+                "copy_into requires a parent/submesh relationship between "
+                "the two variables' meshes. Use uw.function.evaluate() "
+                "for unrelated meshes."
+            )
+
+    def add_into(self, target):
+        """Add this variable's data into a variable on a related mesh.
+
+        Like ``copy_into`` but uses ADD_VALUES — adds to existing
+        values in the target rather than replacing them.
+
+        Parameters
+        ----------
+        target : MeshVariable
+            Destination variable. Must be on the parent or a submesh
+            of this variable's mesh.
+
+        Examples
+        --------
+        >>> v_rock.add_into(v_full)    # prolongate with ADD
+        """
+        src_mesh = self._base_var.mesh
+        tgt_mesh = target._base_var.mesh if hasattr(target, '_base_var') else target.mesh
+
+        if hasattr(tgt_mesh, 'parent') and tgt_mesh.parent is src_mesh:
+            tgt_mesh.restrict(self, target, mode="add")
+        elif hasattr(src_mesh, 'parent') and src_mesh.parent is tgt_mesh:
+            src_mesh.prolongate(self, target, mode="add")
+        else:
+            raise ValueError(
+                "add_into requires a parent/submesh relationship between "
+                "the two variables' meshes."
+            )
+
     def stats(self, *args, **kwargs):
         """Get statistics for the variable."""
         return self._base_var.stats(*args, **kwargs)

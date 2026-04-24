@@ -388,6 +388,18 @@ class _BaseMeshVariable(Stateful, uw_object):
         self.mesh.vars[self.clean_name] = self
         self._setup_ds()
 
+        # BUGFIX(#130): pre-populate the mesh's coordinate cache for this
+        # variable's basis. mesh._get_coords_for_basis contains MPI
+        # collectives (DMClone, createInterpolation, globalToLocal) that
+        # deadlock when triggered lazily from rank-local code paths (e.g.
+        # rbf_interpolate inside global_evaluate_nd's per-particle loop):
+        # ranks with no exterior points skip the call, while ranks with
+        # exterior points enter the collective and wait forever. Variable
+        # construction is collective, so filling the cache here ensures all
+        # ranks populate it together and subsequent rank-local lookups are
+        # cache hits.
+        self.mesh._get_coords_for_var(self)
+
         # Setup public view of data - using NDArray_With_Callback
         self._array_cache = None  # Will be created lazily when first accessed
         self._data_cache = None  # Will be created lazily when first accessed
@@ -1038,6 +1050,11 @@ class _BaseMeshVariable(Stateful, uw_object):
         """
         Write variable data to the specified mesh hdf5
         data file. The file will be over-written.
+
+        Note: This is a low-level method intended to be called by wrapper
+        functions such as ``mesh.write_timestep()`` which handle output paths,
+        XDMF generation, and multi-variable coordination. Prefer using
+        ``mesh.write_timestep()`` for normal checkpoint and visualisation output.
 
         Note: This is a COLLECTIVE operation - all MPI ranks must call it.
 
