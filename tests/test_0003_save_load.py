@@ -67,9 +67,28 @@ def test_meshvariable_checkpoint_roundtrip(tmp_path):
     u_reloaded.load_from_checkpoint(f"{checkpoint_base}.checkpoint.00000.h5", data_name="u")
     d_reloaded.load_from_checkpoint(f"{checkpoint_base}.checkpoint.00000.h5", data_name="d")
 
-    np.testing.assert_allclose(x_reloaded.data, x.data, atol=1.0e-12)
-    np.testing.assert_allclose(u_reloaded.data, u.data, atol=1.0e-12)
-    np.testing.assert_allclose(d_reloaded.data, d.data, atol=1.0e-12)
+    # Parallel DMPlex reloads may repartition the mesh, so compare against the
+    # defining functions on the reloaded coordinates rather than local row order.
+    np.testing.assert_allclose(
+        x_reloaded.data[:, 0],
+        x_reloaded.coords[:, 0] + 2.0 * x_reloaded.coords[:, 1],
+        atol=1.0e-12,
+    )
+    np.testing.assert_allclose(
+        u_reloaded.data[:, 0],
+        3.0 * u_reloaded.coords[:, 0] - u_reloaded.coords[:, 1],
+        atol=1.0e-12,
+    )
+    np.testing.assert_allclose(
+        u_reloaded.data[:, 1],
+        u_reloaded.coords[:, 0] + 4.0 * u_reloaded.coords[:, 1],
+        atol=1.0e-12,
+    )
+    np.testing.assert_allclose(
+        d_reloaded.data[:, 0],
+        5.0 * d_reloaded.coords[:, 0] + 7.0 * d_reloaded.coords[:, 1],
+        atol=1.0e-12,
+    )
 
 
 def test_swarm_save_and_load(tmp_path):

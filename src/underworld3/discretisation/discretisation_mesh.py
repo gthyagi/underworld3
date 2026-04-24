@@ -403,10 +403,11 @@ class Mesh(Stateful, uw_object):
 
                 f.close()
 
-                # This needs to be done when reading a dm from a checkpoint
-                # or building from an imported mesh format
-
-                self.dm.setFromOptions()
+                # Do not call setFromOptions() here. DMPlexTopologyLoad()
+                # returns the topology SF needed to reload checkpoint fields.
+                # setFromOptions() can repartition/reorder the DM before UW
+                # composes that SF with any later redistribution SF, leaving
+                # checkpoint field reloads mapped to stale point numbering.
 
             else:
                 raise RuntimeError(
@@ -2571,21 +2572,29 @@ class Mesh(Stateful, uw_object):
 
                     if meshVars is not None:
                         for var in meshVars:
-                            var._sync_lvec_to_gvec()
+                            if var._lvec is None:
+                                var._set_vec(available=True)
                             iset, subdm = self.dm.createSubDM(var.field_id)
                             subdm.setName(var.clean_name)
-                            self.dm.globalVectorView(viewer, subdm, var._gvec)
+                            old_lvec_name = var._lvec.getName()
+                            var._lvec.setName(var.clean_name)
                             self.dm.sectionView(viewer, subdm)
+                            self.dm.localVectorView(viewer, subdm, var._lvec)
+                            var._lvec.setName(old_lvec_name)
                             # v._gvec.view(viewer) # would add viz information plus a duplicate of the data
 
                     if swarmVars is not None:
                         for svar in swarmVars:
                             var = svar._meshVar
-                            var._sync_lvec_to_gvec()
+                            if var._lvec is None:
+                                var._set_vec(available=True)
                             iset, subdm = self.dm.createSubDM(var.field_id)
                             subdm.setName(var.clean_name)
-                            self.dm.globalVectorView(viewer, subdm, var._gvec)
+                            old_lvec_name = var._lvec.getName()
+                            var._lvec.setName(var.clean_name)
                             self.dm.sectionView(viewer, subdm)
+                            self.dm.localVectorView(viewer, subdm, var._lvec)
+                            var._lvec.setName(old_lvec_name)
 
                     uw.mpi.barrier()  # should not be required
                 finally:
