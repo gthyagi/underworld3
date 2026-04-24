@@ -2514,6 +2514,7 @@ class Mesh(Stateful, uw_object):
     def write_checkpoint(
         self,
         filename: str,
+        outputPath: str = "",
         meshUpdates: bool = True,
         meshVars: Optional[list] = [],
         swarmVars: Optional[list] = [],
@@ -2526,6 +2527,9 @@ class Mesh(Stateful, uw_object):
         to be stored to reload the data correctly, and 2) the visualisation information (vertex form of fields)
         is not stored. This routine uses dmplex VectorView and VectorLoad functionality.
         """
+
+        if outputPath:
+            filename = os.path.join(outputPath, filename)
 
         old_dm_name = self.dm.getName()
         self.dm.setName("uw_mesh")

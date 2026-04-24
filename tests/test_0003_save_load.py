@@ -56,7 +56,13 @@ def test_meshvariable_checkpoint_roundtrip(tmp_path):
     d.data[:, 0] = 5.0 * d.coords[:, 0] + 7.0 * d.coords[:, 1]
 
     checkpoint_base = tmp_path / "restart"
-    mesh.write_checkpoint(str(checkpoint_base), meshUpdates=False, meshVars=[x, u, d], index=0)
+    mesh.write_checkpoint(
+        "restart",
+        outputPath=str(tmp_path),
+        meshUpdates=False,
+        meshVars=[x, u, d],
+        index=0,
+    )
 
     mesh_reloaded = uw.discretisation.Mesh(f"{checkpoint_base}.mesh.0.h5")
     x_reloaded = uw.discretisation.MeshVariable("x", mesh_reloaded, 1, degree=1)
