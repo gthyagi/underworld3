@@ -1294,6 +1294,7 @@ class _BaseMeshVariable(Stateful, uw_object):
         indexset, subdm = self.mesh.dm.createSubDM(self.field_id)
         sectiondm = subdm.clone()
         viewer = PETSc.ViewerHDF5().create(filename, "r", comm=PETSc.COMM_WORLD)
+        viewer.pushFormat(PETSc.Viewer.Format.HDF5_PETSC)
 
         old_mesh_name = self.mesh.dm.getName()
         old_vec_name = self._gvec.getName()
@@ -1312,6 +1313,7 @@ class _BaseMeshVariable(Stateful, uw_object):
             self._gvec.setName(old_vec_name)
             if old_mesh_name is not None:
                 self.mesh.dm.setName(old_mesh_name)
+            viewer.popFormat()
             viewer.destroy()
             sectiondm.destroy()
             indexset.destroy()
