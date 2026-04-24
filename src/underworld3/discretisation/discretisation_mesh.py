@@ -1792,6 +1792,18 @@ class Mesh(Stateful, uw_object):
         for cb in old_callbacks:
             self._coords.add_callback(cb)
 
+        # BUGFIX(#122): mark registered solvers for rebuild. Since PR #127
+        # ("Trust JIT cache: skip DM rebuild on constant-only parameter
+        # changes") a solver with is_setup=True trusts its cached PETSc DM
+        # / SNES assembly and skips rebuild on the next solve(). After a
+        # coordinate change the cached DM still carries pre-deform
+        # coordinates, so F(v_prev) ≈ 0 and the solver converges in 0
+        # iterations without updating the solution. mesh.adapt() already
+        # does this; _deform_mesh must match.
+        for solver in self._equation_systems_register:
+            if solver is not None and hasattr(solver, "is_setup"):
+                solver.is_setup = False
+
         # Propagate coordinate changes to registered submeshes
         for submesh in self._registered_submeshes:
             submesh.sync_coordinates_from_parent()
