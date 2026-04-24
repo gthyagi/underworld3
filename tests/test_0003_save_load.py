@@ -55,6 +55,30 @@ def test_meshvariable_checkpoint_roundtrip(tmp_path):
     u.data[:, 1] = u.coords[:, 0] + 4.0 * u.coords[:, 1]
     d.data[:, 0] = 5.0 * d.coords[:, 0] + 7.0 * d.coords[:, 1]
 
+    def assert_reloaded_fields(x_reloaded, u_reloaded, d_reloaded):
+        # Parallel DMPlex reloads may repartition the mesh, so compare against the
+        # defining functions on the reloaded coordinates rather than local row order.
+        np.testing.assert_allclose(
+            x_reloaded.data[:, 0],
+            x_reloaded.coords[:, 0] + 2.0 * x_reloaded.coords[:, 1],
+            atol=1.0e-12,
+        )
+        np.testing.assert_allclose(
+            u_reloaded.data[:, 0],
+            3.0 * u_reloaded.coords[:, 0] - u_reloaded.coords[:, 1],
+            atol=1.0e-12,
+        )
+        np.testing.assert_allclose(
+            u_reloaded.data[:, 1],
+            u_reloaded.coords[:, 0] + 4.0 * u_reloaded.coords[:, 1],
+            atol=1.0e-12,
+        )
+        np.testing.assert_allclose(
+            d_reloaded.data[:, 0],
+            5.0 * d_reloaded.coords[:, 0] + 7.0 * d_reloaded.coords[:, 1],
+            atol=1.0e-12,
+        )
+
     checkpoint_base = tmp_path / "restart"
     mesh.write_checkpoint(
         "restart",
@@ -73,28 +97,28 @@ def test_meshvariable_checkpoint_roundtrip(tmp_path):
     u_reloaded.read_checkpoint(f"{checkpoint_base}.checkpoint.00000.h5", data_name="u")
     d_reloaded.read_checkpoint(f"{checkpoint_base}.checkpoint.00000.h5", data_name="d")
 
-    # Parallel DMPlex reloads may repartition the mesh, so compare against the
-    # defining functions on the reloaded coordinates rather than local row order.
-    np.testing.assert_allclose(
-        x_reloaded.data[:, 0],
-        x_reloaded.coords[:, 0] + 2.0 * x_reloaded.coords[:, 1],
-        atol=1.0e-12,
+    assert_reloaded_fields(x_reloaded, u_reloaded, d_reloaded)
+
+    separate_base = tmp_path / "restart_separate"
+    mesh.write_checkpoint(
+        "restart_separate",
+        outputPath=str(tmp_path),
+        meshUpdates=False,
+        meshVars=[x, u, d],
+        index=0,
+        separate_variable_files=True,
     )
-    np.testing.assert_allclose(
-        u_reloaded.data[:, 0],
-        3.0 * u_reloaded.coords[:, 0] - u_reloaded.coords[:, 1],
-        atol=1.0e-12,
-    )
-    np.testing.assert_allclose(
-        u_reloaded.data[:, 1],
-        u_reloaded.coords[:, 0] + 4.0 * u_reloaded.coords[:, 1],
-        atol=1.0e-12,
-    )
-    np.testing.assert_allclose(
-        d_reloaded.data[:, 0],
-        5.0 * d_reloaded.coords[:, 0] + 7.0 * d_reloaded.coords[:, 1],
-        atol=1.0e-12,
-    )
+
+    mesh_reloaded = uw.discretisation.Mesh(f"{separate_base}.mesh.0.h5")
+    x_reloaded = uw.discretisation.MeshVariable("x", mesh_reloaded, 1, degree=1)
+    u_reloaded = uw.discretisation.MeshVariable("u", mesh_reloaded, 2, degree=2)
+    d_reloaded = uw.discretisation.MeshVariable("d", mesh_reloaded, 1, degree=1, continuous=False)
+
+    x_reloaded.read_checkpoint(f"{separate_base}.x.checkpoint.00000.h5", data_name="x")
+    u_reloaded.read_checkpoint(f"{separate_base}.u.checkpoint.00000.h5", data_name="u")
+    d_reloaded.read_checkpoint(f"{separate_base}.d.checkpoint.00000.h5", data_name="d")
+
+    assert_reloaded_fields(x_reloaded, u_reloaded, d_reloaded)
 
 
 def test_swarm_save_and_load(tmp_path):
