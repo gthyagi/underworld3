@@ -1292,24 +1292,57 @@ class _BaseMeshVariable(Stateful, uw_object):
             self._set_vec(available=True)
 
         indexset, subdm = self.mesh.dm.createSubDM(self.field_id)
-        sectiondm = subdm.clone()
+        sectiondm = self.mesh.dm.clone()
         viewer = PETSc.ViewerHDF5().create(filename, "r", comm=PETSc.COMM_WORLD)
         viewer.pushFormat(PETSc.Viewer.Format.HDF5_PETSC)
 
         old_mesh_name = self.mesh.dm.getName()
+        old_lvec_name = self._lvec.getName()
         old_vec_name = self._gvec.getName()
 
         try:
             self.mesh.dm.setName("uw_mesh")
             subdm.setName(data_name)
             sectiondm.setName(data_name)
+            self._lvec.setName(data_name)
             self._gvec.setName(data_name)
 
-            gsf, _ = self.mesh.dm.sectionLoad(viewer, sectiondm, self.mesh.sf)
-            subdm.setSection(sectiondm.getSection())
-            self.mesh.dm.globalVectorLoad(viewer, subdm, gsf, self._gvec)
-            subdm.globalToLocal(self._gvec, self._lvec, addv=False)
+            from underworld3.cython.petsc_discretisation import (
+                petsc_dmplex_load_local_vector,
+            )
+
+            loaded_lvec = petsc_dmplex_load_local_vector(
+                self.mesh.dm, viewer, sectiondm, self.mesh.sf, data_name
+            )
+
+            source_section = sectiondm.getSection()
+            target_section = subdm.getSection()
+            source_array = loaded_lvec.array_r
+            target_array = self._lvec.array
+            p_start, p_end = target_section.getChart()
+
+            for point in range(p_start, p_end):
+                target_dof = target_section.getDof(point)
+                if target_dof == 0:
+                    continue
+
+                source_dof = source_section.getDof(point)
+                if source_dof < target_dof:
+                    raise RuntimeError(
+                        f"Checkpoint section has {source_dof} dofs for point {point}, "
+                        f"but target variable requires {target_dof}."
+                    )
+
+                source_offset = source_section.getOffset(point)
+                target_offset = target_section.getOffset(point)
+                target_array[target_offset : target_offset + target_dof] = (
+                    source_array[source_offset : source_offset + target_dof]
+                )
+
+            loaded_lvec.destroy()
+            self._sync_lvec_to_gvec()
         finally:
+            self._lvec.setName(old_lvec_name)
             self._gvec.setName(old_vec_name)
             if old_mesh_name is not None:
                 self.mesh.dm.setName(old_mesh_name)
