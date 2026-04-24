@@ -150,11 +150,15 @@ def _from_plexh5(
     viewer = PETSc.ViewerHDF5().create(filename, "r", comm=comm)
     h5plex = PETSc.DMPlex().create(comm=comm)
     h5plex.setName("uw_mesh")
-    sf0 = h5plex.topologyLoad(viewer)
-    h5plex.coordinatesLoad(viewer, sf0)
-    h5plex.labelsLoad(viewer, sf0)
-    h5plex.markBoundaryFaces("All_Boundaries", 1001)
-    viewer.destroy()
+    viewer.pushFormat(PETSc.Viewer.Format.HDF5_PETSC)
+    try:
+        sf0 = h5plex.topologyLoad(viewer)
+        h5plex.coordinatesLoad(viewer, sf0)
+        h5plex.labelsLoad(viewer, sf0)
+        h5plex.markBoundaryFaces("All_Boundaries", 1001)
+    finally:
+        viewer.popFormat()
+        viewer.destroy()
 
     if not return_sf:
         return h5plex
@@ -519,7 +523,7 @@ class Mesh(Stateful, uw_object):
             self.dm.setRefinementUniform()
 
             if not self.dm.isDistributed():
-                self.dm.distribute()
+                self.sf1 = self.dm.distribute()
 
             # self.dm_hierarchy = self.dm.refineHierarchy(refinement)
 
@@ -556,7 +560,7 @@ class Mesh(Stateful, uw_object):
             self.dm.setRefinementUniform()
 
             if not self.dm.isDistributed():
-                self.dm.distribute()
+                self.sf1 = self.dm.distribute()
 
             self.dm_hierarchy = [self.dm]
             for i in range(coarsening):
@@ -577,7 +581,7 @@ class Mesh(Stateful, uw_object):
 
         else:
             if not self.dm.isDistributed():
-                self.dm.distribute()
+                self.sf1 = self.dm.distribute()
 
             self.dm_hierarchy = [self.dm]
             self.dm_h = self.dm.clone()
@@ -2560,30 +2564,33 @@ class Mesh(Stateful, uw_object):
                     checkpoint_file = filename + f".checkpoint.{index:05}.h5"
 
                 viewer = PETSc.ViewerHDF5().create(checkpoint_file, "w", comm=PETSc.COMM_WORLD)
+                viewer.pushFormat(PETSc.Viewer.Format.HDF5_PETSC)
+                try:
+                    # Store the parallel-mesh section information for restoring the checkpoint.
+                    self.dm.sectionView(viewer, self.dm)
 
-                # Store the parallel-mesh section information for restoring the checkpoint.
-                self.dm.sectionView(viewer, self.dm)
+                    if meshVars is not None:
+                        for var in meshVars:
+                            var._sync_lvec_to_gvec()
+                            iset, subdm = self.dm.createSubDM(var.field_id)
+                            subdm.setName(var.clean_name)
+                            self.dm.globalVectorView(viewer, subdm, var._gvec)
+                            self.dm.sectionView(viewer, subdm)
+                            # v._gvec.view(viewer) # would add viz information plus a duplicate of the data
 
-                if meshVars is not None:
-                    for var in meshVars:
-                        var._sync_lvec_to_gvec()
-                        iset, subdm = self.dm.createSubDM(var.field_id)
-                        subdm.setName(var.clean_name)
-                        self.dm.globalVectorView(viewer, subdm, var._gvec)
-                        self.dm.sectionView(viewer, subdm)
-                        # v._gvec.view(viewer) # would add viz information plus a duplicate of the data
+                    if swarmVars is not None:
+                        for svar in swarmVars:
+                            var = svar._meshVar
+                            var._sync_lvec_to_gvec()
+                            iset, subdm = self.dm.createSubDM(var.field_id)
+                            subdm.setName(var.clean_name)
+                            self.dm.globalVectorView(viewer, subdm, var._gvec)
+                            self.dm.sectionView(viewer, subdm)
 
-                if swarmVars is not None:
-                    for svar in swarmVars:
-                        var = svar._meshVar
-                        var._sync_lvec_to_gvec()
-                        iset, subdm = self.dm.createSubDM(var.field_id)
-                        subdm.setName(var.clean_name)
-                        self.dm.globalVectorView(viewer, subdm, var._gvec)
-                        self.dm.sectionView(viewer, subdm)
-
-                uw.mpi.barrier()  # should not be required
-                viewer.destroy()
+                    uw.mpi.barrier()  # should not be required
+                finally:
+                    viewer.popFormat()
+                    viewer.destroy()
         finally:
             if old_dm_name is not None:
                 self.dm.setName(old_dm_name)
@@ -2613,8 +2620,12 @@ class Mesh(Stateful, uw_object):
             # viewer.pushTimestepping(viewer)
             # viewer.setTimestep(index)
 
-        viewer(self.dm)
-        viewer.destroy()
+        viewer.pushFormat(PETSc.Viewer.Format.HDF5_PETSC)
+        try:
+            viewer(self.dm)
+        finally:
+            viewer.popFormat()
+            viewer.destroy()
 
         ## Add boundary metadata to the file
 
