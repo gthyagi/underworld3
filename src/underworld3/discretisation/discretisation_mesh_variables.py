@@ -1274,7 +1274,7 @@ class _BaseMeshVariable(Stateful, uw_object):
 
     @timing.routine_timer_decorator
     @uw.collective_operation
-    def load_from_checkpoint(
+    def read_checkpoint(
         self,
         filename: str,
         data_name: Optional[str] = None,
