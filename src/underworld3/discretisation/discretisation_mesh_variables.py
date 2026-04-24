@@ -1272,6 +1272,53 @@ class _BaseMeshVariable(Stateful, uw_object):
 
         return
 
+    @timing.routine_timer_decorator
+    @uw.collective_operation
+    def load_from_checkpoint(
+        self,
+        filename: str,
+        data_name: Optional[str] = None,
+    ):
+        """Load this mesh variable from ``Mesh.write_checkpoint()`` output.
+
+        This is an exact PETSc DMPlex section/vector reload path. It does not
+        use the coordinate/KDTree remapping used by ``read_timestep()``.
+        """
+
+        if data_name is None:
+            data_name = self.clean_name
+
+        if self._lvec is None:
+            self._set_vec(available=True)
+
+        indexset, subdm = self.mesh.dm.createSubDM(self.field_id)
+        sectiondm = subdm.clone()
+        viewer = PETSc.ViewerHDF5().create(filename, "r", comm=PETSc.COMM_WORLD)
+
+        old_mesh_name = self.mesh.dm.getName()
+        old_vec_name = self._gvec.getName()
+
+        try:
+            self.mesh.dm.setName("uw_mesh")
+            subdm.setName(data_name)
+            sectiondm.setName(data_name)
+            self._gvec.setName(data_name)
+
+            gsf, _ = self.mesh.dm.sectionLoad(viewer, sectiondm, self.mesh.sf)
+            subdm.setSection(sectiondm.getSection())
+            self.mesh.dm.globalVectorLoad(viewer, subdm, gsf, self._gvec)
+            subdm.globalToLocal(self._gvec, self._lvec, addv=False)
+        finally:
+            self._gvec.setName(old_vec_name)
+            if old_mesh_name is not None:
+                self.mesh.dm.setName(old_mesh_name)
+            viewer.destroy()
+            sectiondm.destroy()
+            indexset.destroy()
+            subdm.destroy()
+
+        return
+
     @property
     def fn(self) -> sympy.Basic:
         """

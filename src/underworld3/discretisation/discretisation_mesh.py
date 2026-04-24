@@ -1,5 +1,6 @@
 from typing import Optional, Tuple, Union
 from enum import Enum
+from contextlib import contextmanager
 
 import os
 import weakref
@@ -25,6 +26,24 @@ import underworld3.timing as timing
 ## Introduce these two specific types of coordinate tracking vector objects
 
 from sympy.vector import CoordSys3D
+
+
+@contextmanager
+def _temporary_petsc_option(key, value):
+    opts = PETSc.Options()
+    try:
+        old_value = opts.getString(key)
+    except KeyError:
+        old_value = None
+    opts[key] = value
+    try:
+        yield
+    finally:
+        if old_value is None:
+            opts.delValue(key)
+        else:
+            opts[key] = old_value
+
 
 ## Add the ability to inherit an Enum, so we can add standard boundary
 ## types to ones that are supplied by the users / the meshing module
@@ -128,18 +147,19 @@ def _from_plexh5(
     if comm == None:
         comm = PETSc.COMM_WORLD
 
-    # Use createFromFile for a single-call load (issue #96: the separate
-    # topologyLoad + coordinatesLoad + labelsLoad pipeline leaves the
-    # coordinate DM in a state that DMPlexComputeBdIntegral cannot handle).
-    h5plex = PETSc.DMPlex().createFromFile(filename, interpolate=True, comm=comm)
-
+    viewer = PETSc.ViewerHDF5().create(filename, "r", comm=comm)
+    h5plex = PETSc.DMPlex().create(comm=comm)
     h5plex.setName("uw_mesh")
+    sf0 = h5plex.topologyLoad(viewer)
+    h5plex.coordinatesLoad(viewer, sf0)
+    h5plex.labelsLoad(viewer, sf0)
     h5plex.markBoundaryFaces("All_Boundaries", 1001)
+    viewer.destroy()
 
     if not return_sf:
         return h5plex
     else:
-        return h5plex.getPointSF(), h5plex
+        return sf0, h5plex
 
 
 class Mesh(Stateful, uw_object):
@@ -2502,52 +2522,59 @@ class Mesh(Stateful, uw_object):
         is not stored. This routine uses dmplex VectorView and VectorLoad functionality.
         """
 
-        # The mesh checkpoint is the same as the one required for visualisation
-
-        if not meshUpdates:
-            from pathlib import Path
-
-            mesh_file = filename + ".mesh.0.h5"
-            path = Path(mesh_file)
-            if not path.is_file():
-                self.write(mesh_file)
-
-        else:
-            self.write(filename + f".mesh.{index:05}.h5")
-
-        # Checkpoint file
-
-        if unique_id:
-            checkpoint_file = filename + f"{uw.mpi.unique}.checkpoint.{index:05}.h5"
-        else:
-            checkpoint_file = filename + f".checkpoint.{index:05}.h5"
-
+        old_dm_name = self.dm.getName()
         self.dm.setName("uw_mesh")
-        viewer = PETSc.ViewerHDF5().create(checkpoint_file, "w", comm=PETSc.COMM_WORLD)
 
-        # Store the parallel-mesh section information for restoring the checkpoint.
-        self.dm.sectionView(viewer, self.dm)
+        try:
+            with _temporary_petsc_option("dm_plex_view_hdf5_storage_version", "3.0.0"):
+                # The mesh checkpoint is the same as the one required for visualisation
 
-        if meshVars is not None:
-            for var in meshVars:
-                var._sync_lvec_to_gvec()
-                iset, subdm = self.dm.createSubDM(var.field_id)
-                subdm.setName(var.clean_name)
-                self.dm.globalVectorView(viewer, subdm, var._gvec)
-                self.dm.sectionView(viewer, subdm)
-                # v._gvec.view(viewer) # would add viz information plus a duplicate of the data
+                if not meshUpdates:
+                    from pathlib import Path
 
-        if swarmVars is not None:
-            for svar in swarmVars:
-                var = svar._meshVar
-                var._sync_lvec_to_gvec()
-                iset, subdm = self.dm.createSubDM(var.field_id)
-                subdm.setName(var.clean_name)
-                self.dm.globalVectorView(viewer, subdm, var._gvec)
-                self.dm.sectionView(viewer, subdm)
+                    mesh_file = filename + ".mesh.0.h5"
+                    path = Path(mesh_file)
+                    if not path.is_file():
+                        self.write(mesh_file)
 
-        uw.mpi.barrier()  # should not be required
-        viewer.destroy()
+                else:
+                    self.write(filename + f".mesh.{index:05}.h5")
+
+                # Checkpoint file
+
+                if unique_id:
+                    checkpoint_file = filename + f"{uw.mpi.unique}.checkpoint.{index:05}.h5"
+                else:
+                    checkpoint_file = filename + f".checkpoint.{index:05}.h5"
+
+                viewer = PETSc.ViewerHDF5().create(checkpoint_file, "w", comm=PETSc.COMM_WORLD)
+
+                # Store the parallel-mesh section information for restoring the checkpoint.
+                self.dm.sectionView(viewer, self.dm)
+
+                if meshVars is not None:
+                    for var in meshVars:
+                        var._sync_lvec_to_gvec()
+                        iset, subdm = self.dm.createSubDM(var.field_id)
+                        subdm.setName(var.clean_name)
+                        self.dm.globalVectorView(viewer, subdm, var._gvec)
+                        self.dm.sectionView(viewer, subdm)
+                        # v._gvec.view(viewer) # would add viz information plus a duplicate of the data
+
+                if swarmVars is not None:
+                    for svar in swarmVars:
+                        var = svar._meshVar
+                        var._sync_lvec_to_gvec()
+                        iset, subdm = self.dm.createSubDM(var.field_id)
+                        subdm.setName(var.clean_name)
+                        self.dm.globalVectorView(viewer, subdm, var._gvec)
+                        self.dm.sectionView(viewer, subdm)
+
+                uw.mpi.barrier()  # should not be required
+                viewer.destroy()
+        finally:
+            if old_dm_name is not None:
+                self.dm.setName(old_dm_name)
 
     @timing.routine_timer_decorator
     def write(self, filename: str, index: Optional[int] = None):
