@@ -36,6 +36,29 @@ def test_meshvariable_save_and_read(tmp_path):
     assert np.allclose(X.array, X2.array)
 
 
+def test_meshvariable_checkpoint_roundtrip(tmp_path):
+    import underworld3 as uw
+    from underworld3.meshing import UnstructuredSimplexBox
+
+    mesh = UnstructuredSimplexBox(
+        minCoords=(0.0, 0.0),
+        maxCoords=(1.0, 1.0),
+        cellSize=1.0 / 8.0,
+    )
+
+    x = uw.discretisation.MeshVariable("x", mesh, 1, degree=1)
+    x.data[:, 0] = x.coords[:, 0] + 2.0 * x.coords[:, 1]
+
+    checkpoint_base = tmp_path / "restart"
+    mesh.write_checkpoint(str(checkpoint_base), meshUpdates=False, meshVars=[x], index=0)
+
+    mesh_reloaded = uw.discretisation.Mesh(f"{checkpoint_base}.mesh.0.h5")
+    x_reloaded = uw.discretisation.MeshVariable("x", mesh_reloaded, 1, degree=1)
+    x_reloaded.load_from_checkpoint(f"{checkpoint_base}.checkpoint.00000.h5", data_name="x")
+
+    np.testing.assert_allclose(x_reloaded.data, x.data, atol=1.0e-12)
+
+
 def test_swarm_save_and_load(tmp_path):
     import underworld3 as uw
     from underworld3.meshing import UnstructuredSimplexBox
