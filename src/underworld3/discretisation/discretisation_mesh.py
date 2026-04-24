@@ -2520,7 +2520,7 @@ class Mesh(Stateful, uw_object):
         swarmVars: Optional[list] = [],
         index: Optional[int] = 0,
         unique_id: Optional[bool] = False,
-        separate_variable_files: bool = False,
+        separate_variable_files: bool = True,
     ):
         """Write PETSc DMPlex checkpoint files for restart/postprocessing.
 
@@ -2545,19 +2545,19 @@ class Mesh(Stateful, uw_object):
         unique_id
             Preserve existing unique-rank filename behaviour for checkpoint data.
         separate_variable_files
-            If ``False`` (default), write all variables into one file:
-            ``<base>.checkpoint.<index>.h5``. If ``True``, write one file per
-            variable: ``<base>.<variable>.checkpoint.<index>.h5``.
+            If ``True`` (default), write one file per variable:
+            ``<base>.<variable>.<index>.h5``. If ``False``, write all variables
+            into one file: ``<base>.checkpoint.<index>.h5``.
         """
 
         if outputPath:
             filename = os.path.join(outputPath, filename)
 
         def _checkpoint_filename(var_name=None):
-            variable_part = f".{var_name}" if var_name is not None else ""
+            variable_part = f".{var_name}" if var_name is not None else ".checkpoint"
             if unique_id:
-                return filename + f"{uw.mpi.unique}{variable_part}.checkpoint.{index:05}.h5"
-            return filename + f"{variable_part}.checkpoint.{index:05}.h5"
+                return filename + f"{uw.mpi.unique}{variable_part}.{index:05}.h5"
+            return filename + f"{variable_part}.{index:05}.h5"
 
         def _write_variable(viewer, var):
             if var._lvec is None:
@@ -2601,7 +2601,7 @@ class Mesh(Stateful, uw_object):
                 if not meshUpdates:
                     from pathlib import Path
 
-                    mesh_file = filename + ".mesh.0.h5"
+                    mesh_file = filename + f".mesh.{index:05}.h5"
                     path = Path(mesh_file)
                     if not path.is_file():
                         self.write(mesh_file)

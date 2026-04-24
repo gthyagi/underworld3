@@ -86,9 +86,10 @@ def test_meshvariable_checkpoint_roundtrip(tmp_path):
         meshUpdates=False,
         meshVars=[x, u, d],
         index=0,
+        separate_variable_files=False,
     )
 
-    mesh_reloaded = uw.discretisation.Mesh(f"{checkpoint_base}.mesh.0.h5")
+    mesh_reloaded = uw.discretisation.Mesh(f"{checkpoint_base}.mesh.00000.h5")
     x_reloaded = uw.discretisation.MeshVariable("x", mesh_reloaded, 1, degree=1)
     u_reloaded = uw.discretisation.MeshVariable("u", mesh_reloaded, 2, degree=2)
     d_reloaded = uw.discretisation.MeshVariable("d", mesh_reloaded, 1, degree=1, continuous=False)
@@ -106,17 +107,16 @@ def test_meshvariable_checkpoint_roundtrip(tmp_path):
         meshUpdates=False,
         meshVars=[x, u, d],
         index=0,
-        separate_variable_files=True,
     )
 
-    mesh_reloaded = uw.discretisation.Mesh(f"{separate_base}.mesh.0.h5")
+    mesh_reloaded = uw.discretisation.Mesh(f"{separate_base}.mesh.00000.h5")
     x_reloaded = uw.discretisation.MeshVariable("x", mesh_reloaded, 1, degree=1)
     u_reloaded = uw.discretisation.MeshVariable("u", mesh_reloaded, 2, degree=2)
     d_reloaded = uw.discretisation.MeshVariable("d", mesh_reloaded, 1, degree=1, continuous=False)
 
-    x_reloaded.read_checkpoint(f"{separate_base}.x.checkpoint.00000.h5", data_name="x")
-    u_reloaded.read_checkpoint(f"{separate_base}.u.checkpoint.00000.h5", data_name="u")
-    d_reloaded.read_checkpoint(f"{separate_base}.d.checkpoint.00000.h5", data_name="d")
+    x_reloaded.read_checkpoint(f"{separate_base}.x.00000.h5", data_name="x")
+    u_reloaded.read_checkpoint(f"{separate_base}.u.00000.h5", data_name="u")
+    d_reloaded.read_checkpoint(f"{separate_base}.d.00000.h5", data_name="d")
 
     assert_reloaded_fields(x_reloaded, u_reloaded, d_reloaded)
 
