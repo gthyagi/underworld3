@@ -47,16 +47,29 @@ def test_meshvariable_checkpoint_roundtrip(tmp_path):
     )
 
     x = uw.discretisation.MeshVariable("x", mesh, 1, degree=1)
+    u = uw.discretisation.MeshVariable("u", mesh, 2, degree=2)
+    d = uw.discretisation.MeshVariable("d", mesh, 1, degree=1, continuous=False)
+
     x.data[:, 0] = x.coords[:, 0] + 2.0 * x.coords[:, 1]
+    u.data[:, 0] = 3.0 * u.coords[:, 0] - u.coords[:, 1]
+    u.data[:, 1] = u.coords[:, 0] + 4.0 * u.coords[:, 1]
+    d.data[:, 0] = 5.0 * d.coords[:, 0] + 7.0 * d.coords[:, 1]
 
     checkpoint_base = tmp_path / "restart"
-    mesh.write_checkpoint(str(checkpoint_base), meshUpdates=False, meshVars=[x], index=0)
+    mesh.write_checkpoint(str(checkpoint_base), meshUpdates=False, meshVars=[x, u, d], index=0)
 
     mesh_reloaded = uw.discretisation.Mesh(f"{checkpoint_base}.mesh.0.h5")
     x_reloaded = uw.discretisation.MeshVariable("x", mesh_reloaded, 1, degree=1)
+    u_reloaded = uw.discretisation.MeshVariable("u", mesh_reloaded, 2, degree=2)
+    d_reloaded = uw.discretisation.MeshVariable("d", mesh_reloaded, 1, degree=1, continuous=False)
+
     x_reloaded.load_from_checkpoint(f"{checkpoint_base}.checkpoint.00000.h5", data_name="x")
+    u_reloaded.load_from_checkpoint(f"{checkpoint_base}.checkpoint.00000.h5", data_name="u")
+    d_reloaded.load_from_checkpoint(f"{checkpoint_base}.checkpoint.00000.h5", data_name="d")
 
     np.testing.assert_allclose(x_reloaded.data, x.data, atol=1.0e-12)
+    np.testing.assert_allclose(u_reloaded.data, u.data, atol=1.0e-12)
+    np.testing.assert_allclose(d_reloaded.data, d.data, atol=1.0e-12)
 
 
 def test_swarm_save_and_load(tmp_path):
