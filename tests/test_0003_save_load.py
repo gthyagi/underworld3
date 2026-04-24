@@ -63,9 +63,9 @@ def test_meshvariable_checkpoint_roundtrip(tmp_path):
     u_reloaded = uw.discretisation.MeshVariable("u", mesh_reloaded, 2, degree=2)
     d_reloaded = uw.discretisation.MeshVariable("d", mesh_reloaded, 1, degree=1, continuous=False)
 
-    x_reloaded.load_from_checkpoint(f"{checkpoint_base}.checkpoint.00000.h5", data_name="x")
-    u_reloaded.load_from_checkpoint(f"{checkpoint_base}.checkpoint.00000.h5", data_name="u")
-    d_reloaded.load_from_checkpoint(f"{checkpoint_base}.checkpoint.00000.h5", data_name="d")
+    x_reloaded.read_checkpoint(f"{checkpoint_base}.checkpoint.00000.h5", data_name="x")
+    u_reloaded.read_checkpoint(f"{checkpoint_base}.checkpoint.00000.h5", data_name="u")
+    d_reloaded.read_checkpoint(f"{checkpoint_base}.checkpoint.00000.h5", data_name="d")
 
     # Parallel DMPlex reloads may repartition the mesh, so compare against the
     # defining functions on the reloaded coordinates rather than local row order.

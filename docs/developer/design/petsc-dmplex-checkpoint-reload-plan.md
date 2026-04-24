@@ -12,11 +12,11 @@ mesh = uw.discretisation.Mesh("restart.mesh.0.h5", ...)
 v_soln = uw.discretisation.MeshVariable("Velocity", mesh, ...)
 p_soln = uw.discretisation.MeshVariable("Pressure", mesh, ...)
 
-v_soln.load_from_checkpoint(
+v_soln.read_checkpoint(
     "restart.checkpoint.00000.h5",
     data_name="Velocity",
 )
-p_soln.load_from_checkpoint(
+p_soln.read_checkpoint(
     "restart.checkpoint.00000.h5",
     data_name="Pressure",
 )
@@ -43,7 +43,7 @@ Commit at useful milestones, such as:
 - adding the first failing regression test
 - adding storage-version `3.0.0` write support
 - exposing or preserving the checkpoint topology SF
-- adding the first working `load_from_checkpoint(...)` helper
+- adding the first working `read_checkpoint(...)` helper
 - adding MPI same-rank test coverage
 - adding different-rank reload coverage or documenting its limitation
 - integrating the helper into benchmark-facing workflow tests
@@ -139,7 +139,7 @@ Expected outcome:
 Add a public helper on mesh variables, for example:
 
 ```python
-mesh_var.load_from_checkpoint(
+mesh_var.read_checkpoint(
     filename,
     data_name=None,
 )
@@ -418,8 +418,8 @@ After this work, benchmark postprocessing should be able to do:
 
 ```python
 mesh = uw.discretisation.Mesh("restart.mesh.0.h5", ...)
-v_soln.load_from_checkpoint("restart.checkpoint.00000.h5", "Velocity")
-p_soln.load_from_checkpoint("restart.checkpoint.00000.h5", "Pressure")
+v_soln.read_checkpoint("restart.checkpoint.00000.h5", "Velocity")
+p_soln.read_checkpoint("restart.checkpoint.00000.h5", "Pressure")
 ```
 
 This should provide exact FE restart behavior, avoid high-memory KDTree reload,
