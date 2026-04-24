@@ -2532,16 +2532,76 @@ class Mesh(Stateful, uw_object):
         swarmVars: Optional[list] = [],
         index: Optional[int] = 0,
         unique_id: Optional[bool] = False,
+        separate_variable_files: bool = False,
     ):
-        """Write data in a format that can be restored for restarting the simulation.
+        """Write PETSc DMPlex checkpoint files for restart/postprocessing.
 
-        The difference between this and the visualisation is 1) the parallel section needs
-        to be stored to reload the data correctly, and 2) the visualisation information (vertex form of fields)
-        is not stored. This routine uses dmplex VectorView and VectorLoad functionality.
+        Checkpoint output stores PETSc DMPlex section/vector metadata required
+        for exact parallel reload. Unlike ``write_timestep()``, this is restart
+        output and does not write XDMF or vertex-field visualisation datasets.
+
+        Parameters
+        ----------
+        filename
+            Checkpoint base filename. With ``outputPath`` unset, this may include
+            a directory. With ``outputPath`` set, it is joined to that directory.
+        outputPath
+            Optional output directory, matching the ``write_timestep()`` style.
+        meshUpdates
+            If ``False``, write the mesh checkpoint only when it does not already
+            exist. If ``True``, always write the indexed mesh checkpoint.
+        meshVars, swarmVars
+            Variables to write into checkpoint files.
+        index
+            Checkpoint index used in output filenames.
+        unique_id
+            Preserve existing unique-rank filename behaviour for checkpoint data.
+        separate_variable_files
+            If ``False`` (default), write all variables into one file:
+            ``<base>.checkpoint.<index>.h5``. If ``True``, write one file per
+            variable: ``<base>.<variable>.checkpoint.<index>.h5``.
         """
 
         if outputPath:
             filename = os.path.join(outputPath, filename)
+
+        def _checkpoint_filename(var_name=None):
+            variable_part = f".{var_name}" if var_name is not None else ""
+            if unique_id:
+                return filename + f"{uw.mpi.unique}{variable_part}.checkpoint.{index:05}.h5"
+            return filename + f"{variable_part}.checkpoint.{index:05}.h5"
+
+        def _write_variable(viewer, var):
+            if var._lvec is None:
+                var._set_vec(available=True)
+
+            iset, subdm = self.dm.createSubDM(var.field_id)
+            subdm.setName(var.clean_name)
+            old_lvec_name = var._lvec.getName()
+
+            try:
+                var._lvec.setName(var.clean_name)
+                self.dm.sectionView(viewer, subdm)
+                self.dm.localVectorView(viewer, subdm, var._lvec)
+            finally:
+                var._lvec.setName(old_lvec_name)
+                iset.destroy()
+                subdm.destroy()
+
+        def _write_checkpoint_file(checkpoint_file, variables):
+            viewer = PETSc.ViewerHDF5().create(checkpoint_file, "w", comm=PETSc.COMM_WORLD)
+            viewer.pushFormat(PETSc.Viewer.Format.HDF5_PETSC)
+            try:
+                # Store the parallel-mesh section information for restoring the checkpoint.
+                self.dm.sectionView(viewer, self.dm)
+
+                for var in variables:
+                    _write_variable(viewer, var)
+
+                uw.mpi.barrier()  # should not be required
+            finally:
+                viewer.popFormat()
+                viewer.destroy()
 
         old_dm_name = self.dm.getName()
         self.dm.setName("uw_mesh")
@@ -2561,49 +2621,17 @@ class Mesh(Stateful, uw_object):
                 else:
                     self.write(filename + f".mesh.{index:05}.h5")
 
-                # Checkpoint file
+                variables = []
+                if meshVars is not None:
+                    variables.extend(meshVars)
+                if swarmVars is not None:
+                    variables.extend(svar._meshVar for svar in swarmVars)
 
-                if unique_id:
-                    checkpoint_file = filename + f"{uw.mpi.unique}.checkpoint.{index:05}.h5"
+                if separate_variable_files:
+                    for var in variables:
+                        _write_checkpoint_file(_checkpoint_filename(var.clean_name), [var])
                 else:
-                    checkpoint_file = filename + f".checkpoint.{index:05}.h5"
-
-                viewer = PETSc.ViewerHDF5().create(checkpoint_file, "w", comm=PETSc.COMM_WORLD)
-                viewer.pushFormat(PETSc.Viewer.Format.HDF5_PETSC)
-                try:
-                    # Store the parallel-mesh section information for restoring the checkpoint.
-                    self.dm.sectionView(viewer, self.dm)
-
-                    if meshVars is not None:
-                        for var in meshVars:
-                            if var._lvec is None:
-                                var._set_vec(available=True)
-                            iset, subdm = self.dm.createSubDM(var.field_id)
-                            subdm.setName(var.clean_name)
-                            old_lvec_name = var._lvec.getName()
-                            var._lvec.setName(var.clean_name)
-                            self.dm.sectionView(viewer, subdm)
-                            self.dm.localVectorView(viewer, subdm, var._lvec)
-                            var._lvec.setName(old_lvec_name)
-                            # v._gvec.view(viewer) # would add viz information plus a duplicate of the data
-
-                    if swarmVars is not None:
-                        for svar in swarmVars:
-                            var = svar._meshVar
-                            if var._lvec is None:
-                                var._set_vec(available=True)
-                            iset, subdm = self.dm.createSubDM(var.field_id)
-                            subdm.setName(var.clean_name)
-                            old_lvec_name = var._lvec.getName()
-                            var._lvec.setName(var.clean_name)
-                            self.dm.sectionView(viewer, subdm)
-                            self.dm.localVectorView(viewer, subdm, var._lvec)
-                            var._lvec.setName(old_lvec_name)
-
-                    uw.mpi.barrier()  # should not be required
-                finally:
-                    viewer.popFormat()
-                    viewer.destroy()
+                    _write_checkpoint_file(_checkpoint_filename(), variables)
         finally:
             if old_dm_name is not None:
                 self.dm.setName(old_dm_name)
