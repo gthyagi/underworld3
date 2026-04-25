@@ -3,11 +3,26 @@ import pytest
 # All tests in this module are quick core tests
 pytestmark = pytest.mark.level_1
 import numpy as np
+from pathlib import Path
+
+
+def _shared_tmp_path(tmp_path, uw):
+    """Use one rank-0 pytest tmp path for collective MPI I/O tests."""
+
+    shared_path = str(tmp_path) if uw.mpi.rank == 0 else None
+    shared_path = uw.mpi.comm.bcast(shared_path, root=0)
+    shared_path = Path(shared_path)
+    if uw.mpi.rank == 0:
+        shared_path.mkdir(parents=True, exist_ok=True)
+    uw.mpi.barrier()
+    return shared_path
 
 
 def test_mesh_save_and_load(tmp_path):
     import underworld3
     from underworld3.meshing import UnstructuredSimplexBox
+
+    tmp_path = _shared_tmp_path(tmp_path, underworld3)
 
     mesh = UnstructuredSimplexBox(minCoords=(0.0, 0.0), maxCoords=(1.0, 1.0), cellSize=1.0 / 32.0)
 
@@ -21,6 +36,8 @@ def test_mesh_save_and_load(tmp_path):
 def test_meshvariable_save_and_read(tmp_path):
     import underworld3
     from underworld3.meshing import UnstructuredSimplexBox
+
+    tmp_path = _shared_tmp_path(tmp_path, underworld3)
 
     mesh = UnstructuredSimplexBox(minCoords=(0.0, 0.0), maxCoords=(1.0, 1.0), cellSize=1.0 / 32.0)
 
@@ -39,6 +56,8 @@ def test_meshvariable_save_and_read(tmp_path):
 def test_meshvariable_checkpoint_roundtrip(tmp_path):
     import underworld3 as uw
     from underworld3.meshing import UnstructuredSimplexBox
+
+    tmp_path = _shared_tmp_path(tmp_path, uw)
 
     mesh = UnstructuredSimplexBox(
         minCoords=(0.0, 0.0),
@@ -125,6 +144,8 @@ def test_swarm_save_and_load(tmp_path):
     import underworld3 as uw
     from underworld3.meshing import UnstructuredSimplexBox
 
+    tmp_path = _shared_tmp_path(tmp_path, uw)
+
     mesh = UnstructuredSimplexBox(minCoords=(0.0, 0.0), maxCoords=(1.0, 1.0), cellSize=1.0 / 32.0)
 
     swarm = uw.swarm.Swarm(mesh)
@@ -136,8 +157,11 @@ def test_swarm_save_and_load(tmp_path):
 
 
 def test_swarmvariable_save_and_load(tmp_path):
+    import underworld3 as uw
     from underworld3 import swarm
     from underworld3.meshing import UnstructuredSimplexBox
+
+    tmp_path = _shared_tmp_path(tmp_path, uw)
 
     mesh = UnstructuredSimplexBox(minCoords=(0.0, 0.0), maxCoords=(1.0, 1.0), cellSize=1.0 / 32.0)
     swarm = swarm.Swarm(mesh)
