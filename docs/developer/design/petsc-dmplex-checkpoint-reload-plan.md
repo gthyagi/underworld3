@@ -1,30 +1,5 @@
 # PETSc DMPlex Checkpoint Reload Plan
 
-## Objective
-
-Implement and validate an exact PETSc DMPlex checkpoint reload path for UW3
-mesh variables.
-
-The target workflow is:
-
-```python
-mesh = uw.discretisation.Mesh("restart.mesh.0.h5", ...)
-v_soln = uw.discretisation.MeshVariable("Velocity", mesh, ...)
-p_soln = uw.discretisation.MeshVariable("Pressure", mesh, ...)
-
-v_soln.read_checkpoint(
-    "restart.checkpoint.00000.h5",
-    data_name="Velocity",
-)
-p_soln.read_checkpoint(
-    "restart.checkpoint.00000.h5",
-    data_name="Pressure",
-)
-```
-
-This reload path must not use KDTree remapping. It must restore the saved FE
-vectors using PETSc DMPlex topology, section, and vector metadata.
-
 ## Commit And Test Workflow
 
 Use small, meaningful commits while implementing this work.
@@ -34,393 +9,239 @@ checkpoint so progress is easy to inspect and bisect. Do not wait until the end
 to commit everything as one large change, and do not commit after every tiny
 edit.
 
-Create or update unit tests whenever they are needed to prove the behavior or
-prevent regressions. Prefer adding a failing regression test before the fix
-when the failure mode is already known.
+Create or update unit tests whenever they are needed to prove behavior or
+prevent regressions. Prefer adding a failing regression test before the fix when
+the failure mode is already known.
 
-Commit at useful milestones, such as:
+## Objective
 
-- adding the first failing regression test
-- adding storage-version `3.0.0` write support
-- exposing or preserving the checkpoint topology SF
-- adding the first working `read_checkpoint(...)` helper
-- adding MPI same-rank test coverage
-- adding different-rank reload coverage or documenting its limitation
-- integrating the helper into benchmark-facing workflow tests
+Provide an exact PETSc DMPlex checkpoint reload path for UW3 mesh variables.
+This path is intended for restart and large-scale postprocessing, not
+visualisation.
 
-Each commit message should describe the specific feature, fix, or debugging
-result included in that commit.
+Target workflow:
 
-## Problem Statement
+```python
+mesh.write_checkpoint(
+    "checkout",
+    outputPath=str(output_dir),
+    meshVars=[v_soln, p_soln],
+    index=0,
+)
+```
 
-UW3 currently has two related but different output paths:
+Default output:
 
-- `mesh.write_timestep(...)`
-- `mesh.write_checkpoint(...)`
+```text
+checkout.mesh.00000.h5
+checkout.Velocity.00000.h5
+checkout.Pressure.00000.h5
+```
 
-`write_timestep()` is visualization / remap oriented. Its reload path,
-`MeshVariable.read_timestep(...)`, reads `/fields/<name>` and
-`/fields/coordinates`, builds a KDTree, and maps values onto the current mesh.
-That is flexible, but it is expensive and memory-heavy at high MPI counts.
+Reload workflow:
 
-`write_checkpoint()` writes PETSc DMPlex restart metadata, including section
-and vector information. This is the correct format for exact restart, but UW3
-does not yet expose a clean, validated helper for loading mesh variables from
-this format.
+```python
+mesh = uw.discretisation.Mesh("checkout.mesh.00000.h5")
+v_soln = uw.discretisation.MeshVariable("Velocity", mesh, mesh.dim, degree=2)
+p_soln = uw.discretisation.MeshVariable("Pressure", mesh, 1, degree=1)
 
-The benchmark scripts should not manually guess PETSc section/SF details. The
-fix belongs in UW3 checkpoint I/O.
+v_soln.read_checkpoint("checkout.Velocity.00000.h5", data_name="Velocity")
+p_soln.read_checkpoint("checkout.Pressure.00000.h5", data_name="Pressure")
+```
+
+The reload path must not use `KDTree` remapping. It must restore FE data through
+PETSc DMPlex topology, section, vector, and `PetscSF` metadata.
+
+## Existing Output Methods
+
+UW3 has two related but different output paths.
+
+| Method | Purpose | Reload method | Strength | Limitation |
+| --- | --- | --- | --- | --- |
+| `mesh.write_timestep(...)` | Visualisation and flexible field remap | `MeshVariable.read_timestep(...)` | Writes XDMF and vertex-field data; can map data onto a different mesh | Uses coordinate/KDTree remapping; memory-heavy for large meshes and high MPI counts |
+| `mesh.write_checkpoint(...)` | Restart and exact postprocessing | `MeshVariable.read_checkpoint(...)` | Uses PETSc DMPlex section/vector metadata; avoids KDTree | Not a visualisation output; no XDMF or vertex-field datasets |
+
+The benchmark scripts should use `write_timestep()` when they need
+visualisation files, and `write_checkpoint()` when they need restart-safe,
+memory-efficient postprocessing.
+
+## Implemented Design
+
+### Checkpoint Writing
+
+`Mesh.write_checkpoint(...)` writes PETSc DMPlex HDF5 storage version `3.0.0`.
+
+The mesh file is named:
+
+```text
+<base>.mesh.<index>.h5
+```
+
+With the default `separate_variable_files=True`, each mesh variable is written
+to its own checkpoint file:
+
+```text
+<base>.<variable>.<index>.h5
+```
+
+With `separate_variable_files=False`, all variables are written into:
+
+```text
+<base>.checkpoint.<index>.h5
+```
+
+Per-variable files are the default because they avoid forcing downstream
+postprocessing to open and move through one very large combined checkpoint file.
+This is useful for large spherical benchmark cases where velocity and pressure
+files can already be large individually.
+
+### Mesh Reload
+
+When a PETSc DMPlex HDF5 mesh is loaded, UW3 keeps the topology-load `PetscSF`
+returned by `DMPlexTopologyLoad(...)`. If UW3 distributes the mesh after load,
+the topology-load SF is composed with the redistribution SF.
+
+This composed SF is stored on the mesh and is the mapping used by
+`MeshVariable.read_checkpoint(...)`.
+
+The mesh DM name is fixed to `uw_mesh` while writing and loading checkpoint
+files so PETSc can find the expected topology groups.
+
+### Variable Reload
+
+`MeshVariable.read_checkpoint(filename, data_name=None)`:
+
+- opens the checkpoint HDF5 file in PETSc HDF5 format
+- loads the saved DMPlex section for `data_name`
+- loads the saved local vector through PETSc's DMPlex local-vector path
+- copies values into the target UW3 variable using section offsets
+- syncs the UW3 local vector back to its global vector
+
+The implementation uses a small Cython wrapper around:
+
+- `DMPlexSectionLoad(...)`
+- `DMPlexLocalVectorLoad(...)`
+
+The wrapper requests only the local-data SF. This avoids failures seen when
+the global-data SF path was constructed before the local checkpoint data could
+be loaded.
 
 ## PETSc Requirements
 
-PETSc's DMPlex HDF5 restart workflow requires these steps:
+The relevant PETSc DMPlex HDF5 restart sequence is:
 
 1. Load topology with `DMPlexTopologyLoad(...)`.
 2. Keep the `PetscSF` returned by topology load.
 3. Load coordinates with `DMPlexCoordinatesLoad(...)`.
 4. Load labels with `DMPlexLabelsLoad(...)`.
-5. If the mesh is redistributed after load, compose the topology-load SF with
-   the redistribution SF.
+5. If the mesh is redistributed, compose the topology-load SF with the
+   redistribution SF.
 6. Load the saved section with `DMPlexSectionLoad(...)`.
-7. Load the saved vector with `DMPlexGlobalVectorLoad(...)`.
-8. Scatter the global vector into UW3's local mesh-variable storage.
+7. Load the saved vector with the DMPlex vector-load API.
+8. Scatter or copy the loaded values into UW3's mesh-variable storage.
 
-The critical object identity requirements are:
+The critical identity requirements are:
 
-- The topology DM name used during reload must match the saved topology group.
-- The section DM name must match the saved variable/subDM group.
-- The vector name must match the saved vector group.
-- The `PetscSF` passed to `DMPlexSectionLoad(...)` must describe the mapping
-  from the saved topology points to the current distributed topology points.
+- topology DM name must match the saved topology group
+- section DM name must match the saved variable group
+- vector name must match the saved vector group
+- the SF passed to section load must map saved topology points to current
+  distributed topology points
 
-## Required File Format Changes
+PETSc reference: [DMPlex manual](https://petsc.org/main/manual/dmplex/).
 
-### 1. Write DMPlex HDF5 Storage Version 3.0.0
+## Tests
 
-Checkpoint mesh and field files should be written with PETSc DMPlex HDF5
-storage version `3.0.0`.
+Current unit coverage is in `tests/test_0003_save_load.py`.
 
-Expected implementation direction:
+The checkpoint roundtrip test covers:
 
-- Set the HDF5 viewer / PETSc option used by DMPlex output so the saved files
-  contain `dmplex_storage_version = "3.0.0"`.
-- Ensure this is used by `Mesh.write_checkpoint(...)`.
-- Prefer a local option scope or explicit viewer setting if available, rather
-  than mutating global PETSc options permanently.
+- scalar variable reload
+- vector variable reload
+- discontinuous variable reload
+- combined checkpoint file reload with `separate_variable_files=False`
+- per-variable checkpoint file reload with the default
+  `separate_variable_files=True`
 
-Expected outcome:
-
-- New checkpoint files report storage version `3.0.0`.
-- Files remain readable by PETSc `3.25.x`.
-- Existing `write_timestep()` behavior is not unintentionally changed.
-
-### 2. Preserve Or Expose The Correct Topology SF
-
-When loading a mesh from a PETSc DMPlex HDF5 file, UW3 currently calls the
-PETSc topology load path internally. The reload implementation must preserve
-or expose the exact `PetscSF` returned by `DMPlexTopologyLoad(...)`.
-
-Expected implementation direction:
-
-- Verify that `_from_plexh5(..., return_sf=True)` stores the topology-load SF
-  on the UW3 mesh object.
-- Confirm whether any subsequent `DM.distribute()` call changes the topology.
-- If redistribution happens, capture the redistribution SF and compose it with
-  the topology-load SF as PETSc documents.
-
-Expected outcome:
-
-- The mesh object has a reliable SF suitable for `DMPlexSectionLoad(...)`.
-- This SF is not guessed from `mesh.sf`, `mesh.sf0`, or `dm.getDefaultSF()`
-  unless those names are explicitly verified to mean the PETSc-required SF.
-
-### 3. Add A Supported MeshVariable Reload Helper
-
-Add a public helper on mesh variables, for example:
-
-```python
-mesh_var.read_checkpoint(
-    filename,
-    data_name=None,
-)
-```
-
-Expected behavior:
-
-- `filename` points to a `write_checkpoint()` checkpoint file.
-- `data_name` defaults to `mesh_var.clean_name`.
-- The helper loads section metadata and vector data exactly.
-- The helper updates both global and local PETSc vectors.
-- The helper works under MPI.
-- The helper does not use KDTree, coordinate remapping, or interpolation.
-
-Expected internal sequence:
-
-```python
-if mesh_var._lvec is None:
-    mesh_var._set_vec(available=True)
-
-indexset, subdm = mesh_var.mesh.dm.createSubDM(mesh_var.field_id)
-sectiondm = subdm.clone()
-
-mesh_var.mesh.dm.setName("uw_mesh")
-subdm.setName(data_name)
-sectiondm.setName(data_name)
-mesh_var._gvec.setName(data_name)
-
-gsf, lsf = mesh_var.mesh.dm.sectionLoad(
-    viewer,
-    sectiondm,
-    mesh_var.mesh.<checkpoint_topology_sf>,
-)
-
-subdm.setSection(sectiondm.getSection())
-mesh_var.mesh.dm.globalVectorLoad(viewer, subdm, gsf, mesh_var._gvec)
-subdm.globalToLocal(mesh_var._gvec, mesh_var._lvec, addv=False)
-```
-
-This sketch is not final API code. The important requirement is that UW3 owns
-the PETSc SF and section semantics.
-
-## Current Failure To Reproduce
-
-A temporary Mac test was run with:
-
-- spherical Thieulot benchmark
-- `8` MPI ranks
-- `uw_cellsize = 1/8`
-- PETSc `3.25.0`
-
-The baseline `read_timestep(...)` reload reproduced expected metrics:
-
-```text
-v_l2_norm               = 0.0059010703925659195
-p_l2_norm               = 0.26146895222007555
-sigma_rr_l2_norm_lower  = 0.1900342889700883
-```
-
-A manual PETSc metadata reload first failed because the runtime mesh DM name
-was `plex`, while the checkpoint file stored data under `uw_mesh`:
-
-```text
-Object (dataset) "order" not stored in group /topologies/plex/dms/Velocity
-```
-
-After setting the runtime mesh DM name to `uw_mesh`, the reload reached
-`DMPlexSectionLoad(...)` but failed with:
-
-```text
-Nonconforming object sizes
-SF roots 6421 < pEnd 47112
-```
-
-The same class of failure occurred with:
-
-- `mesh.sf`
-- `mesh.sf0`
-- `mesh.dm.getDefaultSF()`
-
-This strongly indicates that the correct PETSc topology-load SF is not being
-used or not being composed correctly after distribution.
-
-## Step-By-Step Implementation Plan
-
-### Step 1: Add Minimal Unit-Level Checkpoint Reload Test
-
-Create a small test that does not depend on the full spherical benchmark.
-
-Test shape:
-
-1. Create a small mesh under MPI.
-2. Create one continuous scalar variable.
-3. Fill it with deterministic values.
-4. Write `mesh.write_checkpoint(...)`.
-5. Reload mesh from the written checkpoint mesh file.
-6. Create the same mesh variable.
-7. Load the variable with the new checkpoint helper.
-8. Compare values against the original field.
-
-Expected outcome:
-
-- Test passes with `mpirun -np 1`.
-- Test passes with `mpirun -np 2`.
-- No KDTree path is used.
-
-### Step 2: Add Vector Variable Coverage
-
-Extend the test to include a vector variable.
-
-Expected outcome:
-
-- Component ordering is preserved.
-- Local and global vectors are valid after reload.
-- `mesh_var.data` matches expected values.
-
-### Step 3: Add Continuous And Discontinuous Coverage
-
-Test both:
-
-- continuous variables
-- discontinuous variables
-
-Expected outcome:
-
-- Continuous variables reload exactly.
-- Discontinuous variables reload exactly.
-- No coordinate ambiguity appears for discontinuous fields.
-
-### Step 4: Test Same-Rank Reload
-
-Run write and reload with the same MPI rank count.
-
-Examples:
+Required validation before PR:
 
 ```bash
-mpirun -np 1 pytest tests/parallel/test_checkpoint_reload.py
-mpirun -np 2 pytest tests/parallel/test_checkpoint_reload.py
-mpirun -np 4 pytest tests/parallel/test_checkpoint_reload.py
+./uw python -m pytest tests/test_0003_save_load.py -q
+mpirun -np 2 ./uw python -m pytest tests/test_0003_save_load.py -q
 ```
 
-Expected outcome:
+## Spherical Benchmark Validation
 
-- Same-rank reload works for scalar and vector variables.
-- Global vector sizes and section sizes match.
+The motivating case is spherical benchmark postprocessing at high MPI counts.
+The old `write_timestep()` / `read_timestep()` path can build large KDTree
+mapping structures during reload. At `1/128` this used nearly the full 4.5 TB
+allocation on Gadi.
 
-### Step 5: Test Different-Rank Reload
+The checkpoint method avoids KDTree reload and preserves velocity/pressure
+metrics to roundoff. Boundary stress metrics require the benchmark to recover
+stress consistently after reload. In the spherical benchmark this is handled by
+projecting the six deviatoric-stress components and then forming `sigma_rr`.
 
-Run write and reload with different MPI rank counts.
+### Gadi Evidence
 
-Examples:
+| Resolution | Method | NCPUs | Walltime | Memory used | Status |
+| --- | --- | ---: | ---: | ---: | --- |
+| `1/64` | `write_timestep/read_timestep` | 144 | `00:03:43` | `211.27 GB` | completed |
+| `1/64` | `write_checkpoint/read_checkpoint` | 144 | `00:02:41` | `233.67 GB` | completed |
+| `1/128` | `write_timestep/read_timestep` | 1152 | `00:13:55` | `3.92 TB` | completed near memory limit |
+| `1/128` | `write_checkpoint/read_checkpoint` | 1152 | `00:03:57` | `1.83 TB` | completed |
 
-```bash
-mpirun -np 1 python write_checkpoint_case.py
-mpirun -np 2 python reload_checkpoint_case.py
+The `1/128` checkpoint reload reduced memory by about `2.09 TB` and walltime by
+about `3.5x` for the postprocessing run.
 
-mpirun -np 2 python write_checkpoint_case.py
-mpirun -np 4 python reload_checkpoint_case.py
-```
+### Metric Agreement
 
-Expected outcome:
+`1/128` spherical Thieulot benchmark:
 
-- Reload works when PETSc can redistribute correctly.
-- If PETSc cannot support a specific rank-change path, document the limitation
-  explicitly.
+| Metric | `write_timestep/read_timestep` | `write_checkpoint/read_checkpoint` |
+| --- | ---: | ---: |
+| `v_l2_norm` | `1.4319274480265082e-06` | `1.4319274480231255e-06` |
+| `p_l2_norm` | `5.985841567394967e-04` | `5.985841567395382e-04` |
+| `p_l2_norm_abs` | `1.0566381005355924e-03` | `1.0566381005356654e-03` |
+| `sigma_rr_l2_norm_lower` | `1.117914337768646e-03` | `1.1256362820288926e-03` |
+| `sigma_rr_l2_norm_upper` | `4.461443231341268e-05` | `3.811141458727819e-05` |
+| `u_dot_n_l2_norm_lower_abs` | `2.2509850571644799e-04` | `2.2509850571645164e-04` |
+| `u_dot_n_l2_norm_upper_abs` | `5.535239716141496e-05` | `5.535239716141875e-05` |
 
-### Step 6: Validate Storage Version 3.0.0
+Velocity, pressure, and normal-velocity metrics agree to roundoff. The
+`sigma_rr` values are close but not bitwise identical because the stress
+recovery path changed from the old reload workflow to explicit tau-component
+projection after checkpoint reload.
 
-After writing checkpoint files, inspect them:
+`1/64` spherical Thieulot benchmark:
 
-```bash
-h5dump -A restart.mesh.0.h5 | grep dmplex_storage_version
-h5dump -A restart.checkpoint.00000.h5 | grep dmplex_storage_version
-```
+| Metric | `write_timestep/read_timestep` | `write_checkpoint/read_checkpoint` |
+| --- | ---: | ---: |
+| `v_l2_norm` | `1.1662200663950889e-05` | `1.1662200663957042e-05` |
+| `p_l2_norm` | `2.7573367818459473e-03` | `2.7573367818460497e-03` |
+| `sigma_rr_l2_norm_lower` | `4.368560398155481e-03` | `4.381908965541248e-03` |
+| `sigma_rr_l2_norm_upper` | `1.6315543718450765e-04` | `1.6047310456195621e-04` |
 
-Expected outcome:
+## Remaining PR Readiness Items
 
-```text
-dmplex_storage_version = "3.0.0"
-```
-
-### Step 7: Validate Against Spherical Benchmark
-
-After the unit tests pass, validate with a small spherical benchmark case.
-
-Test setup:
-
-```bash
-mpirun -np 8 python ex_stokes_thieulot.py -uw_cellsize 1/8
-mpirun -np 8 python ex_stokes_thieulot.py -uw_cellsize 1/8 -uw_metrics_from_checkpoint_only true
-```
-
-Expected outcome:
-
-- Checkpoint helper reloads velocity and pressure.
-- Metrics match the known `read_timestep(...)` baseline.
-- No KDTree construction occurs during field reload.
-
-### Step 8: Validate At Larger Mesh Size
-
-Run progressively larger spherical cases:
-
-- `1/16`
-- `1/32`
-- `1/64`
-
-Expected outcome:
-
-- Memory usage during reload is lower than the KDTree path.
-- Reload time is stable.
-- Metrics match the existing baseline.
-
-### Step 9: Validate High-Rank Failure Case
-
-The motivating case is spherical `1/128` on `1000+` ranks.
-
-Expected outcome:
-
-- Reload does not exceed requested memory.
-- Velocity and pressure reload complete.
-- Boundary metric computation can proceed without KDTree memory blow-up.
-
-## Debugging Checklist
-
-When reload fails, inspect these items first:
-
-- `dmplex_storage_version` in mesh and checkpoint files.
-- PETSc version used to write and read the files.
-- Runtime mesh DM name.
-- Saved topology group name.
-- Saved section DM group name.
-- Saved vector name.
-- Size of saved `order` dataset.
-- Size of saved `atlasDof` and `atlasOff`.
-- Size of current mesh chart, especially `pEnd`.
-- Root count in the SF passed to `DMPlexSectionLoad(...)`.
-- Whether mesh distribution occurred after topology load.
-- Whether the topology-load SF was composed with the distribution SF.
-
-Useful HDF5 inspection commands:
-
-```bash
-h5ls -r restart.mesh.0.h5
-h5ls -r restart.checkpoint.00000.h5
-h5dump -A restart.mesh.0.h5
-h5dump -A restart.checkpoint.00000.h5
-```
-
-Useful PETSc-level checks:
-
-```python
-mesh.dm.getName()
-mesh.dm.getChart()
-mesh.sf0.getGraph()
-mesh.sf.getGraph()
-mesh.dm.getDefaultSF().getGraph()
-```
+- Run the unit checkpoint tests on the clean checkpoint-only branch.
+- Add or record one small local benchmark smoke test for reproducibility.
+- Decide whether different-rank checkpoint reload is required for the first PR
+  or should be documented as follow-up validation.
+- Keep the final checkpoint PR branch free of unrelated JIT and macOS compiler
+  commits.
 
 ## Acceptance Criteria
 
-The implementation is complete only when:
+The checkpoint reload implementation is ready for review when:
 
 - `write_checkpoint()` writes PETSc DMPlex HDF5 storage version `3.0.0`.
-- UW3 exposes a public checkpoint reload helper for mesh variables.
-- The helper uses PETSc section/vector metadata, not KDTree remapping.
-- Scalar and vector variables reload correctly.
-- Continuous and discontinuous variables reload correctly.
-- MPI reload works at least for same-rank runs.
-- Different-rank support is either working or clearly documented.
-- Spherical benchmark metrics match the previous baseline.
-- The benchmark scripts no longer need manual PETSc reload logic.
-
-## Expected Final Outcome
-
-After this work, benchmark postprocessing should be able to do:
-
-```python
-mesh = uw.discretisation.Mesh("restart.mesh.0.h5", ...)
-v_soln.read_checkpoint("restart.checkpoint.00000.h5", "Velocity")
-p_soln.read_checkpoint("restart.checkpoint.00000.h5", "Pressure")
-```
-
-This should provide exact FE restart behavior, avoid high-memory KDTree reload,
-and make large spherical benchmark postprocessing practical on high-rank jobs.
+- `write_checkpoint()` supports `outputPath`.
+- `write_checkpoint()` defaults to one checkpoint file per variable.
+- `write_checkpoint(..., separate_variable_files=False)` still supports a
+  combined variable checkpoint file.
+- `MeshVariable.read_checkpoint(...)` reloads through PETSc metadata, not
+  coordinate/KDTree remapping.
+- scalar, vector, and discontinuous variables roundtrip in tests.
+- same-rank MPI reload is validated.
+- benchmark evidence shows the large-memory KDTree reload issue is avoided.
