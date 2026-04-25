@@ -550,7 +550,16 @@ class SolverBaseClass(uw_object):
         # If JIT cache key matches, the compiled code is identical — only
         # constant values (dt_elastic, scalar viscosity, BDF coeffs) differ.
         # Refresh PetscDS constants and skip all rebuilding.
-        if self.dm is not None and hasattr(self, '_last_jit_cache_key'):
+        #
+        # BUGFIX(#122): must also respect _needs_dm_rebuild. A mesh deform
+        # leaves equations (and therefore the JIT cache key) unchanged, but
+        # the cached DM still carries the pre-deform coordinate layout.
+        # Without this guard, Fast Path 1 fires and the solver solves on
+        # stale coords, computing F(v_prev) ≈ 0 and "converging" in zero
+        # iterations without updating the solution. Fast Path 2 already
+        # checks this flag; Fast Path 1 was missing the same guard.
+        if self.dm is not None and hasattr(self, '_last_jit_cache_key') \
+                and not self._needs_dm_rebuild:
             self._setup_pointwise_functions(verbose, debug=debug, debug_name=debug_name)
 
             if hasattr(self, '_current_jit_cache_key') and \
