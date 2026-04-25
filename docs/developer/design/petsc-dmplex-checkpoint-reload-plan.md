@@ -167,7 +167,8 @@ Required validation before PR:
 
 ```bash
 ./uw python -m pytest tests/test_0003_save_load.py -q
-mpirun -np 2 ./uw python -m pytest tests/test_0003_save_load.py -q
+mpirun -np 2 ./uw python -m pytest \
+    tests/test_0003_save_load.py::test_meshvariable_checkpoint_roundtrip -q
 ```
 
 ## Spherical Benchmark Validation
