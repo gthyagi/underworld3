@@ -2434,11 +2434,11 @@ class Mesh(Stateful, uw_object):
             mesh_file = output_base_name + ".mesh.00000.h5"
             path = Path(mesh_file)
             if not path.is_file():
-                self.write(mesh_file, petsc_format=False)
+                self.write(mesh_file)
 
         else:
             mesh_file = output_base_name + f".mesh.{index:05}.h5"
-            self.write(mesh_file, petsc_format=False)
+            self.write(mesh_file)
 
         if meshVars is not None:
             for var in meshVars:
@@ -2641,7 +2641,7 @@ class Mesh(Stateful, uw_object):
         self,
         filename: str,
         index: Optional[int] = None,
-        petsc_format: bool = False,
+        petsc_format: Optional[bool] = None,
     ):
         """
         Save mesh data to the specified hdf5 file.
@@ -2655,8 +2655,11 @@ class Mesh(Stateful, uw_object):
             Not yet implemented. An optional index which might
             correspond to the timestep (for example).
         petsc_format :
-            If True, write PETSc DMPlex HDF5 checkpoint/restart topology.
-            If False, write PETSc HDF5_VIZ topology used by XDMF.
+            If True, force PETSc DMPlex HDF5 checkpoint/restart topology.
+            If False, force PETSc HDF5_VIZ topology only.
+            If None, use PETSc's default HDF5 layout, which includes the
+            restart-style topology and labels as well as visualization
+            topology for XDMF.
 
         """
 
@@ -2668,17 +2671,19 @@ class Mesh(Stateful, uw_object):
             # viewer.pushTimestepping(viewer)
             # viewer.setTimestep(index)
 
-        viewer_format = (
-            PETSc.Viewer.Format.HDF5_PETSC
-            if petsc_format
-            else PETSc.Viewer.Format.HDF5_VIZ
-        )
         viewer = PETSc.ViewerHDF5().create(filename, "w", comm=PETSc.COMM_WORLD)
-        viewer.pushFormat(viewer_format)
         try:
+            if petsc_format is not None:
+                viewer_format = (
+                    PETSc.Viewer.Format.HDF5_PETSC
+                    if petsc_format
+                    else PETSc.Viewer.Format.HDF5_VIZ
+                )
+                viewer.pushFormat(viewer_format)
             viewer(self.dm)
         finally:
-            viewer.popFormat()
+            if petsc_format is not None:
+                viewer.popFormat()
             viewer.destroy()
 
         ## Add boundary metadata to the file
