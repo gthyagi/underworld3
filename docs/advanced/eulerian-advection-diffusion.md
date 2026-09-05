@@ -102,6 +102,10 @@ of the compiled kernels; nothing is recompiled.
 - The stabilisation parameter uses the local cell size (`mesh.cell_size()`) and
   three weights that are runtime constants (`solver.tau_weights`);
   `solver.supg_weight = 0` gives the plain Galerkin scheme for comparison.
+  This size is the RMS distance from a cell's vertices to their own centroid,
+  computed from current coordinates. It does not depend on which neighbouring
+  cells an MPI rank holds (issue #687). The global legacy radius estimators
+  and the CitcomS directional streamline length keep their separate definitions.
 - The linear system is nonsymmetric, so the solver uses GMRES with an
   additive-Schwarz ILU preconditioner, with the Krylov tolerance matched to the
   SNES tolerance so that a step is one Newton iteration. Measured, this is the
