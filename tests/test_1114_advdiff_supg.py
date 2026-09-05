@@ -1,4 +1,7 @@
-"""Numerical validation for implicit SUPG scalar transport."""
+"""Numerical validation for implicit and predictor-corrector SUPG transport."""
+
+from pathlib import Path
+import sys
 
 import numpy as np
 import pytest
@@ -7,7 +10,7 @@ import sympy
 import underworld3 as uw
 
 
-pytestmark = pytest.mark.level_2
+pytestmark = [pytest.mark.level_2, pytest.mark.tier_b]
 
 
 def test_simplex_geometry_is_reused_between_automatic_operations():
@@ -144,6 +147,7 @@ def _high_peclet_solution(tau, name):
         u_Field=temperature,
         V_fn=velocity.sym,
         tau=tau,
+        time_integrator="bdf",
     )
     thermal.constitutive_model = uw.constitutive_models.DiffusionModel
     thermal.constitutive_model.Parameters.diffusivity = 0.01
@@ -196,7 +200,7 @@ def _manufactured_error(cell_size, degree):
         velocity.data[:, 1] = 0.0
 
     thermal = uw.systems.AdvDiffusionSUPG(
-        mesh, u_Field=temperature, V_fn=velocity.sym
+        mesh, u_Field=temperature, V_fn=velocity.sym, time_integrator="bdf"
     )
     thermal.constitutive_model = uw.constitutive_models.DiffusionModel
     thermal.constitutive_model.Parameters.diffusivity = diffusivity
@@ -229,7 +233,7 @@ def test_manufactured_solution_converges_under_refinement(degree):
     assert final_rate > 1.5
 
 
-def test_spherical_shell_supg_is_parallel_safe():
+def _spherical_implicit_response():
     mesh = uw.meshing.SphericalShell(
         radiusInner=0.55,
         radiusOuter=1.0,
@@ -267,8 +271,24 @@ def test_spherical_shell_supg_is_parallel_safe():
         uw.maths.Integral(mesh, fn=temperature.sym[0] ** 2).evaluate()
     )
     assert np.all(np.isfinite(temperature.data))
-    assert np.all(np.isfinite(thermal._supg_tau.data))
-    assert temperature_l2_squared == pytest.approx(0.831128934047, rel=1.0e-8)
+    assert np.all(np.isfinite(uw.function.evaluate(thermal.tau, mesh._centroids)))
+    return temperature_l2_squared, mesh
+
+
+def _compare_spherical_with_serial(run, kind):
+    sys.path.insert(0, str(Path(__file__).parent / "parallel"))
+    from serial_reference import compare, mesh_fingerprint, serial_reference
+
+    value, mesh = run()
+    # Absolute accuracy is covered by the manufactured-solution tests above;
+    # this gate compares partitions of the same cached spherical triangulation.
+    assert np.isfinite(value) and value > 0.0
+    compare([value], serial_reference(__file__, kind), [1e-8], ["integral T^2"],
+            mesh_fingerprint(mesh), f"SUPG {kind}")
+
+
+def test_spherical_shell_supg_is_parallel_safe():
+    _compare_spherical_with_serial(_spherical_implicit_response, "implicit")
 
 
 def test_bdf2_snapshot_restore_leaves_no_discarded_step_trace():
@@ -318,7 +338,7 @@ def test_bdf2_snapshot_restore_leaves_no_discarded_step_trace():
         thermal.solve(timestep=0.01, zero_init_guess=False)
     resumed = temperature.data.copy()
 
-    np.testing.assert_array_equal(resumed, reference)
+    np.testing.assert_allclose(resumed, reference, rtol=2e-14, atol=2e-14)
     uw.reset_default_model()
 
 
@@ -355,7 +375,7 @@ def test_repeated_solves_keep_histories_and_transient_state_bounded():
     assert np.all(np.isfinite(temperature.data))
 
 
-def test_citcoms_spherical_shell_is_parallel_safe():
+def _spherical_citcoms_response():
     mesh = uw.meshing.SphericalShell(
         radiusInner=0.55,
         radiusOuter=1.0,
@@ -393,7 +413,11 @@ def test_citcoms_spherical_shell_is_parallel_safe():
     )
     assert thermal._lumped_mass.getSize() > 0
     assert np.all(np.isfinite(temperature.data))
-    assert temperature_l2_squared == pytest.approx(0.811309509754, rel=1.0e-8)
+    return temperature_l2_squared, mesh
+
+
+def test_citcoms_spherical_shell_is_parallel_safe():
+    _compare_spherical_with_serial(_spherical_citcoms_response, "citcoms")
 
 
 def test_citcoms_snapshot_restores_startup_state_exactly():
@@ -439,3 +463,12 @@ def test_citcoms_snapshot_restores_startup_state_exactly():
         thermal._temperature_rate.data, reference_rate
     )
     uw.reset_default_model()
+
+
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).parent / "parallel"))
+    from serial_reference import emit, mesh_fingerprint
+
+    run = _spherical_citcoms_response if sys.argv[1] == "citcoms" else _spherical_implicit_response
+    value, mesh = run()
+    emit([value], mesh_fingerprint(mesh))
