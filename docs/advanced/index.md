@@ -146,6 +146,7 @@ curved-boundary-conditions
 mesh-adaptation
 semi-lagrangian-time-integration
 supg-transport
+eulerian-advection-diffusion
 porous-flow
 snapshot-restore
 troubleshooting
