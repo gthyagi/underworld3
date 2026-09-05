@@ -40,7 +40,7 @@ def test_public_api_and_residual_shapes():
 
     assert thermal.F0.sym.shape == (1, 1)
     assert thermal.F1.sym.shape == (1, mesh.cdim)
-    assert thermal.tau == 0.0
+    assert float(thermal.tau) == 0.0
 
 
 def test_rejects_double_counted_eulerian_advection():
@@ -72,6 +72,7 @@ def test_rejects_nonimplicit_flux_history(theta):
             u_Field=temperature,
             V_fn=velocity.sym,
             theta=theta,
+            time_integrator="bdf",
         )
 
 
@@ -82,9 +83,10 @@ def test_automatic_tau_is_finite_and_bounded_by_transient_scale():
     thermal.delta_t = 0.02
     thermal._update_automatic_tau()
 
-    assert np.all(thermal._supg_h.data > 0.0)
-    assert np.all(thermal._supg_tau.data > 0.0)
-    assert np.all(thermal._supg_tau.data <= 0.01)
+    tau = uw.function.evaluate(thermal.tau, mesh._centroids)
+    assert np.all(np.isfinite(tau))
+    assert np.all(tau > 0.0)
+    assert np.all(tau <= 0.01)
 
 
 def test_negative_diffusivity_is_rejected():
@@ -108,15 +110,21 @@ def test_zero_velocity_matches_diffusion_solver():
         temperature_a.data[:, 0] = np.sin(np.pi * temperature_a.coords[:, 0])
         temperature_b.data[:, 0] = np.sin(np.pi * temperature_b.coords[:, 0])
 
-    supg = uw.systems.AdvDiffusionSUPG(mesh_a, u_Field=temperature_a, V_fn=velocity.sym)
+    supg = uw.systems.AdvDiffusionSUPG(
+        mesh_a, u_Field=temperature_a, V_fn=velocity.sym, theta=1.0)
     diffusion = uw.systems.Diffusion(mesh_b, u_Field=temperature_b, theta=1.0)
     _configure_diffusion(supg, diffusivity=0.1)
     _configure_diffusion(diffusion, diffusivity=0.1)
+    # Compare equations at the same solve accuracy, not two preconditioners'
+    # different default stopping criteria.
+    for solver in (supg, diffusion):
+        solver.petsc_options["ksp_rtol"] = 1.0e-13
+        solver.petsc_options["snes_rtol"] = 1.0e-12
+        solver.petsc_options["snes_atol"] = 1.0e-13
 
     supg.solve(timestep=0.01, zero_init_guess=False)
     diffusion.solve(timestep=0.01, zero_init_guess=False)
 
-    assert np.all(supg._supg_tau.data == 0.0)
     np.testing.assert_allclose(
         temperature_a.data,
         temperature_b.data,
@@ -230,6 +238,7 @@ def test_timestep_diffusivity_branch_is_collective():
         mesh,
         u_Field=temperature,
         V_fn=velocity.sym,
+        time_integrator="citcoms",
     )
     _configure_diffusion(thermal, diffusivity=0.1)
     thermal.delta_t = 0.01

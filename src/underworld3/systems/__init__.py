@@ -69,7 +69,7 @@ from .solvers import SNES_AdvectionDiffusion as AdvDiffusion
 
 # import diffusion-only solver
 from .solvers import SNES_Diffusion as Diffusion
-from .advdiff_supg import SNES_AdvectionDiffusionSUPG as AdvDiffusionSUPG
+from .advection_diffusion_eulerian import SNES_AdvectionDiffusion_SUPG as AdvDiffusionSUPG
 
 # Transient Darcy and Richards solvers
 from .solvers import SNES_TransientDarcy as TransientDarcy

@@ -41,6 +41,7 @@ def _transient_state(timestep, order):
         u_Field=temperature,
         V_fn=velocity.sym,
         order=order,
+        time_integrator="bdf",
         tau=0.0,
     )
     thermal.constitutive_model = uw.constitutive_models.DiffusionModel
