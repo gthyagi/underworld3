@@ -15,9 +15,6 @@ treating diffusion implicitly. This page explains the **two independent
 order knobs** in the scheme and how to pair them correctly — the common
 pitfall is mixing them.
 
-For local finite-element streamline stabilization without characteristic
-trace-back, see [SUPG scalar transport](supg-transport.md).
-
 ## The scheme has two time-integration choices
 
 The discrete residual assembled by the solver is
@@ -117,7 +114,7 @@ $[\theta,\,1-\theta]$:
 
 ## The Eulerian alternative
 
-`uw.systems.AdvDiffusionSUPG` solves the same equation without a trace-back:
+`uw.systems.AdvDiffusion` solves the same equation without a trace-back:
 all terms are assembled on the mesh, implicit in time, with SUPG
 stabilisation. Its `order=` and `theta=` arguments mean what they mean here:
 `order=1, theta=0.5` is Crank-Nicolson, `order=2` is BDF2, built from the same

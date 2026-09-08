@@ -6,30 +6,16 @@ This log tracks significant development work at a conceptual level, suitable for
 
 ## 2026 Q3 (July – September)
 
-### Unified SUPG Time Integrators (September 2026)
+### Predictor-Corrector Transport Manager (September 2026, #689)
 
-The Eulerian SUPG solver now owns the CitcomS P1 predictor-corrector as an
-optional time integrator. CN, backward Euler, BDF2 and CitcomS use one public
-class and common residual assembly; the former SUPG module contains imports
-only. CitcomS retains its directional simplex stabilisation, positive lumped
-mass, two corrections, explicit timestep bound and cached workspaces. It no
-longer allocates unused implicit history fields.
-
-Snapshot state includes the implicit field-change timestep estimator as well
-as CitcomS startup state. Focused tests compare the migrated implementation
-against frozen pre-migration source on triangles and tetrahedra and exercise
-in-memory and PETSc-backed snapshot/replay. The Gaussian MPI test now obtains
-its serial reference on the same host and mesh rather than comparing against
-a host-dependent stored value; its error threshold is unchanged. Production
-Gadi benchmark and memory acceptance remain separate validation gates.
-
-The first eight-rank gate exposed an inherited empty-partition limitation
-in the automatic simplex helper. Layout rejection is now collective, so
-unsupported local geometry cannot leave peers waiting in reductions. The
-old/new equivalence fixture has enough cells for eight ranks, and a separate
-test exercises collective rejection where the partition has empty ranks.
-
-See [the transport guide](../advanced/eulerian-advection-diffusion.md).
+`uw.systems.ddt.EulerianSUPGPC`, supplied as `DuDt=` to
+`uw.systems.AdvDiffusion`, owns the P1 predictor-corrector update, rate state
+and restart controls. `method="citcoms"` retains fixed corrections and the
+explicit timestep bound; `method="pc_converged"` provides a residual-converged
+accuracy reference. The default `EulerianSUPG` CN/BDF transport is unchanged.
+The [transport guide](../advanced/eulerian-advection-diffusion.md) explains
+why two lumped corrections do not generally establish second-order time
+accuracy and records the separate consistent-mass reference measurements.
 
 ### The Multiplier Was Not the Whole Traction (August 2026)
 
@@ -534,6 +520,11 @@ in `Stokes_Constrained` (#224), then made parallel-correct.
 minimum radius, restoring correct stiffness on graded and adapted meshes
 (#275).
 
+- The local size now comes from each cell's own geometry instead of a kd-tree
+  over the centroids held by the current MPI rank. The old field changed at
+  partition boundaries and moved the default ``local_h=True`` Nitsche velocity
+  answer by 6.6e-3 between rank counts; the replacement is cell-by-cell
+  identical from one to eight ranks (#569, #687).
 - `mesh.boundary_slip` API with `BoundingSurface` objects for boundary
   tangent-slip (#225); `Surface.influence_function` respects finite edges
   (#241).

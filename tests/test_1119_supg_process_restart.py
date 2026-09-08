@@ -1,4 +1,4 @@
-"""Fresh-process transport snapshots: pc2, CN and BDF2 on tiny tetrahedra.
+"""Fresh-process transport snapshots on tiny tetrahedra.
 
 Run this parent pytest in serial. UW_SUPG_TEST_RANKS=8 requests eight-rank
 workers; the default uses singleton workers. Every phase starts a fresh
@@ -21,13 +21,14 @@ from parallel.serial_reference import _MPI_ENV_PREFIXES
 pytestmark = [pytest.mark.level_2, pytest.mark.tier_b]
 
 
-@pytest.mark.parametrize("method", ["pc2", "cn", "bdf2"])
+@pytest.mark.parametrize("method", ["pc2", "pc_converged", "cn", "bdf2"])
 def test_fresh_process_transport_restart(method, tmp_path):
     if uw.mpi.size != 1:
         pytest.skip("Run the parent in serial; UW_SUPG_TEST_RANKS selects worker ranks.")
     ranks = int(os.environ.get("UW_SUPG_TEST_RANKS", "1"))
     root = Path(__file__).resolve().parents[1]
     worker = root / "tests/parallel/ptest_1119_supg_restart.py"
+    supervisor = root / "scripts/mpi_supervisor.py"
     env = {key: value for key, value in os.environ.items()
            if not key.startswith(_MPI_ENV_PREFIXES)}
     launcher = []
@@ -37,16 +38,18 @@ def test_fresh_process_transport_restart(method, tmp_path):
             executable = shutil.which("mpirun")
         assert executable, "Activate the matching MPI environment before this test."
         launcher = [str(executable), "-np", str(ranks)]
+    if ranks > 1 and not supervisor.is_file():
+        pytest.skip("MPI restart supervision requires development commit #678.")
     for phase in ("full", "write", "resume"):
-        command = [sys.executable, str(root / "scripts/mpi_supervisor.py"),
-                   "--silence", "45", "--hard-cap", "60", "--", *launcher,
-                   sys.executable, "-m", "mpi4py", str(worker),
-                   "-uw_method", method, "-uw_phase", phase]
+        worker_command = [*launcher, sys.executable, "-m", "mpi4py", str(worker),
+                          "-uw_method", method, "-uw_phase", phase]
+        command = ([sys.executable, str(supervisor), "--silence", "45",
+                    "--hard-cap", "60", "--", *worker_command]
+                   if supervisor.is_file() else worker_command)
         with (tmp_path / f"{phase}.log").open("w") as log:
-            # The supervisor owns all descendant ranks, including separate
-            # process groups, and performs bounded diagnosis/cleanup on timeout.
             status = subprocess.run(command, cwd=tmp_path, env=env,
-                                    stdout=log, stderr=subprocess.STDOUT).returncode
+                                    stdout=log, stderr=subprocess.STDOUT,
+                                    timeout=65).returncode
         assert status == 0, (tmp_path / f"{phase}.log").read_text(errors="replace")
     maxima = {"field": 0.0, "estimate": 0.0}
     for rank in range(ranks):
