@@ -234,16 +234,17 @@ approach the operator $(2I-D^{-1}M)D^{-1}K$ as $\Delta t$ vanishes, generally
 different from both $M^{-1}K$ and $D^{-1}K$. The startup rate $-D^{-1}KT$ is
 also only an approximation to the consistent rate $-M^{-1}KT$.
 
-The reference regression in `tests/test_1118_pc2_diffusion_time.py` at
-`f41bcd2f` isolates these effects with independently integrated element
+The regression in `tests/test_1118_pc2_diffusion_time.py` isolates these
+effects with independently integrated element
 matrices and exact discrete eigenmode/matrix-exponential solutions on tiny
 triangular and tetrahedral meshes. It records first-order timestep
 differences in serial and MPI. Uniform scalar decay, where the two masses
 agree, is not sufficient evidence of PDE time accuracy. The same reference
 records temporal order 2.00 for an actual UW3 consistent-mass CN update in
 both geometries, in serial and on eight ranks, with its nodal amplification
-map agreeing within 1.6e-14. These are reference measurements, not a claim
-that migration validation or production-scale validation has completed.
+map agreeing within 1.6e-14. The DDt-manager migration reproduced these
+results on 8 September 2026. These are isolated numerical checks, not
+production-scale validation.
 
 ### Residual-converged reference
 
@@ -261,7 +262,7 @@ and `transport.corrector_target` on the manager.
 
 With `adv_gamma=0.5`, this supplies a separate second-order reference rather
 than changing the fixed-correction CitcomS method. The discrete diffusion
-regression at `f41bcd2f` records order 2.00 in 2-D and 3-D, in serial and on
+regression records order 2.00 in 2-D and 3-D, in serial and on
 eight ranks, and agreement with the trapezoidal amplification map below
 5.2e-14. At relative tolerance `1e-12`, those small meshes needed 48-63
 corrections per step in 2-D and 63-81 in 3-D. This is an accuracy reference,

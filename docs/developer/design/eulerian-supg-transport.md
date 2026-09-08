@@ -813,11 +813,11 @@ Finite corrections are not a consistent-mass solve: for pure diffusion,
 two corrections approach $(2I-D^{-1}M)D^{-1}K$, not generally $M^{-1}K$,
 as $\Delta t\to0$. A lumped startup rate adds another discrepancy. The
 [user guide](../../advanced/eulerian-advection-diffusion.md#finite-correction-accuracy)
-retains the `f41bcd2f` mathematical regression results: first-order timestep
+records the mathematical regression results: first-order timestep
 differences for fixed corrections, and order 2.00 for consistent CN and
 `pc_converged` at gamma 0.5 on tiny triangles/tetrahedra in serial and on
-eight ranks. These are pre-migration reference results, not production
-acceptance or a new claim of completed migration validation.
+eight ranks. The DDt-manager migration reproduced these isolated results
+on 8 September 2026; they are not coupled production acceptance.
 
 Restart registration must capture the manager's rate, startup flag and
 correction controls as well as temperature. Derived PETSc workspaces can be
