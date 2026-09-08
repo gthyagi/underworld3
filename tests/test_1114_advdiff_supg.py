@@ -152,7 +152,7 @@ def _high_peclet_solution(tau, name):
     x = temperature.coords[:, 0]
     exact = np.expm1(100.0 * x) / np.expm1(100.0)
     rms_error = float(np.sqrt(np.mean((temperature.array[:, 0, 0] - exact) ** 2)))
-    return temperature.array.copy(), rms_error
+    return np.array(temperature.array), rms_error
 
 
 def test_supg_reduces_high_peclet_oscillation_and_error():
@@ -319,14 +319,14 @@ def test_bdf2_snapshot_restore_leaves_no_discarded_step_trace():
     orchestration_model.load_state(snapshot)
     for _ in range(3):
         thermal.solve(timestep=0.01, zero_init_guess=False)
-    reference = temperature.array.copy()
+    reference = np.array(temperature.array)
 
     orchestration_model.load_state(snapshot)
     thermal.solve(timestep=0.2, zero_init_guess=False)
     orchestration_model.load_state(snapshot)
     for _ in range(3):
         thermal.solve(timestep=0.01, zero_init_guess=False)
-    resumed = temperature.array.copy()
+    resumed = np.array(temperature.array)
 
     np.testing.assert_allclose(resumed, reference, rtol=2e-14, atol=2e-14)
     uw.reset_default_model()
@@ -435,8 +435,8 @@ def test_citcoms_snapshot_restores_startup_state_exactly():
 
     initial = orchestration_model.save_state()
     thermal.solve(timestep=0.05)
-    reference_temperature = temperature.array.copy()
-    reference_rate = thermal.DuDt.temperature_rate.array.copy()
+    reference_temperature = np.array(temperature.array)
+    reference_rate = np.array(thermal.DuDt.temperature_rate.array)
 
     orchestration_model.load_state(initial)
     assert not thermal.DuDt._rate_initialised
