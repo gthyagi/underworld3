@@ -102,7 +102,6 @@ class _EulerianSUPGPCMethods:
         self._rate_initialised = False
         self._solver_ref = None
         self._assembly_dm = None
-        self.diffusivity = 0
         tag = self.instance_number
         self._supg_weight = _UWexpression(
             rf"w^{{SUPG}}_{{{tag}}}", float(supg_weight), "SUPG term weight",
@@ -143,6 +142,11 @@ class _EulerianSUPGPCMethods:
         from underworld3.systems.ddt import _as_row_vector
 
         self._V_fn = _as_row_vector(value, self.mesh.dim)
+        solver_ref = getattr(self, "_solver_ref", None)
+        solver = None if solver_ref is None else solver_ref()
+        if solver is not None:
+            solver._needs_function_rewire = True
+            solver.is_setup = False
 
     @property
     def integrator(self):
@@ -249,6 +253,7 @@ class _EulerianSUPGPCMethods:
 
     def _solve_transport(self, solver, dt, *, zero_init_guess=None,
                          verbose=False, divergence_retries=0):
+        self._bind_transport_solver(solver)
         if zero_init_guess or divergence_retries:
             raise ValueError("Rate-based transport does not support zero_init_guess or SNES divergence retries.")
         self._solve_predictor_corrector(dt, verbose=verbose)

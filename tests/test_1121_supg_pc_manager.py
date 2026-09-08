@@ -44,3 +44,55 @@ def test_manager_uses_live_boundary_conditions_and_timestep(fields, method):
     assert thermal.DuDt is transport
     assert float(transport.delta_t.sym) == 0.001
     np.testing.assert_allclose(temperature.array, 1.0, rtol=0, atol=1e-12)
+
+
+def test_rejected_theta_does_not_change_snapshot_metadata(fields):
+    mesh, temperature, velocity = fields
+    transport = uw.systems.ddt.EulerianSUPGPC(mesh, temperature, velocity)
+    thermal = uw.systems.AdvDiffusion(mesh, temperature, velocity, DuDt=transport)
+    previous = thermal.state
+    with pytest.raises(ValueError, match="theta"):
+        thermal.theta = 0.5
+    assert thermal.state == previous
+
+
+def test_manager_cannot_execute_against_another_solver(fields):
+    mesh, temperature, velocity = fields
+    transport = uw.systems.ddt.EulerianSUPGPC(mesh, temperature, velocity)
+    first = uw.systems.AdvDiffusion(mesh, temperature, velocity, DuDt=transport)
+    other = uw.discretisation.MeshVariable("Other", mesh, 1, degree=1)
+    second = uw.systems.AdvDiffusion(mesh, other, velocity)
+    with pytest.raises(ValueError, match="field|solver|unknown"):
+        second.DuDt = first.DuDt
+        second.solve(timestep=0.001)
+
+
+def test_replacing_velocity_expression_matches_updating_velocity_field(fields):
+    mesh, temperature, velocity = fields
+    reference = uw.discretisation.MeshVariable("Reference", mesh, 1, degree=1)
+    vector = uw.discretisation.MeshVariable("Velocity", mesh, mesh.dim, degree=1)
+    temperature.array[:, 0, 0] = temperature.coords[:, 0]
+    reference.array[...] = temperature.array
+    vector.array[...] = 0.0
+    actual_manager = uw.systems.ddt.EulerianSUPGPC(mesh, temperature, velocity)
+    reference_manager = uw.systems.ddt.EulerianSUPGPC(mesh, reference, vector.sym)
+    actual = uw.systems.AdvDiffusion(mesh, temperature, velocity, DuDt=actual_manager)
+    expected = uw.systems.AdvDiffusion(mesh, reference, vector.sym, DuDt=reference_manager)
+    actual.solve(timestep=0.001)
+    expected.solve(timestep=0.001)
+    actual_manager.V_fn = sympy.Matrix([[0.2, 0.0]])
+    vector.array[:, 0, 0] = 0.2
+    actual.solve(timestep=0.001)
+    expected.solve(timestep=0.001)
+    np.testing.assert_allclose(temperature.array, reference.array, rtol=0, atol=1e-12)
+
+
+def test_explicit_tau_accepts_directional_diffusion(fields):
+    mesh, temperature, velocity = fields
+    temperature.array[:, 0, 0] = 1.0
+    transport = uw.systems.ddt.EulerianSUPGPC(mesh, temperature, velocity, tau=0)
+    thermal = uw.systems.AdvDiffusion(mesh, temperature, velocity, DuDt=transport)
+    thermal.constitutive_model = uw.constitutive_models.AnisotropicDiffusionModel
+    thermal.constitutive_model.Parameters.diffusivity = sympy.Matrix([0.1, 0.2])
+    thermal.solve(timestep=0.001)
+    np.testing.assert_allclose(temperature.array, 1.0, rtol=0, atol=1e-12)

@@ -344,9 +344,7 @@ class SNES_AdvectionDiffusion_Composed(SNES_Scalar):
         self.petsc_options["snes_rtol"] = 1.0e-8
         self.petsc_options["ksp_rtol"] = 1.0e-9
         self.petsc_options["snes_max_it"] = 20
-        bind_transport = getattr(self.DuDt, "_bind_transport_solver", None)
-        if bind_transport is not None:
-            bind_transport(self)
+        self._bind_transport_manager(self.DuDt)
         uw.get_default_model()._register_state_bearer(self)
 
     # ------------------------------------------------------------------
@@ -440,6 +438,27 @@ class SNES_AdvectionDiffusion_Composed(SNES_Scalar):
     # Scheme description
     # ------------------------------------------------------------------
 
+    def _bind_transport_manager(self, manager):
+        bind_transport = getattr(manager, "_bind_transport_solver", None)
+        if bind_transport is not None:
+            bind_transport(self)
+
+    @property
+    def DuDt(self):
+        """Transport manager bound to this solver's unknown."""
+        return self.Unknowns.DuDt
+
+    @DuDt.setter
+    def DuDt(self, manager):
+        if not isinstance(manager, _DDtBase):
+            raise TypeError("DuDt must be a DDt transport manager.")
+        if sympy.Matrix(manager.psi_fn).shape != self.u.sym.shape:
+            raise ValueError("DuDt tracks a different unknown from u_Field.")
+        self._bind_transport_manager(manager)
+        self.Unknowns.DuDt = manager
+        self._theta = float(getattr(manager, "theta", self._theta))
+        self._last_timestep = manager._dt
+
     @property
     def integrator(self) -> str:
         """The multistep family in use: ``"am"`` (the theta rule) at order 1, ``"bdf"`` above."""
@@ -470,8 +489,8 @@ class SNES_AdvectionDiffusion_Composed(SNES_Scalar):
             )
         if not hasattr(self.DuDt, "theta"):
             raise AttributeError(f"{type(self.DuDt).__name__} has no theta to set.")
-        self._theta = value
         self.DuDt.theta = value
+        self._theta = value
 
     @property
     def delta_t(self):
@@ -639,6 +658,7 @@ class SNES_AdvectionDiffusion_Composed(SNES_Scalar):
         """
         from mpi4py import MPI
 
+        self._bind_transport_manager(self.DuDt)
         estimate_transport = getattr(self.DuDt, "_estimate_transport_dt", None)
         if estimate_transport is not None:
             return estimate_transport(fraction=fraction, basis=basis,
@@ -751,6 +771,7 @@ class SNES_AdvectionDiffusion_Composed(SNES_Scalar):
         between calls updates a runtime constant of the compiled kernels;
         nothing is recompiled.
         """
+        self._bind_transport_manager(self.DuDt)
         if timestep is not None:
             self.delta_t = timestep
         elif self.DuDt._dt is not None:
