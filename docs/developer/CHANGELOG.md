@@ -6,6 +6,18 @@ This log tracks significant development work at a conceptual level, suitable for
 
 ## 2026 Q3 (July – September)
 
+### Legacy Diffusion Restart Consistency (September 2026, #708)
+
+`Diffusion` now initializes symbolic flux history before compiling its
+first residual. Previously the initial kernel embedded zero history slots;
+subsequent coefficient updates could not restore the missing symbolic terms.
+A snapshot restore rebuilt the kernel with populated slots and therefore
+changed the operator despite restoring all fields exactly. Initializing the
+slots before compilation makes cold and rebuilt operators agree. This also
+corrects affected uninterrupted legacy Diffusion trajectories; it does not
+change the composed `AdvDiffusion` or SLCN implementation. Small serial/MPI
+tests cover startup and established histories, orders 1-3 and varying steps.
+
 ### Predictor-Corrector Transport Manager (September 2026, #689)
 
 `uw.systems.ddt.EulerianSUPGPC`, supplied as `DuDt=` to
