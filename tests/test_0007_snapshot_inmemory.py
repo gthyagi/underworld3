@@ -402,6 +402,27 @@ def test_eulerian_ddt_roundtrip():
     assert ddt.state.psi_star_var_names == state_pre.psi_star_var_names
 
 
+def test_symbolic_history_copy_preserves_atoms_and_separates_containers():
+    import copy
+    import sympy
+    import underworld3 as uw
+    from underworld3.systems.ddt import DDtSymbolicState
+
+    coefficient = uw.function.expression("snapshot_coefficient", 2.0)
+    original = DDtSymbolicState(
+        dt_history=[0.1, None], psi_star=[sympy.Matrix([[coefficient]])]
+    )
+    captured = copy.deepcopy(original)
+
+    assert captured.psi_star[0][0] is coefficient
+    assert captured.psi_star is not original.psi_star
+    assert captured.psi_star[0] is not original.psi_star[0]
+    captured.psi_star[0][0] = 0
+    captured.dt_history[0] = 0.2
+    assert original.psi_star[0][0] is coefficient
+    assert original.dt_history == [0.1, None]
+
+
 def test_symbolic_flux_history_remains_valid_after_solver_restore():
     """Deep-copying symbolic history must preserve live UWexpression atoms."""
     import numpy as np
@@ -796,4 +817,3 @@ def test_continuation_bit_identical_across_stash_and_recover():
     stash = _capture_full_state(T, swarm, material, ddt)
 
     _assert_bit_identical(ctrl, stash, "stash-and-recover")
-
