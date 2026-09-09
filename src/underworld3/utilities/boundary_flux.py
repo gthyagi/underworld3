@@ -795,21 +795,41 @@ def boundary_flux_integral(solver, boundary):
     avoids pointwise boundary-mass recovery and a temporary MeshVariable. Use
     :meth:`boundary_flux` or :meth:`boundary_flux_field` when nodal values are
     required.
+
+    Call collectively after solving a continuous scalar problem with an
+    essential boundary condition on the queried boundary. The sign is the
+    raw CBF residual sign, identical to ``boundary_flux``; no mean is removed
+    and no area normalization is applied. For a mean flux divide by the
+    boundary area. At intersections of driven boundaries a nodal reaction
+    includes both contributions, so this is not a facet-separated flux there.
     """
     dm = solver.dm
-    ra = np.asarray(solver._assemble_volume_reaction()).ravel()
-    nodes, lsec, _csec, _cvec, _v0, _v1, _edge_nodes = _boundary_field_nodes(
-        solver, boundary, field_id=0
-    )
-    ncomp = lsec.getFieldComponents(0)
-    if ncomp != 1:
+    if dm.getLocalSection().getFieldComponents(0) != 1:
         raise ValueError(
             "boundary_flux_integral requires a scalar solver field; use "
             "boundary_flux(..., normal=...) for vector traction."
         )
+    nodes, lsec, _csec, _cvec, _v0, _v1, _edge_nodes = _boundary_field_nodes(
+        solver, boundary, field_id=0
+    )
+    # A rank may share a boundary node without holding a labelled facet.
+    # Propagate membership through the point SF before summing raw reactions.
+    boundary_points = np.zeros(dm.getChart()[1], dtype=np.int32)
+    for point, _slot, _coordinate in nodes:
+        boundary_points[point] = 1
+    if dm.comm.size > 1:
+        sf = dm.getPointSF()
+        roots = boundary_points.copy()
+        sf.reduceBegin(MPI.INT32_T, boundary_points, roots, MPI.MAX)
+        sf.reduceEnd(MPI.INT32_T, boundary_points, roots, MPI.MAX)
+        sf.bcastBegin(MPI.INT32_T, roots, boundary_points, MPI.MAX)
+        sf.bcastEnd(MPI.INT32_T, roots, boundary_points, MPI.MAX)
+        np.maximum(boundary_points, roots, out=boundary_points)
+    ra = np.asarray(solver._assemble_volume_reaction()).ravel()
     local_integral = sum(
-        float(ra[lsec.getFieldOffset(point, 0) + slot])
-        for point, slot, _coordinate in nodes
+        float(np.sum(ra[lsec.getFieldOffset(point, 0):
+                        lsec.getFieldOffset(point, 0) + lsec.getFieldDof(point, 0)]))
+        for point in np.flatnonzero(boundary_points)
     )
     return float(dm.comm.tompi4py().allreduce(local_integral, op=MPI.SUM))
 
