@@ -4387,6 +4387,32 @@ class SNES_AdvectionDiffusion(SNES_Scalar):
 
         return
 
+    def _prepare_flux_history(self):
+        """Return whether the Adams-Moulton flux needs stored history.
+
+        For first-order Backward Euler (theta=1), the flux expression is
+        exactly F(u[n+1]); every stored-history coefficient is zero. Refresh
+        the symbolic coefficients in case theta changed after construction,
+        then let solve() skip the otherwise unused projection and
+        characteristic trace-back.
+        """
+
+        flux_is_current_only = (
+            getattr(self.DFDt, "order", None) == 1
+            and float(getattr(self.DFDt, "theta", float("nan"))) == 1.0
+        )
+        if flux_is_current_only:
+            from underworld3.systems.ddt import _update_am_values
+
+            _update_am_values(
+                self.DFDt._am_coeffs,
+                effective_order=1,
+                theta=1.0,
+            )
+            return False
+
+        return True
+
     @property
     def f(self):
         r"""Source term for the advection-diffusion equation.
@@ -4576,6 +4602,8 @@ class SNES_AdvectionDiffusion(SNES_Scalar):
             self._needs_function_rewire = True
             self.DFDt.psi_fn = self.constitutive_model.flux.T
 
+        flux_history_active = self._prepare_flux_history()
+
         if not self.is_setup:
             self._setup_pointwise_functions(verbose)
             self._setup_discretisation(verbose)
@@ -4588,8 +4616,10 @@ class SNES_AdvectionDiffusion(SNES_Scalar):
         if trace is not None:
             trace.begin_step(timestep)
         self.DuDt.update_pre_solve(timestep, verbose=verbose, evalf=_evalf)
-        if self._flux_history_is_read():
-            self.DFDt.update_pre_solve(timestep, verbose=verbose, evalf=_evalf)
+        if flux_history_active:
+            self.DFDt.update_pre_solve(
+                timestep, verbose=verbose, evalf=_evalf
+            )
         if trace is not None:
             trace.finish_step()
 
@@ -4599,7 +4629,10 @@ class SNES_AdvectionDiffusion(SNES_Scalar):
         _invalidate_solution_cache(self.u)
 
         self.DuDt.update_post_solve(timestep, verbose=verbose, evalf=_evalf)
-        self.DFDt.update_post_solve(timestep, verbose=verbose, evalf=_evalf)
+        if flux_history_active:
+            self.DFDt.update_post_solve(
+                timestep, verbose=verbose, evalf=_evalf
+            )
 
         self.is_setup = True
         self.constitutive_model._solver_is_setup = True
@@ -4891,6 +4924,11 @@ class SNES_Diffusion(SNES_Scalar):
             self.DFDt.psi_fn = self.constitutive_model.flux.T
             # self._flux =  self.constitutive_model.flux.T
             # self._flux_star =  self._flux.copy()
+
+        # Symbolic slots are embedded in F1 at compilation, unlike nodal
+        # histories. Populate them before building, not in the later hook.
+        if isinstance(self.DFDt, Symbolic_DDt) and not self.DFDt._history_initialised:
+            self.DFDt.initialise_history()
 
         if not self.is_setup:
             self._setup_pointwise_functions(verbose)

@@ -3574,6 +3574,16 @@ class SolverBaseClass(uw_object):
                     self._subdict[name][1].localToGlobal(var.vec, sgvec)
                     gvec.restoreSubVector(self._subdict[name][0], sgvec)
             else:
+                # Map the variable's LOCAL vector through field 0's subDM rather
+                # than assuming the solver DM's local layout matches it. The two
+                # coincide on a plain single-field solver, which is why the
+                # direct `self.dm.localToGlobal(self.Unknowns.u.vec, gvec)` looked
+                # equivalent -- but where they differ it writes to the wrong slots
+                # and the field comes back never-written. Restored while CI is red
+                # on tests/test_1120_SLVectorCartesian.py::test_SLVec_boxmesh[mesh1],
+                # a semi-Lagrangian VECTOR test, i.e. exactly the single-field path
+                # this branch serves; its recovered values were ~1e-18 against an
+                # analytic ~1e-5.
                 _names, _iss, _subdms = self.dm.createFieldDecomposition()
                 try:
                     sgvec = gvec.getSubVector(_iss[0])
@@ -3666,6 +3676,18 @@ class SolverBaseClass(uw_object):
         from underworld3.utilities.boundary_flux import boundary_flux_field as _bff
         return _bff(self, boundary, field, mass=mass, remove_mean=remove_mean,
                     scale=scale, normal=normal)
+
+    def boundary_flux_integral(self, boundary):
+        r"""Integrated scalar CBF flux through ``boundary``.
+
+        This is the direct integral diagnostic for quantities such as Nusselt
+        numbers. It sums the consistent scalar nodal reactions collectively,
+        avoiding pointwise de-smearing and a temporary flux MeshVariable. Use
+        :meth:`boundary_flux` or :meth:`boundary_flux_field` when nodal values
+        are required.
+        """
+        from underworld3.utilities.boundary_flux import boundary_flux_integral as _bfi
+        return _bfi(self, boundary)
 
 ## Specific to dimensionality
 
