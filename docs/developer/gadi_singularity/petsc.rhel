@@ -29,7 +29,7 @@
 # Must go before the 1st FROM see
 # https://docs.docker.com/engine/reference/builder/#understand-how-arg-and-from-interact
 ARG PYTHON_VERSION="3.12"
-ARG PETSC_VERSION="3.25.0"
+ARG PETSC_VERSION="3.25.4"
 ARG BASE_IMAGE="quay.io/rockylinux/rockylinux:8.10"
 
 # 1. Stage 1: 'runtime'
@@ -87,6 +87,7 @@ FROM runtime as builder
 
 ARG PETSC_VERSION
 ARG PYTHON_VERSION
+ARG PETSC_INT64=0
 
 RUN yum install -y      \
         ca-certificates \
@@ -135,7 +136,15 @@ RUN if patch -p1 --dry-run < /tmp/plexfem-internal-boundary-ownership-fix.patch 
     else \
         echo "plexfem patch not applicable (may already be in this PETSc version), skipping"; \
     fi
-RUN python${PYVER} ./configure \
+RUN case "${PETSC_INT64}" in \
+        0) UW_PETSC_OPTIONAL_PACKAGES="--download-pragmatic=1 --with-pragmatic=1 --download-parmmg=1 --download-superlu=1" ;; \
+        1) UW_PETSC_OPTIONAL_PACKAGES="--with-pragmatic=0 --with-parmmg=0 --with-superlu=0" ;; \
+        *) echo "PETSC_INT64 must be 0 or 1" >&2; exit 1 ;; \
+    esac; \
+    python${PYVER} ./configure \
+        --with-64-bit-indices=${PETSC_INT64} \
+        --with-64-bit-blas-indices=0 \
+        ${UW_PETSC_OPTIONAL_PACKAGES} \
         --with-debugging=0 \
         --prefix=/usr/local \
         --with-shared-libraries=1 \
@@ -143,7 +152,6 @@ RUN python${PYVER} ./configure \
         "--COPTFLAGS=-g -O3" "--CXXOPTFLAGS=-g -O3" "--FOPTFLAGS=-g -O3" \
         --useThreads=0 \
         --with-x=0 \
-        --with-pragmatic=1 \
         --with-petsc4py=1 \
         --with-slepc4py=1 \
         --download-eigen=1 \
@@ -152,12 +160,9 @@ RUN python${PYVER} ./configure \
         --download-mumps=1 \
         --download-scalapack=1 \
         --download-hypre=1 \
-        --download-superlu=1 \
         --download-superlu_dist=1 \
         --download-mmg=1 \
         "--download-mmg-cmake-arguments=-DMMG_INSTALL_PRIVATE_HEADERS=ON -DUSE_SCOTCH=OFF" \
-        --download-parmmg=1 \
-        --download-pragmatic=1 \
         "--download-ptscotch=/tmp/scotch.tar.gz" \
         --download-slepc=1 \
         --download-hdf5=1 \
