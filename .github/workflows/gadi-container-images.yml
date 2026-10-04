@@ -1,0 +1,121 @@
+name: Gadi container images
+
+on:
+  push:
+    branches:
+      - feature/gadi-container-index-variants
+    paths:
+      - .github/workflows/gadi-container-images.yml
+      - docs/developer/gadi_singularity/petsc.rhel
+      - docs/developer/gadi_singularity/underworld3.rhel
+      - petsc-custom/patches/**
+  workflow_dispatch:
+    inputs:
+      variant:
+        description: PETSc index variant
+        required: true
+        default: int32
+        type: choice
+        options:
+          - int32
+          - int64
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      PETSC_VERSION: "3.25.4"
+      UW_VARIANT: ${{ inputs.variant || 'int32' }}
+
+    steps:
+      - name: Check out selected UW3 source
+        uses: actions/checkout@v4
+
+      - name: Select image names and index width
+        shell: bash
+        run: |
+          case "$UW_VARIANT" in
+            int32)
+              uw_int64=0
+              uw_expected_bits=32
+              ;;
+            int64)
+              uw_int64=1
+              uw_expected_bits=64
+              ;;
+            *)
+              echo "Unsupported variant: $UW_VARIANT" >&2
+              exit 1
+              ;;
+          esac
+
+          uw_tag="petsc${PETSC_VERSION}-${UW_VARIANT}-${GITHUB_SHA}"
+          echo "UW_PETSC_INT64=$uw_int64" >> "$GITHUB_ENV"
+          echo "UW_EXPECTED_BITS=$uw_expected_bits" >> "$GITHUB_ENV"
+          echo "UW_PETSC_IMAGE=ghcr.io/gthyagi/uw3-petsc:$uw_tag" >> "$GITHUB_ENV"
+          echo "UW_RUNTIME_IMAGE=ghcr.io/gthyagi/underworld3-gadi:$uw_tag" >> "$GITHUB_ENV"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build PETSc dependency image
+        shell: bash
+        run: |
+          docker build --platform linux/amd64 \
+            -f docs/developer/gadi_singularity/petsc.rhel \
+            --build-arg PETSC_VERSION="$PETSC_VERSION" \
+            --build-arg PETSC_INT64="$UW_PETSC_INT64" \
+            --label org.opencontainers.image.source=https://github.com/gthyagi/underworld3 \
+            --label org.opencontainers.image.revision="$GITHUB_SHA" \
+            -t "$UW_PETSC_IMAGE" .
+
+      - name: Publish PETSc dependency image
+        run: docker push "$UW_PETSC_IMAGE"
+
+      - name: Build UW3 image
+        shell: bash
+        run: |
+          docker build --platform linux/amd64 \
+            -f docs/developer/gadi_singularity/underworld3.rhel \
+            --build-arg PETSC_IMAGE="$UW_PETSC_IMAGE" \
+            --label org.opencontainers.image.source=https://github.com/gthyagi/underworld3 \
+            --label org.opencontainers.image.revision="$GITHUB_SHA" \
+            -t "$UW_RUNTIME_IMAGE" .
+
+      - name: Check finished image
+        shell: bash
+        run: |
+          docker run --rm \
+            --env UW_EXPECTED_BITS="$UW_EXPECTED_BITS" \
+            "$UW_RUNTIME_IMAGE" \
+            python3 -c '
+          import os
+          import numpy as np
+          import h5py
+          import underworld3 as uw
+          from petsc4py import PETSc
+
+          bits = np.dtype(PETSc.IntType).itemsize * 8
+          assert bits == int(os.environ["UW_EXPECTED_BITS"]), bits
+          assert PETSc.Sys.getVersion() == (3, 25, 4)
+          assert h5py.get_config().mpi
+          print("PETSc:", PETSc.Sys.getVersion())
+          print("Index bits:", bits)
+          print("UW3:", uw.__file__)
+          print("Parallel HDF5:", h5py.get_config().mpi)
+          '
+
+          docker run --rm "$UW_RUNTIME_IMAGE" \
+            bash -c 'set -e; for tool in gcc g++ gfortran make cmake mpicc; do command -v "$tool"; done'
+
+      - name: Publish checked UW3 image
+        run: docker push "$UW_RUNTIME_IMAGE"
