@@ -54,7 +54,7 @@ ENV NB_USER jovyan
 ENV NB_HOME /home/$NB_USER
 RUN useradd -m -s /bin/bash -N $NB_USER
 
-# runtime packages - [vim, git] are optional
+# Runtime and development packages retained in the final image
 RUN yum update -y \
 &&  yum install -y \
         ca-certificates \
@@ -62,6 +62,12 @@ RUN yum update -y \
         openssh \
         openblas \
         openmpi \
+        openmpi-devel \
+        gcc \
+        gcc-c++ \
+        gcc-gfortran \
+        make \
+        cmake \
         python${PYVER}-pip \
         python${PYVER}-devel \
         zlib \
