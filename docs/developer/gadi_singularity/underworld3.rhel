@@ -125,10 +125,11 @@ RUN yum install -y\
 # NOTE: underworld2 does not yum install gcc
 
 # install python build time and runtime requirements here
+# Match the PETSc image: petsc4py 3.25.4 fails Cython translation with 3.3.0.
 RUN python${PYVER} -m pip install --no-cache-dir \
         "setuptools>=75" \
         "setuptools-scm>=8" \
-        "cython>=3.1" \
+        "cython==3.2.3" \
         "scipy>=1.15" \
         "numpy<2" \
         matplotlib \

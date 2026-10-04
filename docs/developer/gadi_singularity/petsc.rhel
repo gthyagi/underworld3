@@ -109,7 +109,8 @@ RUN yum install -y      \
 &&  rm -rf /var/cache/yum
 # NOTE flex and bison are needed to build
 
-RUN python${PYVER} -m pip install "cython>=3.1" \
+# PETSc 3.25.4 petsc4py fails Cython translation with 3.3.0; keep the tested version.
+RUN python${PYVER} -m pip install "cython==3.2.3" \
                     "setuptools>=75"            \
                     "meson"                     \
                     "meson-python"              \
