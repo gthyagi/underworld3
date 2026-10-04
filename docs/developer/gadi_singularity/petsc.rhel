@@ -79,8 +79,9 @@ ENV PATH=$PYOPT/bin:$PATH
 ENV PYTHONPATH=$PYTHONPATH:$PYOPT/lib/python${PYVER}/site-packages
 
 # runtime python requirements
+# Match pixi.toml: NumPy 2.5 breaks locally built petsc4py; retain the <2.5 cap.
 RUN python${PYVER} -m pip install wheel \
-                    "numpy<2"
+                    "numpy>=2,<2.5"
 
 # 2. Define the builder layer
 FROM runtime as builder

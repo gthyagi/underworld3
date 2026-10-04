@@ -104,12 +104,15 @@ jobs:
           import underworld3 as uw
           from petsc4py import PETSc
 
+          numpy_version = np.lib.NumpyVersion(np.__version__)
+          assert np.lib.NumpyVersion("2.0.0") <= numpy_version < np.lib.NumpyVersion("2.5.0"), np.__version__
           bits = np.dtype(PETSc.IntType).itemsize * 8
           assert bits == int(os.environ["UW_EXPECTED_BITS"]), bits
           assert PETSc.Sys.getVersion() == (3, 25, 4)
           assert h5py.get_config().mpi
           print("PETSc:", PETSc.Sys.getVersion())
           print("Index bits:", bits)
+          print("NumPy:", np.__version__)
           print("UW3:", uw.__file__)
           print("Parallel HDF5:", h5py.get_config().mpi)
           '

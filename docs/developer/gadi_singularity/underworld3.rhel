@@ -125,13 +125,14 @@ RUN yum install -y\
 # NOTE: underworld2 does not yum install gcc
 
 # install python build time and runtime requirements here
+# Match pixi.toml: NumPy 2.5 breaks locally built petsc4py; retain the <2.5 cap.
 # Match the PETSc image: petsc4py 3.25.4 fails Cython translation with 3.3.0.
 RUN python${PYVER} -m pip install --no-cache-dir \
         "setuptools>=75" \
         "setuptools-scm>=8" \
         "cython==3.2.3" \
         "scipy>=1.15" \
-        "numpy<2" \
+        "numpy>=2,<2.5" \
         matplotlib \
         pint \
         pytest \
