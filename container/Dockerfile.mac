@@ -1,0 +1,55 @@
+# Complete the ARM64 UW3 image with native Gmsh and its OpenCASCADE CAD kernel.
+# Build the shared RHEL UW3 recipe on ARM64 first and pass that image as UW_IMAGE.
+# PETSc, MPI and NumPy remain those of the shared, version-pinned dependency stack.
+ARG UW_IMAGE
+FROM ${UW_IMAGE} AS builder
+USER root
+ARG OCCT_VERSION=7_9_3
+ARG GMSH_VERSION=4.15.2
+
+RUN yum install -y curl tar gzip \
+&& yum clean all \
+&& rm -rf /var/cache/yum
+
+# No Linux ARM64 Gmsh wheel is published on PyPI. Build its full CAD backend,
+# rather than silently skipping Gmsh or disabling the OCC geometry API.
+RUN curl -fsSL --retry 3 \
+      https://github.com/Open-Cascade-SAS/OCCT/archive/refs/tags/V${OCCT_VERSION}.tar.gz \
+      -o /tmp/occt.tar.gz \
+&& mkdir /tmp/occt \
+&& tar -xzf /tmp/occt.tar.gz -C /tmp/occt --strip-components=1 \
+&& cmake -S /tmp/occt -B /tmp/occt-build \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_INSTALL_PREFIX=/usr/local \
+      -DINSTALL_DIR_LIB=lib \
+      -DBUILD_MODULE_Draw=OFF \
+      -DBUILD_MODULE_Visualization=OFF \
+      -DUSE_TK=OFF -DUSE_FREETYPE=OFF -DUSE_XLIB=OFF \
+&& cmake --build /tmp/occt-build --parallel 4 \
+&& cmake --install /tmp/occt-build \
+&& rm -rf /tmp/occt /tmp/occt-build /tmp/occt.tar.gz
+
+RUN curl -fsSL --retry 3 \
+      https://gmsh.info/src/gmsh-${GMSH_VERSION}-source.tgz \
+      -o /tmp/gmsh.tar.gz \
+&& mkdir /tmp/gmsh \
+&& tar -xzf /tmp/gmsh.tar.gz -C /tmp/gmsh --strip-components=1 \
+&& cmake -S /tmp/gmsh -B /tmp/gmsh-build \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_INSTALL_PREFIX=/usr/local \
+      -DCMAKE_INSTALL_LIBDIR=lib \
+      -DENABLE_BUILD_DYNAMIC=ON -DENABLE_FLTK=OFF -DENABLE_OCC=ON \
+&& cmake --build /tmp/gmsh-build --parallel 4 \
+&& cmake --install /tmp/gmsh-build \
+&& ldconfig \
+&& python${PYVER} -m pip install --no-cache-dir pygmsh \
+&& python${PYVER} -m pip freeze > /opt/requirements.txt \
+&& rm -rf /tmp/gmsh /tmp/gmsh-build /tmp/gmsh.tar.gz
+
+# Copy only installed libraries/bindings into the original UW3 image.
+FROM ${UW_IMAGE} AS final
+USER root
+COPY --from=builder /usr/local /usr/local
+COPY --from=builder /opt /opt
+RUN ldconfig
+USER jovyan
