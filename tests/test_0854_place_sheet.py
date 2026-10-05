@@ -215,7 +215,10 @@ def test_an_outcropping_sheet_meets_the_top_surface():
     dip = np.array([0.15, 0.0, -1.0])
     dip /= np.linalg.norm(dip)
     top = np.array([0.5, 0.5, 1.1])          # 0.1 ABOVE the box
-    s = np.linspace(-0.22, 0.22, 5)
+    # The cavity includes complete vertex stars, not just the sheet footprint.
+    # Keep it clear of the side walls on this coarse mesh (the wider patch's
+    # cavity reaches x=1 with the Linux Gmsh connectivity).
+    s = np.linspace(-0.15, 0.15, 5)
     d = np.linspace(0.0, 0.45, 5)
     pts = np.array([top + a * strike + b * dip for b in d for a in s])
     tris, n = [], 5
