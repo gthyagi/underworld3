@@ -150,7 +150,8 @@ jobs:
               exact[:, 0] = velocity.coords[:, 1]
               np.testing.assert_allclose(velocity.array[:, 0, :], exact, rtol=1e-7, atol=1e-8)
           import underworld3.visualisation as vis
-          vis.initialise(None)
+          grid = vis.mesh_to_pv_mesh(mesh)
+          assert grid.n_cells == 4**dim
           print("PETSc:", PETSc.Sys.getVersion())
           print("Index bits:", bits)
           print("NumPy:", np.__version__)
