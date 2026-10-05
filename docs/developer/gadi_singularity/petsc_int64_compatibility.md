@@ -33,6 +33,25 @@ ghcr.io/gthyagi/underworld3-gadi:petsc3.25.4-int64-0fb244a7826af3494b0bd27ec6b6b
 
 This image contains the fixes directly; it does not require the development overlays.
 
+The matching int32 runtime was published by
+[run 37254584228](https://github.com/gthyagi/underworld3/actions/runs/37254584228):
+
+```text
+ghcr.io/gthyagi/underworld3-gadi:petsc3.25.4-int32-0fb244a7826af3494b0bd27ec6b6b8b4a2c78edb
+```
+
+Job `180505103` repeated the original 96-CPU allocation across two Gadi nodes,
+with one MPI rank per node. It used the corrected int64 SIF and original int32
+and native baselines. Stokes, collective HDF5 and MPI communication checks
+passed, the job exited 0, and the int64 velocity matched native exactly (maximum
+difference 0). Logs are under
+`/scratch/m18/tg7098/container-validation/20261005/two-nodes-0fb244a7/`.
+
+Use `uw3-int32-0fb244a7.sif` and `uw3-int64-0fb244a7.sif` in
+`/g/data/m18/tg7098/containers/underworld3/`. The PETSc dependency images remain
+at `ecdec1d0`; that revision identifies the dependency recipe, not the corrected
+UW3 source. Retain those dependency images when retiring the obsolete UW3 runtimes.
+
 The 13 remaining failures in the failed-test rerun are also present in the
 original int32 run. Twelve require the missing `trame-pyvista` backend plugin.
 The other is an outcropping-sheet fixture whose cavity reaches the right wall.
