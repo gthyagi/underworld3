@@ -19,6 +19,11 @@ on:
         options:
           - int32
           - int64
+      petsc_image:
+        description: Existing PETSc dependency image (empty builds PETSc)
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -31,6 +36,7 @@ jobs:
     env:
       PETSC_VERSION: "3.25.4"
       UW_VARIANT: ${{ inputs.variant || 'int32' }}
+      UW_PETSC_BASE: ${{ inputs.petsc_image || '' }}
 
     steps:
       - name: Check out selected UW3 source
@@ -57,7 +63,15 @@ jobs:
           uw_tag="petsc${PETSC_VERSION}-${UW_VARIANT}-${GITHUB_SHA}"
           echo "UW_PETSC_INT64=$uw_int64" >> "$GITHUB_ENV"
           echo "UW_EXPECTED_BITS=$uw_expected_bits" >> "$GITHUB_ENV"
-          echo "UW_PETSC_IMAGE=ghcr.io/gthyagi/uw3-petsc:$uw_tag" >> "$GITHUB_ENV"
+          if [ -n "$UW_PETSC_BASE" ]; then
+            case "$UW_PETSC_BASE" in
+              ghcr.io/gthyagi/uw3-petsc:petsc${PETSC_VERSION}-${UW_VARIANT}-*) ;;
+              *) echo "PETSc image must match the selected version and index variant" >&2; exit 1 ;;
+            esac
+            echo "UW_PETSC_IMAGE=$UW_PETSC_BASE" >> "$GITHUB_ENV"
+          else
+            echo "UW_PETSC_IMAGE=ghcr.io/gthyagi/uw3-petsc:$uw_tag" >> "$GITHUB_ENV"
+          fi
           echo "UW_RUNTIME_IMAGE=ghcr.io/gthyagi/underworld3-gadi:$uw_tag" >> "$GITHUB_ENV"
 
       - name: Log in to GitHub Container Registry
@@ -68,6 +82,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build PETSc dependency image
+        if: env.UW_PETSC_BASE == ''
         shell: bash
         run: |
           docker build --platform linux/amd64 \
@@ -79,6 +94,7 @@ jobs:
             -t "$UW_PETSC_IMAGE" .
 
       - name: Publish PETSc dependency image
+        if: env.UW_PETSC_BASE == ''
         run: docker push "$UW_PETSC_IMAGE"
 
       - name: Build UW3 image
@@ -101,6 +117,7 @@ jobs:
           import os
           import numpy as np
           import h5py
+          import Cython
           import underworld3 as uw
           from petsc4py import PETSc
 
@@ -110,6 +127,30 @@ jobs:
           assert bits == int(os.environ["UW_EXPECTED_BITS"]), bits
           assert PETSc.Sys.getVersion() == (3, 25, 4)
           assert h5py.get_config().mpi
+          assert Cython.__version__ == "3.2.3"
+          for dim in (2, 3):
+              mesh = uw.meshing.StructuredQuadBox(elementRes=(4,) * dim, qdegree=3)
+              velocity = uw.discretisation.MeshVariable("image_velocity", mesh, dim, degree=2)
+              pressure = uw.discretisation.MeshVariable("image_pressure", mesh, 1, degree=1)
+              stokes = uw.systems.Stokes(mesh, velocityField=velocity, pressureField=pressure)
+              stokes.constitutive_model = uw.constitutive_models.ViscousFlowModel
+              stokes.constitutive_model.Parameters.viscosity = 1
+              stokes.bodyforce = (0,) * dim
+              walls = ["Top", "Bottom", "Left", "Right"]
+              if dim == 3:
+                  walls += ["Front", "Back"]
+              for wall in walls:
+                  stokes.add_dirichlet_bc((mesh.N.y,) + (0,) * (dim - 1), wall)
+              for bc in stokes.essential_bcs:
+                  assert bc.components.dtype == np.dtype(PETSc.IntType)
+              stokes.tolerance = 1e-9
+              stokes.solve()
+              assert stokes.snes.getConvergedReason() > 0
+              exact = np.zeros((len(velocity.coords), dim))
+              exact[:, 0] = velocity.coords[:, 1]
+              np.testing.assert_allclose(velocity.array[:, 0, :], exact, rtol=1e-7, atol=1e-8)
+          import underworld3.visualisation as vis
+          vis.initialise(None)
           print("PETSc:", PETSc.Sys.getVersion())
           print("Index bits:", bits)
           print("NumPy:", np.__version__)
