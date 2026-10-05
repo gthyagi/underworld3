@@ -157,7 +157,8 @@ RUN python${PYVER} -m pip install --no-cache-dir \
         imageio-ffmpeg \
         "rich<14" \
         meshio \
-        pyvista
+        pyvista \
+        trame-pyvista
 # gmsh wheels are only available for x86_64; skip gracefully on aarch64 (local Apple Silicon builds)
 RUN pip install --no-cache-dir gmsh pygmsh || echo "gmsh/pygmsh not available on this platform, skipping"
 
@@ -217,4 +218,3 @@ USER $NB_USER
 VOLUME $NB_HOME/workspace
 
 CMD ["jupyter-lab", "--no-browser", "--ip='0.0.0.0'"]
-
