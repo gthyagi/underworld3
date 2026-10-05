@@ -17,6 +17,21 @@ parallel HDF5. Their UW3 source is `ecdec1d023f6b6d0f758a4f8791dab47820bebb8`.
 | Corrected int64 failed-test rerun, job 180503500 | 125 passed, 13 failed, no collection errors |
 | Integer-width regression, job 180502919 | Five analytic tests passed for each index width; four-rank Stokes/HDF5 passed for both |
 | Corrected int64 two-node validation, job 180502950 | Passed; maximum velocity difference from native: 0 |
+| Complete paired Level 1, job 180503695 | Exit 0; each width: 2031 passed, 22 skipped, 2 expected failures |
+
+The complete suites use isolated UW3 packages built from `e837767d`, test source
+`5228ecd2`, and the dependency overlay described below. No library code changed
+between those commits. Int64 completed in 546.21 seconds and int32 in 505.94 seconds.
+These results validate the fixes before rebuilding the published runtime.
+
+The corrected int64 runtime passed CI checks and was published by
+[run 37254116893](https://github.com/gthyagi/underworld3/actions/runs/37254116893):
+
+```text
+ghcr.io/gthyagi/underworld3-gadi:petsc3.25.4-int64-0fb244a7826af3494b0bd27ec6b6b8b4a2c78edb
+```
+
+This image contains the fixes directly; it does not require the development overlays.
 
 The 13 remaining failures in the failed-test rerun are also present in the
 original int32 run. Twelve require the missing `trame-pyvista` backend plugin.
