@@ -2777,7 +2777,7 @@ class SolverBaseClass(uw_object):
                 "with None / sympy.oo entries in 'conds' instead, e.g. "
                 "conds=(None, 5, 1.2)",
                 DeprecationWarning, stacklevel=3)
-            components = np.array(components, dtype=np.int32, ndmin=1)
+            components = np.array(components, dtype=PETSc.IntType, ndmin=1)
 
         elif components is None:
             cpts_list = []
@@ -2785,7 +2785,7 @@ class SolverBaseClass(uw_object):
                 if fn != sympy.oo and fn != -sympy.oo:
                     cpts_list.append(i)
 
-            components = np.array(cpts_list, dtype=np.int32, ndmin=1)
+            components = np.array(cpts_list, dtype=PETSc.IntType, ndmin=1)
         else:
             raise TypeError("Unsupported BC 'components' argument")
 
@@ -4031,8 +4031,8 @@ class SNES_Scalar(SolverBaseClass):
         self.dm.createDS()
 
         # set functions
-        cdef int ind=1
-        cdef int [::1] comps_view  # for numpy memory view
+        cdef PetscInt ind=1
+        cdef PetscInt [::1] comps_view  # for numpy memory view
         cdef DM cdm = self.dm
         cdef DS ds =  self.dm.getDS()
         cdef PtrContainer ext = self.compiled_extensions
@@ -4293,8 +4293,8 @@ class SNES_Scalar(SolverBaseClass):
             return
 
         # set functions
-        cdef int ind=1
-        cdef int [::1] comps_view  # for numpy memory view
+        cdef PetscInt ind=1
+        cdef PetscInt [::1] comps_view  # for numpy memory view
         cdef DM cdm = self.dm
         cdef DS ds =  self.dm.getDS()
         cdef PtrContainer ext = self.compiled_extensions
@@ -4928,7 +4928,7 @@ class SNES_Vector(SolverBaseClass):
         ])
 
         import numpy as np
-        components = np.arange(cdim, dtype=np.int32)
+        components = np.arange(cdim, dtype=PETSc.IntType)
 
         self.natural_bcs.append(BC(
             0, components, fn_f, fn_F, None,
@@ -4992,8 +4992,8 @@ class SNES_Vector(SolverBaseClass):
         ## This part is done once on the solver dm ... not required every time we update the functions ...
         ## the values of the natural bcs can be updated
 
-        cdef int ind=1
-        cdef int [::1] comps_view  # for numpy memory view
+        cdef PetscInt ind=1
+        cdef PetscInt [::1] comps_view  # for numpy memory view
         cdef DM cdm = self.dm
 
         for index,bc in enumerate(self.natural_bcs):
@@ -5317,8 +5317,8 @@ class SNES_Vector(SolverBaseClass):
             return
 
         # set functions
-        cdef int ind=1
-        cdef int [::1] comps_view  # for numpy memory view
+        cdef PetscInt ind=1
+        cdef PetscInt [::1] comps_view  # for numpy memory view
         cdef DM cdm = self.dm
         cdef DS ds =  self.dm.getDS()
         cdef PtrContainer ext = self.compiled_extensions
@@ -5757,8 +5757,8 @@ class SNES_MultiComponent(SolverBaseClass):
 
         self.dm.createDS()
 
-        cdef int ind=1
-        cdef int [::1] comps_view
+        cdef PetscInt ind=1
+        cdef PetscInt [::1] comps_view
         cdef DM cdm = self.dm
 
         for index, bc in enumerate(self.natural_bcs):
@@ -6044,8 +6044,8 @@ class SNES_MultiComponent(SolverBaseClass):
                 print(f"SNES_MultiComponent ({self.name}): SNES solver does not need to be rebuilt", flush=True)
             return
 
-        cdef int ind=1
-        cdef int [::1] comps_view
+        cdef PetscInt ind=1
+        cdef PetscInt [::1] comps_view
         cdef DM cdm = self.dm
         cdef DS ds = self.dm.getDS()
         cdef PtrContainer ext = self.compiled_extensions
@@ -7173,7 +7173,7 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
         ])
 
         import numpy as np
-        components = np.arange(dim, dtype=np.int32)
+        components = np.arange(dim, dtype=PETSc.IntType)
 
         self.natural_bcs.append(BC(
             0, components, fn_f, fn_F, fn_p,
@@ -8704,8 +8704,8 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
         ## This part is done once on the solver dm ... not required every time we update the functions ...
         ## the values of the natural bcs can be updated
 
-        cdef int ind=1
-        cdef int [::1] comps_view  # for numpy memory view
+        cdef PetscInt ind=1
+        cdef PetscInt [::1] comps_view  # for numpy memory view
         cdef DM cdm = self.dm
 
         for index,bc in enumerate(self.natural_bcs):
@@ -8751,15 +8751,15 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
         # u-row traction h·n and the uh Jacobian) and once for the multiplier
         # field (carries the h-row constraint n·u−g and the hu Jacobian).
         # Guarded: no-op for ordinary Stokes.
-        cdef int [::1] cbc_comps_view
-        cdef int [::1] cbc_hcomps_view
+        cdef PetscInt [::1] cbc_comps_view
+        cdef PetscInt [::1] cbc_hcomps_view
         for cbc in self._block_constraint_bcs:
             cbc_boundary = cbc.boundary
             cbc_value = mesh.boundaries[cbc_boundary].value
             ind = cbc_value
             cbc_fid_h = cbc.lam._solver_field_id
 
-            cbc_comps = np.arange(mesh.dim, dtype=np.int32)
+            cbc_comps = np.arange(mesh.dim, dtype=PETSc.IntType)
             cbc_comps_view = cbc_comps
             cbc.petsc_id_u = PetscDSAddBoundary_UW(cdm.dm,
                                 6,
@@ -8774,7 +8774,7 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
                                 <const PetscInt *> &ind,
                                 NULL, )
 
-            cbc_hcomps = np.array([0], dtype=np.int32)
+            cbc_hcomps = np.array([0], dtype=PETSc.IntType)
             cbc_hcomps_view = cbc_hcomps
             cbc.petsc_id_h = PetscDSAddBoundary_UW(cdm.dm,
                                 6,
@@ -8986,11 +8986,11 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
                     fidx |= set(extra_field[(p, f)])
                 if fidx:
                     fidx = sorted(fidx)
-                    Snew.setFieldConstraintIndices(p, f, np.array(fidx, dtype=np.int32))
+                    Snew.setFieldConstraintIndices(p, f, np.array(fidx, dtype=PETSc.IntType))
                     point_local.extend(field_offset + i for i in fidx)
                 field_offset += fdof
             if point_local:
-                Snew.setConstraintIndices(p, np.array(sorted(point_local), dtype=np.int32))
+                Snew.setConstraintIndices(p, np.array(sorted(point_local), dtype=PETSc.IntType))
 
         dm.setLocalSection(Snew)
         # Force the global-section rebuild (and fail fast if malformed); the
@@ -9009,8 +9009,8 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
             return
 
         # set functions
-        cdef int ind=1
-        cdef int [::1] comps_view  # for numpy memory view
+        cdef PetscInt ind=1
+        cdef PetscInt [::1] comps_view  # for numpy memory view
         cdef DM cdm = self.dm
         cdef DS ds =  self.dm.getDS()
         cdef PtrContainer ext = self.compiled_extensions
