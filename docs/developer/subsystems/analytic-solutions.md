@@ -1238,10 +1238,11 @@ surface horizontal divergence            = -L us[1] / radius_outer
 CMB horizontal divergence                = -L ub[1] / radius_inner
 ```
 
-The topography coefficients then pass through the generic
-`uw.postprocessing.geoid.spherical_shell_geoid_response()` and
-`spherical_shell_self_gravity_response()` functions. The propagator module does
-not carry a second geoid implementation.
+The topography coefficients then pass through the pure
+`uw.analytic.spherical.gravity.spherical_shell_geoid_response()` and
+`spherical_shell_self_gravity_response()` functions. Existing
+`uw.postprocessing.geoid` imports re-export those same functions. The propagator
+imports the pure owner directly and carries no second geoid implementation.
 
 `ZhongSphericalStokesResponse.surface_topography` and `.surface_geoid` are the
 no-self-gravity quantities. The corresponding Table 2 or Table 3 quantities
