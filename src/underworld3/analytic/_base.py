@@ -1,10 +1,11 @@
-r"""The contract every Underworld3 analytic solution satisfies.
+r"""Field evaluation and validation services for analytical mesh solutions.
 
 An analytic solution is a closed-form answer to a problem Underworld3 can also
 solve numerically. It supplies the coefficients of that problem (viscosity, body
 force, source), the exact fields it produces (velocity, pressure, stress), and
 the boundary conditions under which the two agree — so a validation run is three
-lines rather than a bespoke script.
+lines rather than a bespoke script. Mesh-free coefficient references expose
+their own response contract instead of inheriting this field base.
 
 See Also
 --------

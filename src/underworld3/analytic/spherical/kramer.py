@@ -10,6 +10,21 @@ for mantle flow in cylindrical and spherical shells, Geoscientific Model
 Development 14, 1899-1919. https://doi.org/10.5194/gmd-14-1899-2021
 """
 
+
+__all__ = [
+    "coefficients_sphere_delta_fs",
+    "coefficients_sphere_delta_ns",
+    "coefficients_sphere_smooth_fs",
+    "coefficients_sphere_smooth_ns",
+    "build_delta_solution",
+    "build_smooth_solution",
+    "analytical_velocity_cartesian_sympy",
+    "analytical_pressure_sympy",
+    "analytical_Pl_sympy",
+    "analytical_radial_normal_stress_sympy",
+    "KramerSphericalStokes",
+]
+
 from types import SimpleNamespace
 
 import sympy as sp
@@ -219,13 +234,13 @@ import numpy as np
 from numbers import Integral
 
 from .._base import AnalyticSolution, free_slip, prescribed_velocity
-from .._kramer_geoid import KramerGeoidMixin
+from .._kramer_geoid import _KramerGeoidMixin
 from underworld3.maths.spherical_harmonics import (
     AXISYMMETRIC_UNNORMALIZED, solid_harmonic_sympy, validate_harmonic,
 )
 
 
-class KramerSphericalStokes(KramerGeoidMixin, AnalyticSolution):
+class KramerSphericalStokes(_KramerGeoidMixin, AnalyticSolution):
     r"""Native symbolic Kramer spherical shell with cached Cartesian evaluation.
 
     Parameters ell>=2, 0<=m<=ell, component ('cos'/'sin') and normalization

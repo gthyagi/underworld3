@@ -8,6 +8,11 @@ claimed. Exact wall velocity is prescribed. Shared Cartesian stress/array
 evaluation machinery lives in the private analytic._thieulot_fields module.
 """
 
+
+__all__ = [
+    "ThieulotCylindricalStokes",
+]
+
 from numbers import Integral
 
 import numpy as np

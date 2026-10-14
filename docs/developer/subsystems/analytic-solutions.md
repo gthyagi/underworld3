@@ -199,6 +199,31 @@ shares stress-to-topography/geoid conversion. Geometry-specific gravity kernels
 live in `cylindrical.gravity` and `spherical.gravity`. Neither private helper
 contains geometry-specific radial formulas.
 
+### Public contracts and private implementation
+
+`available()` retains its field-reference default, including the optional
+numeric assess oracle. `available(kind="responses")` lists coefficient
+references such as `ZhongSphericalStokes`; `kind="all"` combines the two.
+Result dataclasses and compatibility aliases do not create duplicate catalogue
+entries. `describe()` and `is_available()` resolve either kind, with consistent
+`ValueError` handling for unknown names. Field conformance sweeps therefore
+retain their original scope while coefficient references become discoverable.
+
+The native and assess annulus classes share `_KramerCylindricalBase` as siblings.
+Only radial branch selection and wall policy are shared there. Native symbolic
+construction does not invoke or inherit the assess evaluator. The private
+`_KramerGeoidMixin` supplies the two native Kramer geometries with response
+conversion; case modules explicitly declare their supported exports.
+`AnalyticSolution` remains a public extension base through `uw.analytic`.
+
+Normalized spherical gravity calculations and `GeoidResponse` /
+`SelfGravityResponse` now live in `spherical.gravity`, alongside the physical
+kernels. `postprocessing.geoid` re-exports those same objects and owns the
+finite-element adapters and their result containers. Zhong imports the pure
+gravity module directly, removing its dependency on postprocessing and the
+previous special import-order arrangement. Mathematical bodies, source signs,
+normalizations and physical defaults are preserved.
+
 ### Thieulot gravity: future reference
 
 Scope decision, 2026-10-14: do not add geoid functionality to the Thieulot
@@ -1147,8 +1172,9 @@ Not every published analytical benchmark is a pointwise field on a mesh. The
 Zhong et al. (2008) spherical-shell benchmark publishes scalar response
 functions computed by a semi-analytic radial propagator. It belongs in
 `uw.analytic`, but it does **not** subclass `AnalyticSolution` and is not listed
-by `available()` because it cannot satisfy that class's symbolic mesh-field
-contract.
+by the default `available()` field list because it cannot satisfy that class's
+symbolic mesh-field contract. Discover it with `available(kind="responses")`
+or `available(kind="all")` instead.
 
 ```python
 reference = uw.analytic.ZhongSphericalStokes(

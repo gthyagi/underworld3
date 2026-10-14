@@ -13,7 +13,7 @@ import numpy as np
 import sympy as sp
 
 
-class KramerGeoidMixin:
+class _KramerGeoidMixin:
     case = "kramer"
 
     def boundary_stress_coefficients(self):

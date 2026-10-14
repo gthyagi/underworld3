@@ -21,6 +21,13 @@ from mpi4py import MPI
 import numpy as np
 
 
+from underworld3.analytic.spherical.gravity import (
+    GeoidResponse,
+    SelfGravityResponse,
+    spherical_shell_geoid_response,
+    spherical_shell_self_gravity_response,
+)
+
 __all__ = [
     "GeoidResponse",
     "SelfGravityResponse",
@@ -42,28 +49,6 @@ __all__ = [
     "cylindrical_annulus_response_from_rotated_stokes",
     "gather_unique_boundary_samples",
 ]
-
-
-@dataclass(frozen=True)
-class GeoidResponse:
-    """Surface and CMB geoid coefficients without self-gravity feedback."""
-
-    surface_geoid: float
-    cmb_geoid: float
-
-
-@dataclass(frozen=True)
-class SelfGravityResponse:
-    """Self-gravity-corrected topography and geoid coefficients."""
-
-    surface_topography: float
-    cmb_topography: float
-    surface_geoid: float
-    cmb_geoid: float
-    q_surface: float
-    q_cmb: float
-    matrix_condition_number: float = 1.0
-    matrix_residual_norm: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -114,125 +99,6 @@ def _validate_geometry(
     return ri, ro, degree
 
 
-def _spherical_shell_geoid_operator(
-    radius_inner: float,
-    radius_outer: float,
-    harmonic_degree: int,
-    internal_load_radius: float | None,
-    internal_load_coefficient: float,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Return the canonical analytical sheet operator and fixed-load vector."""
-    from underworld3.analytic.spherical.gravity import spherical_shell_potential_operator
-
-    return spherical_shell_potential_operator(
-        radius_inner=radius_inner,
-        radius_outer=radius_outer,
-        harmonic_degree=harmonic_degree,
-        internal_load_radius=internal_load_radius,
-        internal_load_coefficient=internal_load_coefficient,
-    )
-
-
-def spherical_shell_geoid_response(
-    *,
-    radius_inner: float,
-    radius_outer: float,
-    harmonic_degree: int,
-    surface_topography_coefficient: float,
-    cmb_topography_coefficient: float,
-    internal_load_radius: float | None = None,
-    internal_load_coefficient: float = 0.0,
-) -> GeoidResponse:
-    r"""Return spherical-shell geoid coefficients without self-gravity.
-
-    All source coefficients must use one consistent spherical-harmonic
-    normalisation.  The radial potential kernel depends on degree but not order,
-    so coefficients for any order :math:`m` may be used.  A positive optional
-    internal-load coefficient follows the outward radial-load convention and
-    enters the potential with the opposite sign to boundary topography.
-    """
-
-    operator, load = _spherical_shell_geoid_operator(
-        radius_inner,
-        radius_outer,
-        harmonic_degree,
-        internal_load_radius,
-        internal_load_coefficient,
-    )
-    topography = np.array(
-        [surface_topography_coefficient, cmb_topography_coefficient],
-        dtype=float,
-    )
-    if not np.all(np.isfinite(topography)):
-        raise ValueError("The topography coefficients must be finite.")
-    geoid = operator @ topography + load
-    return GeoidResponse(float(geoid[0]), float(geoid[1]))
-
-
-def spherical_shell_self_gravity_response(
-    *,
-    radius_inner: float,
-    radius_outer: float,
-    harmonic_degree: int,
-    surface_topography_coefficient: float,
-    cmb_topography_coefficient: float,
-    surface_density_contrast: float,
-    cmb_density_contrast: float,
-    planet_radius: float,
-    gravity: float,
-    internal_load_radius: float | None = None,
-    internal_load_coefficient: float = 0.0,
-    gravitational_constant: float = 6.67430e-11,
-) -> SelfGravityResponse:
-    r"""Return self-gravity-corrected spherical-shell response coefficients.
-
-    Density contrasts are signed and in kg/m³, ``planet_radius`` is in metres,
-    ``gravity`` is in m/s², and ``gravitational_constant`` is in SI units.
-    Shell radii and response coefficients remain nondimensional.
-    """
-
-    operator, load = _spherical_shell_geoid_operator(
-        radius_inner,
-        radius_outer,
-        harmonic_degree,
-        internal_load_radius,
-        internal_load_coefficient,
-    )
-    topography = np.array(
-        [surface_topography_coefficient, cmb_topography_coefficient],
-        dtype=float,
-    )
-    density_contrasts = np.array([surface_density_contrast, cmb_density_contrast], dtype=float)
-    physical_constants = np.array([planet_radius, gravity, gravitational_constant], dtype=float)
-    if not np.all(np.isfinite(topography)):
-        raise ValueError("The topography coefficients must be finite.")
-    if not np.all(np.isfinite(density_contrasts)):
-        raise ValueError("Density contrasts must be finite.")
-    if not np.all(np.isfinite(physical_constants)) or np.any(physical_constants <= 0.0):
-        raise ValueError("Physical constants must be finite and positive.")
-
-    gravity_scale = 4.0 * np.pi * gravitational_constant * planet_radius / gravity
-    q = gravity_scale * density_contrasts
-    q_matrix = np.diag(q)
-    system = np.eye(2) - q_matrix @ operator
-    right_hand_side = topography + q_matrix @ load
-    corrected_topography = np.linalg.solve(system, right_hand_side)
-    corrected_geoid = operator @ corrected_topography + load
-
-    return SelfGravityResponse(
-        surface_topography=float(corrected_topography[0]),
-        cmb_topography=float(corrected_topography[1]),
-        surface_geoid=float(corrected_geoid[0]),
-        cmb_geoid=float(corrected_geoid[1]),
-        q_surface=float(q[0]),
-        q_cmb=float(q[1]),
-        matrix_condition_number=float(np.linalg.cond(system)),
-        matrix_residual_norm=float(np.linalg.norm(system @ corrected_topography - right_hand_side)),
-    )
-
-
-# Import after defining the spherical response API: analytic.ZhongSphericalStokes uses
-# that API while the analytic namespace is initialising.
 from underworld3.analytic.cylindrical.gravity import (
     CylindricalGravityResponse,
     CylindricalSelfGravityResponse,

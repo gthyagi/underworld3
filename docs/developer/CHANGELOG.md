@@ -6,6 +6,24 @@ This log tracks significant development work at a conceptual level, suitable for
 
 ## 2026 Q4 (October – December)
 
+### Analytical public contracts and dependency cleanup (October 2026)
+
+Discovery now separates field references from mesh-free coefficient responses
+through `available(kind="fields" / "responses" / "all")`, preserving the
+existing field-list default. Zhong works with `describe()` and `is_available()`.
+Case modules declare their public exports and private helpers stay internal.
+Native and assess annulus classes are siblings under a private common base,
+instead of the native class inheriting the optional numeric wrapper.
+
+Pure normalized spherical geoid/self-gravity functions and their two result
+types moved into `analytic.spherical.gravity`. Existing postprocessing names
+re-export the same objects; solver adapters remain in postprocessing. Zhong
+uses the pure gravity owner directly, removing the import-order dependency.
+Public case names, compatibility aliases and mathematical conventions remain
+unchanged. The native cylindrical class no longer satisfies
+`isinstance(solution, AssessKramerCylindricalStokes)`; use its concrete class
+or `AnalyticSolution` when checking field-reference types.
+
 ### Geometry-owned analytical case packages (October 2026)
 
 Cylindrical Kramer/Thieulot implementations now live in `analytic/cylindrical`;

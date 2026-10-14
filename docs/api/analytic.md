@@ -63,8 +63,21 @@ The optional numeric oracle is `AssessKramerCylindricalStokes`.
 it retains its mesh-free coefficient-response contract. The short `Zhong` and
 `ZhongResponse` names are removed. `CylindricalStokes`, `SphericalStokes`, and
 `AssessCylindricalStokes` remain aliases to the canonical Kramer classes;
-`available()` lists each class once under its canonical name, while
-`describe()` and `is_available()` also accept the historical names.
+Discovery distinguishes the contracts explicitly:
+
+```python
+uw.analytic.available()                  # field references, including optional assess
+uw.analytic.available(kind="responses")  # ["ZhongSphericalStokes"]
+uw.analytic.available(kind="all")        # both kinds, using canonical names
+uw.analytic.describe("ZhongSphericalStokes")
+uw.analytic.is_available("ZhongSphericalStokes")
+```
+
+The default field list preserves existing conformance sweeps. Response result
+dataclasses are public types, rather than constructible references in this list.
+`installed_only=True` filters missing optional dependencies for any kind.
+`describe()` and `is_available()` accept both kinds and the historical Kramer
+names; unknown reference names raise `ValueError` consistently.
 
 `_thieulot_fields.py` is private field-assembly/evaluation machinery currently
 shared by the two Thieulot classes. Their radial formulas stay in the case
@@ -72,6 +85,20 @@ modules. Kramer handles its distinct density branches inside each geometry
 module. `_kramer_geoid.py` shares its stress-to-topography/geoid adapter across
 both geometries. Geometry-specific kernels are in `cylindrical.gravity` and
 `spherical.gravity`.
+
+The native and assess cylindrical Kramer classes are siblings sharing the
+private `_KramerCylindricalBase` wall/branch policy. The native class has no
+assess dependency or inherited assess-specific evaluator. `_KramerGeoidMixin`
+and `_ThieulotStokesBase` are implementation helpers. Each case module declares
+`__all__` so wildcard imports retain supported classes/formula helpers without
+exposing imported libraries or private bases. `AnalyticSolution` remains public
+through the root namespace even though its implementation file is private.
+
+Pure normalized spherical geoid/self-gravity functions and their
+`GeoidResponse`/`SelfGravityResponse` types are owned by `spherical.gravity`.
+Their existing `uw.postprocessing.geoid` names re-export the same objects.
+Zhong depends directly on the pure gravity module; finite-element reaction
+adapters remain in postprocessing.
 
 ## Kramer cylindrical fields
 

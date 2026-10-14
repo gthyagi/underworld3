@@ -12,6 +12,25 @@ for mantle flow in cylindrical and spherical shells, Geoscientific Model
 Development 14, 1899-1919. https://doi.org/10.5194/gmd-14-1899-2021
 """
 
+
+__all__ = [
+    "coefficients_cylinder_delta_fs",
+    "coefficients_cylinder_delta_ns",
+    "coefficients_cylinder_smooth_fs",
+    "coefficients_cylinder_smooth_ns",
+    "build_delta_solution",
+    "build_smooth_solution",
+    "analytical_velocity_cartesian_sympy",
+    "analytical_pressure_sympy",
+    "analytical_radial_deviatoric_stress_sympy",
+    "analytical_radial_normal_stress_sympy",
+    "analytical_radial_shear_stress_sympy",
+    "require_assess",
+    "assess_available",
+    "AssessKramerCylindricalStokes",
+    "KramerCylindricalStokes",
+]
+
 from types import SimpleNamespace
 from numbers import Integral
 
@@ -20,7 +39,7 @@ import sympy as sp
 import underworld3 as uw
 
 from .._base import AnalyticSolution, free_slip, prescribed_velocity
-from .._kramer_geoid import KramerGeoidMixin
+from .._kramer_geoid import _KramerGeoidMixin
 
 
 def coefficients_cylinder_delta_fs(Rp, Rm, rp, n, g, nu, sign):
@@ -494,7 +513,48 @@ def assess_available():
     return True
 
 
-class AssessKramerCylindricalStokes(AnalyticSolution):
+class _KramerCylindricalBase(AnalyticSolution):
+    """Shared annulus branch selection and wall policy for native/assess siblings."""
+
+    dim = 2
+    boundaries = ("Upper", "Lower")
+
+    def _split(self, coords):
+        """Indices of the points above and below the anomaly radius."""
+
+        radius = np.linalg.norm(np.asarray(coords, dtype=float), axis=1)
+        above = radius >= self.r_int
+        return above, ~above
+
+    def apply_boundary_conditions(self, solver):
+        """Free-slip or zero-slip on both arcs, as the case declares.
+
+        The two boundaries are curved, and the constraint uses the solver's own
+        geometric normal rather than the analytic radial one. That is deliberate:
+        the geometric normal is the direction the straight-facet boundary
+        integral actually sees, so the constant pressure stays a null vector to
+        machine precision, where ``X/|X|`` leaves a consistency error that grows
+        with facet non-uniformity. Reach for ``normal=`` only when the constraint
+        must follow the true circle rather than the mesh — see the "Which normal
+        to use" section of ``docs/developer/subsystems/rotated-freeslip.md``.
+        """
+
+        # The pressure nullspace belongs to the DOMAIN, not to the wall type.
+        # Both cases here are an enclosed annulus — velocity prescribed
+        # everywhere on both arcs, or wall-normal flow zero on both — so in
+        # either the pressure is determined only up to a constant and the
+        # nullspace has to be removed. It used to be set after an early
+        # `return` that the zero-slip branch took, so that case ran a singular
+        # saddle and could return a quiet, wrong answer (#577).
+        if self.boundary == "zero":
+            prescribed_velocity(solver, self.boundaries, (0.0, 0.0))
+        else:
+            free_slip(solver, self.boundaries)
+
+        solver.petsc_use_pressure_nullspace = True
+
+
+class AssessKramerCylindricalStokes(_KramerCylindricalBase):
     r"""Stokes flow in a cylindrical annulus, after Kramer et al. (2021).
 
     Four cases, chosen by *density* and *boundary*:
@@ -536,7 +596,6 @@ class AssessKramerCylindricalStokes(AnalyticSolution):
     path; the working path is only as good as those signatures.
     """
 
-    dim = 2
     nonlinear = False
     symbolic = False
     solves = "stokes"
@@ -545,7 +604,6 @@ class AssessKramerCylindricalStokes(AnalyticSolution):
         "Kramer, Davies & Wilson (2021), Geosci. Model Dev. 14, 1899-1919, "
         "doi:10.5194/gmd-14-1899-2021. Numeric, via the external 'assess' package."
     )
-    boundaries = ("Upper", "Lower")
 
     def __init__(
         self,
@@ -587,12 +645,6 @@ class AssessKramerCylindricalStokes(AnalyticSolution):
             self._above = family(self.n, self.k, **shared)
             self._below = self._above
 
-    def _split(self, coords):
-        """Indices of the points above and below the anomaly radius."""
-
-        radius = np.linalg.norm(np.asarray(coords, dtype=float), axis=1)
-        above = radius >= self.r_int
-        return above, ~above
 
     def evaluate(self, field, coords):
         """Exact *field* at *coords*, choosing the branch by radius.
@@ -653,35 +705,8 @@ class AssessKramerCylindricalStokes(AnalyticSolution):
 
         return float(np.sqrt(difference / magnitude))
 
-    def apply_boundary_conditions(self, solver):
-        """Free-slip or zero-slip on both arcs, as the case declares.
 
-        The two boundaries are curved, and the constraint uses the solver's own
-        geometric normal rather than the analytic radial one. That is deliberate:
-        the geometric normal is the direction the straight-facet boundary
-        integral actually sees, so the constant pressure stays a null vector to
-        machine precision, where ``X/|X|`` leaves a consistency error that grows
-        with facet non-uniformity. Reach for ``normal=`` only when the constraint
-        must follow the true circle rather than the mesh — see the "Which normal
-        to use" section of ``docs/developer/subsystems/rotated-freeslip.md``.
-        """
-
-        # The pressure nullspace belongs to the DOMAIN, not to the wall type.
-        # Both cases here are an enclosed annulus — velocity prescribed
-        # everywhere on both arcs, or wall-normal flow zero on both — so in
-        # either the pressure is determined only up to a constant and the
-        # nullspace has to be removed. It used to be set after an early
-        # `return` that the zero-slip branch took, so that case ran a singular
-        # saddle and could return a quiet, wrong answer (#577).
-        if self.boundary == "zero":
-            prescribed_velocity(solver, self.boundaries, (0.0, 0.0))
-        else:
-            free_slip(solver, self.boundaries)
-
-        solver.petsc_use_pressure_nullspace = True
-
-
-class KramerCylindricalStokes(KramerGeoidMixin, AssessKramerCylindricalStokes):
+class KramerCylindricalStokes(_KramerGeoidMixin, _KramerCylindricalBase):
     r"""Native symbolic Kramer annulus solution with cached array evaluation.
 
     The four delta/smooth, free/zero-slip cases use the same parameter defaults
@@ -746,7 +771,7 @@ class KramerCylindricalStokes(KramerGeoidMixin, AssessKramerCylindricalStokes):
         viscosity=1.0,
         forcing=None,
     ):
-        AnalyticSolution.__init__(self, mesh)
+        super().__init__(mesh)
         if density not in ("delta", "smooth"):
             raise ValueError(f"density must be 'delta' or 'smooth'; got {density!r}")
         if boundary not in ("free", "zero"):

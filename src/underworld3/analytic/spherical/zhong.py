@@ -10,7 +10,7 @@ This is a numeric reference oracle, not a finite-element solve and not a SymPy
 field on a mesh.  It returns the scalar response coefficients published in
 Tables 2--4 of Zhong et al. (2008).  The no-self-gravity topography is recovered
 from radial stress first; geoid and self-gravity feedback are then delegated to
-the generic functions in :mod:`underworld3.postprocessing.geoid`.
+the pure functions in :mod:`underworld3.analytic.spherical.gravity`.
 
 References
 ----------
@@ -32,7 +32,7 @@ from numbers import Integral
 import numpy as np
 from scipy.linalg import expm
 
-from underworld3.postprocessing.geoid import (
+from .gravity import (
     SelfGravityResponse,
     spherical_shell_geoid_response,
     spherical_shell_self_gravity_response,

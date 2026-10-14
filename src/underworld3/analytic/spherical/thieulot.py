@@ -7,6 +7,11 @@ Exact wall velocity is prescribed. The Cartesian representation is finite at
 the poles; shared stress/array evaluation machinery lives in analytic._thieulot_fields.
 """
 
+
+__all__ = [
+    "ThieulotSphericalStokes",
+]
+
 from numbers import Integral
 
 import numpy as np

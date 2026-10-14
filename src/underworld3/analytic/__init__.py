@@ -1,9 +1,7 @@
 r"""Exact solutions for validating Underworld3 solves.
 
-Every solution here is a closed form we can compare a numerical answer against —
-the code's source of truth for benchmarking and convergence testing. They share
-one contract (:class:`AnalyticSolution`), so a validation run reads the same way
-whatever the solution::
+Symbolic field solutions share :class:`AnalyticSolution`, which supplies
+boundary conditions, evaluation and error measurement. A validation run reads::
 
     sol = uw.analytic.SolCx(mesh, eta_A=1.0, eta_B=1.0e6)
 
@@ -14,8 +12,11 @@ whatever the solution::
     stokes.solve()
     rel = sol.error("velocity", stokes.u)
 
-:func:`available` lists what is here; :func:`describe` summarises one solution
-without constructing it.
+Numeric field oracles, such as the optional assess wrapper, provide their
+documented field subset. Coefficient references such as Zhong instead return
+boundary responses without mesh fields. :func:`available` lists field references
+by default; use ``kind="responses"`` or ``kind="all"`` to discover coefficient
+references too. :func:`describe` summarises either kind without constructing it.
 
 These are worth reaching for whenever a solver change needs evidence. The SolCx
 port alone caught a direct ``ksponly + lu`` solve silently mangling the singular
@@ -23,7 +24,7 @@ saddle on a free-slip problem — a wrong answer that no residual norm reported.
 
 See Also
 --------
-underworld3.analytic._base : the contract each solution satisfies.
+underworld3.analytic._base : the field-validation base.
 """
 
 from . import cylindrical, spherical
@@ -147,6 +148,11 @@ _SOLUTIONS = {
     "TwoLayerDarcy": TwoLayerDarcy,
 }
 
+# Coefficient references have no symbolic mesh-field contract. Keep them out
+# of the default field conformance sweep, but include them in explicit discovery.
+_RESPONSE_REFERENCES = {"ZhongSphericalStokes": ZhongSphericalStokes}
+_REFERENCE_CLASSES = {**_SOLUTIONS, **_RESPONSE_REFERENCES}
+
 
 # Resolve old lookup names without listing any concrete solution twice.
 _SOLUTION_ALIASES = {
@@ -154,6 +160,16 @@ _SOLUTION_ALIASES = {
     "CylindricalStokes": "KramerCylindricalStokes",
     "SphericalStokes": "KramerSphericalStokes",
 }
+
+
+def _reference_class(name):
+    try:
+        return _REFERENCE_CLASSES[_SOLUTION_ALIASES.get(name, name)]
+    except KeyError:
+        raise ValueError(
+            f"no analytic solution named {name!r}; available: "
+            f"{', '.join(available(kind='all'))}"
+        ) from None
 
 
 def is_available(name):
@@ -167,14 +183,14 @@ def is_available(name):
     Parameters
     ----------
     name : str
-        A name from :func:`available`.
+        A field or coefficient-reference name, or a supported legacy alias.
 
     Returns
     -------
     bool
     """
 
-    solution = _SOLUTIONS[_SOLUTION_ALIASES.get(name, name)]
+    solution = _reference_class(name)
     requires = getattr(solution, "requires", None)
 
     if requires is None:
@@ -185,22 +201,34 @@ def is_available(name):
     return importlib.util.find_spec(requires) is not None
 
 
-def available(installed_only=False):
-    """Canonical solution names in alphabetical order, without alias duplicates.
+def available(installed_only=False, *, kind="fields"):
+    """Canonical reference names, filtered by their contract and dependency.
 
     Parameters
     ----------
     installed_only : bool
-        Omit solutions whose optional dependency is missing. The default lists
-        everything; use :func:`is_available` to tell them apart, or
+        Omit references whose optional dependency is missing. Otherwise list
+        every reference of the selected kind; use :func:`is_available`, or
         :func:`describe`, which says so in words.
+    kind : {"fields", "responses", "all"}
+        ``fields`` preserves the existing field-solution list, including the
+        numeric assess oracle. ``responses`` lists mesh-free coefficient
+        references. ``all`` includes both, without result dataclasses or aliases.
 
     Returns
     -------
     list of str
     """
 
-    names = sorted(_SOLUTIONS)
+    if kind == "fields":
+        references = _SOLUTIONS
+    elif kind == "responses":
+        references = _RESPONSE_REFERENCES
+    elif kind == "all":
+        references = _REFERENCE_CLASSES
+    else:
+        raise ValueError("kind must be 'fields', 'responses', or 'all'.")
+    names = sorted(references)
 
     if installed_only:
         return [name for name in names if is_available(name)]
@@ -214,7 +242,7 @@ def describe(name):
     Parameters
     ----------
     name : str
-        A name from :func:`available`.
+        A field or coefficient-reference name, or a supported legacy alias.
 
     Returns
     -------
@@ -222,13 +250,7 @@ def describe(name):
         The first line of the solution's docstring.
     """
 
-    try:
-        solution = _SOLUTIONS[_SOLUTION_ALIASES.get(name, name)]
-    except KeyError:
-        raise ValueError(
-            f"no analytic solution named {name!r}; available: "
-            f"{', '.join(available())}"
-        ) from None
+    solution = _reference_class(name)
 
     docstring = solution.__doc__ or ""
     summary = docstring.strip().split("\n")[0]
