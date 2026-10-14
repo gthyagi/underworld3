@@ -31,6 +31,7 @@ __all__ = [
     "spherical_shell_geoid_response",
     "spherical_shell_self_gravity_response",
     "spherical_shell_response_from_rotated_stokes",
+    "cylindrical_power_law_volume_potential_coefficient",
     "cylindrical_sheet_potential_coefficient",
     "cylindrical_sheet_radial_derivative_coefficient",
     "cylindrical_annulus_potential_operator",
@@ -59,6 +60,8 @@ class SelfGravityResponse:
     cmb_geoid: float
     q_surface: float
     q_cmb: float
+    matrix_condition_number: float = 1.0
+    matrix_residual_norm: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -70,31 +73,6 @@ class SphericalShellResponse:
     surface_geoid: float
     cmb_geoid: float
     self_gravity: SelfGravityResponse | None = None
-
-
-@dataclass(frozen=True)
-class CylindricalGravityResponse:
-    """Potential and geoid coefficients at the outer and inner boundaries."""
-
-    outer_potential: float
-    inner_potential: float
-    outer_geoid: float
-    inner_geoid: float
-
-
-@dataclass(frozen=True)
-class CylindricalSelfGravityResponse:
-    """Self-gravity-corrected cylindrical response coefficients."""
-
-    outer_topography: float
-    inner_topography: float
-    outer_potential: float
-    inner_potential: float
-    outer_geoid: float
-    inner_geoid: float
-    q_outer: float
-    q_inner: float
-    matrix_residual_norm: float
 
 
 @dataclass(frozen=True)
@@ -125,9 +103,7 @@ def _validate_geometry(
     except (TypeError, ValueError) as error:
         raise TypeError("The shell radii must be real numbers.") from error
     if not np.all(np.isfinite((ri, ro))) or not 0.0 < ri < ro:
-        raise ValueError(
-            "Expected finite radii ordered as 0 < radius_inner < radius_outer."
-        )
+        raise ValueError("Expected finite radii ordered as 0 < radius_inner < radius_outer.")
     if isinstance(harmonic_degree, bool) or not isinstance(harmonic_degree, Integral):
         raise TypeError("harmonic_degree must be an integer.")
     degree = int(harmonic_degree)
@@ -143,58 +119,16 @@ def _spherical_shell_geoid_operator(
     internal_load_radius: float | None,
     internal_load_coefficient: float,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Return the boundary-topography operator and fixed-load vector."""
+    """Return the canonical analytical sheet operator and fixed-load vector."""
+    from underworld3.analytic.spherical_gravity import spherical_shell_potential_operator
 
-    ri, ro, degree = _validate_geometry(
-        radius_inner,
-        radius_outer,
-        harmonic_degree,
+    return spherical_shell_potential_operator(
+        radius_inner=radius_inner,
+        radius_outer=radius_outer,
+        harmonic_degree=harmonic_degree,
+        internal_load_radius=internal_load_radius,
+        internal_load_coefficient=internal_load_coefficient,
     )
-    internal_load_coefficient = float(internal_load_coefficient)
-    if not np.isfinite(internal_load_coefficient):
-        raise ValueError("internal_load_coefficient must be finite.")
-
-    rint = None
-    if internal_load_radius is not None:
-        try:
-            rint = float(internal_load_radius)
-        except (TypeError, ValueError) as error:
-            raise TypeError(
-                "internal_load_radius must be a real number or None."
-            ) from error
-        if not np.isfinite(rint) or not ri < rint < ro:
-            raise ValueError(
-                "internal_load_radius must lie strictly between the shell radii."
-            )
-    elif internal_load_coefficient != 0.0:
-        raise ValueError(
-            "internal_load_radius is required when internal_load_coefficient is nonzero."
-        )
-
-    denominator = float(2 * degree + 1)
-    operator = np.array(
-        [
-            [
-                ro / denominator,
-                ri * (ri / ro) ** (degree + 1) / denominator,
-            ],
-            [
-                ro * (ri / ro) ** degree / denominator,
-                ri / denominator,
-            ],
-        ],
-        dtype=float,
-    )
-    load = np.zeros(2, dtype=float)
-    if rint is not None and internal_load_coefficient != 0.0:
-        load = -internal_load_coefficient * np.array(
-            [
-                rint * (rint / ro) ** (degree + 1) / denominator,
-                rint * (ri / rint) ** degree / denominator,
-            ],
-            dtype=float,
-        )
-    return operator, load
 
 
 def spherical_shell_geoid_response(
@@ -266,12 +200,8 @@ def spherical_shell_self_gravity_response(
         [surface_topography_coefficient, cmb_topography_coefficient],
         dtype=float,
     )
-    density_contrasts = np.array(
-        [surface_density_contrast, cmb_density_contrast], dtype=float
-    )
-    physical_constants = np.array(
-        [planet_radius, gravity, gravitational_constant], dtype=float
-    )
+    density_contrasts = np.array([surface_density_contrast, cmb_density_contrast], dtype=float)
+    physical_constants = np.array([planet_radius, gravity, gravitational_constant], dtype=float)
     if not np.all(np.isfinite(topography)):
         raise ValueError("The topography coefficients must be finite.")
     if not np.all(np.isfinite(density_contrasts)):
@@ -282,10 +212,9 @@ def spherical_shell_self_gravity_response(
     gravity_scale = 4.0 * np.pi * gravitational_constant * planet_radius / gravity
     q = gravity_scale * density_contrasts
     q_matrix = np.diag(q)
-    corrected_topography = np.linalg.solve(
-        np.eye(2) - q_matrix @ operator,
-        topography + q_matrix @ load,
-    )
+    system = np.eye(2) - q_matrix @ operator
+    right_hand_side = topography + q_matrix @ load
+    corrected_topography = np.linalg.solve(system, right_hand_side)
     corrected_geoid = operator @ corrected_topography + load
 
     return SelfGravityResponse(
@@ -295,7 +224,23 @@ def spherical_shell_self_gravity_response(
         cmb_geoid=float(corrected_geoid[1]),
         q_surface=float(q[0]),
         q_cmb=float(q[1]),
+        matrix_condition_number=float(np.linalg.cond(system)),
+        matrix_residual_norm=float(np.linalg.norm(system @ corrected_topography - right_hand_side)),
     )
+
+
+# Import after defining the spherical response API: analytic.Zhong2008 uses
+# that API while the analytic namespace is initialising.
+from underworld3.analytic.cylindrical_gravity import (
+    CylindricalGravityResponse,
+    CylindricalSelfGravityResponse,
+    cylindrical_sheet_potential_coefficient,
+    cylindrical_sheet_radial_derivative_coefficient,
+    cylindrical_annulus_potential_operator,
+    cylindrical_annulus_geoid_response,
+    cylindrical_annulus_self_gravity_response,
+    cylindrical_power_law_volume_potential_coefficient,
+)
 
 
 def _finite_float(value: Any, name: str) -> float:
@@ -342,509 +287,6 @@ def _validate_cylindrical_annulus(
         radius_inner,
         radius_outer,
         _validate_cylindrical_mode(wavenumber),
-    )
-
-
-def cylindrical_sheet_potential_coefficient(
-    *,
-    source_radius: float,
-    target_radius: float,
-    wavenumber: int,
-    surface_density_coefficient: float,
-    gravitational_constant: float = 1.0,
-) -> float:
-    r"""Return one cylindrical mass sheet's potential coefficient.
-
-    The result multiplies the unnormalised real Fourier basis
-    :math:`\cos(n\theta)`. For :math:`n\geq 1`, a sheet at radius :math:`r_s`
-    has
-
-    .. math::
-
-       \Phi_n(r_s) = \frac{2\pi G r_s\sigma_n}{n},
-
-    with radial factors :math:`(r/r_s)^n` inside and :math:`(r_s/r)^n`
-    outside. Positive density gives positive potential under the convention
-    :math:`\nabla^2\Phi=-4\pi G\rho` and :math:`\mathbf{g}=\nabla\Phi`.
-
-    Radii, density, and ``gravitational_constant`` may be dimensional or
-    nondimensional, but they must use one mutually consistent unit system.
-    The axisymmetric ``n=0`` mode is intentionally excluded because its
-    logarithmic exterior branch requires a separate potential gauge.
-
-    Parameters
-    ----------
-    source_radius, target_radius : real
-        Positive source-sheet and evaluation radii.
-    wavenumber : int
-        Positive azimuthal Fourier wavenumber.
-    surface_density_coefficient : real
-        Sheet-density coefficient multiplying :math:`\cos(n\theta)`.
-    gravitational_constant : real, default=1
-        Positive gravitational constant in the selected unit system.
-
-    Returns
-    -------
-    float
-        Potential coefficient at ``target_radius``.
-    """
-
-    source_radius = _positive_float(source_radius, "source_radius")
-    target_radius = _positive_float(target_radius, "target_radius")
-    mode = _validate_cylindrical_mode(wavenumber)
-    density = _finite_float(
-        surface_density_coefficient,
-        "surface_density_coefficient",
-    )
-    gravity_constant = _positive_float(
-        gravitational_constant,
-        "gravitational_constant",
-    )
-
-    radial_factor = (
-        min(source_radius, target_radius) / max(source_radius, target_radius)
-    ) ** mode
-    source_amplitude = 2.0 * np.pi * gravity_constant * source_radius * density / mode
-    return float(source_amplitude * radial_factor)
-
-
-def cylindrical_sheet_radial_derivative_coefficient(
-    *,
-    source_radius: float,
-    target_radius: float,
-    wavenumber: int,
-    surface_density_coefficient: float,
-    gravitational_constant: float = 1.0,
-    source_side: str | None = None,
-) -> float:
-    r"""Return :math:`d\Phi_n/dr` on either side of a cylindrical sheet.
-
-    At ``target_radius == source_radius``, ``source_side`` must be
-    ``"inside"`` or ``"outside"`` because the derivative is discontinuous.
-    The returned branches satisfy
-    :math:`[d\Phi_n/dr]_{outside-inside}=-4\pi G\sigma_n`.
-
-    Parameters
-    ----------
-    source_radius, target_radius : real
-        Positive source-sheet and evaluation radii.
-    wavenumber : int
-        Positive azimuthal Fourier wavenumber.
-    surface_density_coefficient : real
-        Sheet-density coefficient multiplying :math:`\cos(n\theta)`.
-    gravitational_constant : real, default=1
-        Positive gravitational constant in the selected unit system.
-    source_side : {"inside", "outside"}, optional
-        Radial branch when evaluating exactly on the sheet.
-
-    Returns
-    -------
-    float
-        Radial derivative coefficient at ``target_radius``.
-    """
-
-    source_radius = _positive_float(source_radius, "source_radius")
-    target_radius = _positive_float(target_radius, "target_radius")
-    mode = _validate_cylindrical_mode(wavenumber)
-    potential = cylindrical_sheet_potential_coefficient(
-        source_radius=source_radius,
-        target_radius=target_radius,
-        wavenumber=mode,
-        surface_density_coefficient=surface_density_coefficient,
-        gravitational_constant=gravitational_constant,
-    )
-
-    if target_radius == source_radius:
-        if source_side not in ("inside", "outside"):
-            raise ValueError(
-                "source_side must be 'inside' or 'outside' at the sheet radius."
-            )
-        branch_sign = 1.0 if source_side == "inside" else -1.0
-    else:
-        if source_side is not None:
-            raise ValueError(
-                "source_side is only valid when target_radius equals source_radius."
-            )
-        branch_sign = 1.0 if target_radius < source_radius else -1.0
-    return float(branch_sign * mode * potential / target_radius)
-
-
-def cylindrical_annulus_potential_operator(
-    *,
-    radius_inner: float,
-    radius_outer: float,
-    wavenumber: int,
-    outer_density_contrast: float,
-    inner_density_contrast: float,
-    gravitational_constant: float = 1.0,
-) -> np.ndarray:
-    r"""Return the two-boundary operator :math:`\Phi=G_n h`.
-
-    Rows are target boundaries ``[outer, inner]`` and columns are topographic
-    sheet sources ``[outer, inner]``. Density contrasts are signed as density
-    on the smaller-radius side minus density on the larger-radius side. Thus
-    positive outward topography creates sheet density
-    :math:`\Delta\rho\,h`.
-
-    Parameters
-    ----------
-    radius_inner, radius_outer : real
-        Positive annulus radii ordered from inner to outer.
-    wavenumber : int
-        Positive azimuthal Fourier wavenumber.
-    outer_density_contrast, inner_density_contrast : real
-        Signed density contrasts at the two boundaries.
-    gravitational_constant : real, default=1
-        Positive gravitational constant in the selected unit system.
-
-    Returns
-    -------
-    numpy.ndarray
-        Two-by-two potential operator with targets in rows and sources in
-        columns, both ordered ``[outer, inner]``.
-    """
-
-    radius_inner, radius_outer, mode = _validate_cylindrical_annulus(
-        radius_inner,
-        radius_outer,
-        wavenumber,
-    )
-    density_contrasts = np.array(
-        [
-            _finite_float(
-                outer_density_contrast,
-                "outer_density_contrast",
-            ),
-            _finite_float(
-                inner_density_contrast,
-                "inner_density_contrast",
-            ),
-        ]
-    )
-    gravity_constant = _positive_float(
-        gravitational_constant,
-        "gravitational_constant",
-    )
-    source_radii = (radius_outer, radius_inner)
-    target_radii = (radius_outer, radius_inner)
-
-    operator = np.empty((2, 2), dtype=float)
-    for row, target_radius in enumerate(target_radii):
-        for column, (source_radius, density) in enumerate(
-            zip(source_radii, density_contrasts)
-        ):
-            operator[row, column] = cylindrical_sheet_potential_coefficient(
-                source_radius=source_radius,
-                target_radius=target_radius,
-                wavenumber=mode,
-                surface_density_coefficient=density,
-                gravitational_constant=gravity_constant,
-            )
-    return operator
-
-
-def _cylindrical_internal_load_vector(
-    *,
-    radius_inner: float,
-    radius_outer: float,
-    wavenumber: int,
-    internal_load_radius: float | None,
-    internal_surface_density_coefficient: float,
-    gravitational_constant: float,
-) -> np.ndarray:
-    """Return boundary potential coefficients from an internal mass sheet."""
-
-    load_density = _finite_float(
-        internal_surface_density_coefficient,
-        "internal_surface_density_coefficient",
-    )
-    load = np.zeros(2, dtype=float)
-    if internal_load_radius is None:
-        if load_density != 0.0:
-            raise ValueError(
-                "internal_load_radius is required for a nonzero internal load."
-            )
-        return load
-
-    internal_load_radius = _positive_float(
-        internal_load_radius,
-        "internal_load_radius",
-    )
-    if not radius_inner < internal_load_radius < radius_outer:
-        raise ValueError("internal_load_radius must lie strictly inside the annulus.")
-    for index, target_radius in enumerate((radius_outer, radius_inner)):
-        load[index] = cylindrical_sheet_potential_coefficient(
-            source_radius=internal_load_radius,
-            target_radius=target_radius,
-            wavenumber=wavenumber,
-            surface_density_coefficient=load_density,
-            gravitational_constant=gravitational_constant,
-        )
-    return load
-
-
-def cylindrical_annulus_geoid_response(
-    *,
-    radius_inner: float,
-    radius_outer: float,
-    wavenumber: int,
-    outer_topography_coefficient: float,
-    inner_topography_coefficient: float,
-    outer_density_contrast: float,
-    inner_density_contrast: float,
-    outer_reference_gravity: float,
-    inner_reference_gravity: float,
-    internal_load_radius: float | None = None,
-    internal_surface_density_coefficient: float = 0.0,
-    gravitational_constant: float = 1.0,
-) -> CylindricalGravityResponse:
-    r"""Assemble annulus potential and geoid coefficients for one mode.
-
-    Potential and topography retain their physical signs. Geoid is defined as
-    :math:`N_n=\Phi_n/g_{reference}` independently at the outer and inner
-    boundaries. The optional internal source is a cylindrical sheet-density
-    coefficient in the same Fourier normalisation and unit system.
-
-    Parameters
-    ----------
-    radius_inner, radius_outer : real
-        Positive annulus radii ordered from inner to outer.
-    wavenumber : int
-        Positive azimuthal Fourier wavenumber.
-    outer_topography_coefficient, inner_topography_coefficient : real
-        Signed boundary topography coefficients.
-    outer_density_contrast, inner_density_contrast : real
-        Signed density contrasts at the two boundaries.
-    outer_reference_gravity, inner_reference_gravity : real
-        Positive gravity magnitudes used to convert potential to geoid.
-    internal_load_radius : real, optional
-        Radius of an internal sheet, strictly inside the annulus.
-    internal_surface_density_coefficient : real, default=0
-        Density coefficient of the optional internal sheet.
-    gravitational_constant : real, default=1
-        Positive gravitational constant in the selected unit system.
-
-    Returns
-    -------
-    CylindricalGravityResponse
-        Outer and inner potential and geoid coefficients.
-    """
-
-    radius_inner, radius_outer, mode = _validate_cylindrical_annulus(
-        radius_inner,
-        radius_outer,
-        wavenumber,
-    )
-    topography = np.array(
-        [
-            _finite_float(
-                outer_topography_coefficient,
-                "outer_topography_coefficient",
-            ),
-            _finite_float(
-                inner_topography_coefficient,
-                "inner_topography_coefficient",
-            ),
-        ],
-        dtype=float,
-    )
-    reference_gravity = np.array(
-        [
-            _positive_float(
-                outer_reference_gravity,
-                "outer_reference_gravity",
-            ),
-            _positive_float(
-                inner_reference_gravity,
-                "inner_reference_gravity",
-            ),
-        ],
-        dtype=float,
-    )
-    gravity_constant = _positive_float(
-        gravitational_constant,
-        "gravitational_constant",
-    )
-    operator = cylindrical_annulus_potential_operator(
-        radius_inner=radius_inner,
-        radius_outer=radius_outer,
-        wavenumber=mode,
-        outer_density_contrast=outer_density_contrast,
-        inner_density_contrast=inner_density_contrast,
-        gravitational_constant=gravity_constant,
-    )
-    load = _cylindrical_internal_load_vector(
-        radius_inner=radius_inner,
-        radius_outer=radius_outer,
-        wavenumber=mode,
-        internal_load_radius=internal_load_radius,
-        internal_surface_density_coefficient=(internal_surface_density_coefficient),
-        gravitational_constant=gravity_constant,
-    )
-
-    potential = operator @ topography + load
-    geoid = potential / reference_gravity
-    return CylindricalGravityResponse(
-        outer_potential=float(potential[0]),
-        inner_potential=float(potential[1]),
-        outer_geoid=float(geoid[0]),
-        inner_geoid=float(geoid[1]),
-    )
-
-
-def cylindrical_annulus_self_gravity_response(
-    *,
-    radius_inner: float,
-    radius_outer: float,
-    wavenumber: int,
-    outer_topography_coefficient: float,
-    inner_topography_coefficient: float,
-    outer_density_contrast: float,
-    inner_density_contrast: float,
-    outer_reference_gravity: float,
-    inner_reference_gravity: float,
-    internal_load_radius: float | None = None,
-    internal_surface_density_coefficient: float = 0.0,
-    gravitational_constant: float = 1.0,
-    outer_feedback_factor: float | None = None,
-    inner_feedback_factor: float | None = None,
-) -> CylindricalSelfGravityResponse:
-    r"""Return the two-boundary cylindrical self-gravity correction.
-
-    Holding the hydrodynamic traction fixed gives
-    :math:`h_{sg}=h+Q\Phi_{sg}`. For positive reference-gravity magnitudes the
-    default factors are :math:`Q=diag(1/g_o,1/g_i)`. Explicit factors may be
-    supplied to test a signed convention or disable either feedback row. The
-    solved equation is
-
-    .. math::
-
-       (I-QG_n)h_{sg}=h+Q\phi_{load}.
-
-    Parameters
-    ----------
-    radius_inner, radius_outer : real
-        Positive annulus radii ordered from inner to outer.
-    wavenumber : int
-        Positive azimuthal Fourier wavenumber.
-    outer_topography_coefficient, inner_topography_coefficient : real
-        Hydrodynamic topography coefficients before self-gravity feedback.
-    outer_density_contrast, inner_density_contrast : real
-        Signed density contrasts at the two boundaries.
-    outer_reference_gravity, inner_reference_gravity : real
-        Positive reference-gravity magnitudes.
-    internal_load_radius : real, optional
-        Radius of an internal sheet, strictly inside the annulus.
-    internal_surface_density_coefficient : real, default=0
-        Density coefficient of the optional internal sheet.
-    gravitational_constant : real, default=1
-        Positive gravitational constant in the selected unit system.
-    outer_feedback_factor, inner_feedback_factor : real, optional
-        Explicit diagonal entries of :math:`Q`; defaults are reciprocal
-        reference-gravity magnitudes.
-
-    Returns
-    -------
-    CylindricalSelfGravityResponse
-        Corrected topography, potential, geoid, feedback, and residual values.
-    """
-
-    radius_inner, radius_outer, mode = _validate_cylindrical_annulus(
-        radius_inner,
-        radius_outer,
-        wavenumber,
-    )
-    reference_gravity = np.array(
-        [
-            _positive_float(
-                outer_reference_gravity,
-                "outer_reference_gravity",
-            ),
-            _positive_float(
-                inner_reference_gravity,
-                "inner_reference_gravity",
-            ),
-        ],
-        dtype=float,
-    )
-    topography = np.array(
-        [
-            _finite_float(
-                outer_topography_coefficient,
-                "outer_topography_coefficient",
-            ),
-            _finite_float(
-                inner_topography_coefficient,
-                "inner_topography_coefficient",
-            ),
-        ],
-        dtype=float,
-    )
-    gravity_constant = _positive_float(
-        gravitational_constant,
-        "gravitational_constant",
-    )
-    operator = cylindrical_annulus_potential_operator(
-        radius_inner=radius_inner,
-        radius_outer=radius_outer,
-        wavenumber=mode,
-        outer_density_contrast=outer_density_contrast,
-        inner_density_contrast=inner_density_contrast,
-        gravitational_constant=gravity_constant,
-    )
-    load = _cylindrical_internal_load_vector(
-        radius_inner=radius_inner,
-        radius_outer=radius_outer,
-        wavenumber=mode,
-        internal_load_radius=internal_load_radius,
-        internal_surface_density_coefficient=(internal_surface_density_coefficient),
-        gravitational_constant=gravity_constant,
-    )
-    feedback = np.array(
-        [
-            (
-                1.0 / reference_gravity[0]
-                if outer_feedback_factor is None
-                else _finite_float(
-                    outer_feedback_factor,
-                    "outer_feedback_factor",
-                )
-            ),
-            (
-                1.0 / reference_gravity[1]
-                if inner_feedback_factor is None
-                else _finite_float(
-                    inner_feedback_factor,
-                    "inner_feedback_factor",
-                )
-            ),
-        ],
-        dtype=float,
-    )
-    q_matrix = np.diag(feedback)
-    system_matrix = np.eye(2) - q_matrix @ operator
-    right_hand_side = topography + q_matrix @ load
-    try:
-        corrected_topography = np.linalg.solve(
-            system_matrix,
-            right_hand_side,
-        )
-    except np.linalg.LinAlgError as error:
-        raise ValueError("The self-gravity feedback matrix is singular.") from error
-    corrected_potential = operator @ corrected_topography + load
-    corrected_geoid = corrected_potential / reference_gravity
-    residual = system_matrix @ corrected_topography - right_hand_side
-
-    return CylindricalSelfGravityResponse(
-        outer_topography=float(corrected_topography[0]),
-        inner_topography=float(corrected_topography[1]),
-        outer_potential=float(corrected_potential[0]),
-        inner_potential=float(corrected_potential[1]),
-        outer_geoid=float(corrected_geoid[0]),
-        inner_geoid=float(corrected_geoid[1]),
-        q_outer=float(feedback[0]),
-        q_inner=float(feedback[1]),
-        matrix_residual_norm=float(np.linalg.norm(residual)),
     )
 
 
@@ -913,12 +355,8 @@ def _rotated_topography_coefficient(
         # boundary.  Use the matching discrete inner product for the fitted
         # coefficient; an analytical spherical norm would mix geometries and
         # introduce a chord-area bias, especially on the smaller CMB.
-        harmonic_norm = float(
-            BdIntegral(stokes.mesh, fn=harmonic**2, boundary=boundary).evaluate()
-        )
-        return float(
-            -response_sign * traction_integral / (buoyancy_scale * harmonic_norm)
-        )
+        harmonic_norm = float(BdIntegral(stokes.mesh, fn=harmonic**2, boundary=boundary).evaluate())
+        return float(-response_sign * traction_integral / (buoyancy_scale * harmonic_norm))
     if projection != "centroid":
         raise ValueError("projection must be 'centroid' or 'reaction'.")
 
@@ -1187,22 +625,14 @@ def _rotated_cylindrical_boundary_response(
             remove_mean=False,
         )
     )
-    boundary_measure = float(
-        BdIntegral(stokes.mesh, fn=1.0, boundary=boundary).evaluate()
-    )
-    harmonic_norm = float(
-        BdIntegral(stokes.mesh, fn=harmonic**2, boundary=boundary).evaluate()
-    )
+    boundary_measure = float(BdIntegral(stokes.mesh, fn=1.0, boundary=boundary).evaluate())
+    harmonic_norm = float(BdIntegral(stokes.mesh, fn=harmonic**2, boundary=boundary).evaluate())
     if not np.all(
-        np.isfinite(
-            (reaction_integral, reaction_total, boundary_measure, harmonic_norm)
-        )
+        np.isfinite((reaction_integral, reaction_total, boundary_measure, harmonic_norm))
     ):
         raise RuntimeError("Cylindrical reaction projection produced non-finite data.")
     if boundary_measure <= 0.0 or harmonic_norm <= 0.0:
-        raise RuntimeError(
-            "Cylindrical reaction projection requires positive boundary integrals."
-        )
+        raise RuntimeError("Cylindrical reaction projection requires positive boundary integrals.")
 
     reaction_coefficient = reaction_integral / harmonic_norm
     reaction_mean = reaction_total / boundary_measure
@@ -1225,6 +655,8 @@ def cylindrical_annulus_response_from_rotated_stokes(
     inner_reference_gravity: float,
     internal_load_radius: float | None = None,
     internal_surface_density_coefficient: float = 0.0,
+    volume_density_radial_exponent: float | None = None,
+    volume_density_coefficient: float = 0.0,
     outer_boundary: str = "Upper",
     inner_boundary: str = "Lower",
     outer_buoyancy_scale: float = 1.0,
@@ -1291,21 +723,17 @@ def cylindrical_annulus_response_from_rotated_stokes(
     if not isinstance(include_self_gravity, bool):
         raise TypeError("include_self_gravity must be True or False.")
 
-    outer_reaction, outer_mean, outer_topography = (
-        _rotated_cylindrical_boundary_response(
-            stokes=stokes,
-            boundary=outer_boundary,
-            wavenumber=mode,
-            buoyancy_scale=outer_buoyancy_scale,
-        )
+    outer_reaction, outer_mean, outer_topography = _rotated_cylindrical_boundary_response(
+        stokes=stokes,
+        boundary=outer_boundary,
+        wavenumber=mode,
+        buoyancy_scale=outer_buoyancy_scale,
     )
-    inner_reaction, inner_mean, inner_topography = (
-        _rotated_cylindrical_boundary_response(
-            stokes=stokes,
-            boundary=inner_boundary,
-            wavenumber=mode,
-            buoyancy_scale=inner_buoyancy_scale,
-        )
+    inner_reaction, inner_mean, inner_topography = _rotated_cylindrical_boundary_response(
+        stokes=stokes,
+        boundary=inner_boundary,
+        wavenumber=mode,
+        buoyancy_scale=inner_buoyancy_scale,
     )
     gravity = cylindrical_annulus_geoid_response(
         radius_inner=radius_inner,
@@ -1319,6 +747,8 @@ def cylindrical_annulus_response_from_rotated_stokes(
         inner_reference_gravity=inner_reference_gravity,
         internal_load_radius=internal_load_radius,
         internal_surface_density_coefficient=internal_surface_density_coefficient,
+        volume_density_radial_exponent=volume_density_radial_exponent,
+        volume_density_coefficient=volume_density_coefficient,
         gravitational_constant=gravitational_constant,
     )
     self_gravity = None
@@ -1335,6 +765,8 @@ def cylindrical_annulus_response_from_rotated_stokes(
             inner_reference_gravity=inner_reference_gravity,
             internal_load_radius=internal_load_radius,
             internal_surface_density_coefficient=internal_surface_density_coefficient,
+            volume_density_radial_exponent=volume_density_radial_exponent,
+            volume_density_coefficient=volume_density_coefficient,
             gravitational_constant=gravitational_constant,
             outer_feedback_factor=outer_feedback_factor,
             inner_feedback_factor=inner_feedback_factor,

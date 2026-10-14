@@ -29,6 +29,26 @@ does not implement the symbolic mesh-field contract above.
    :show-inheritance:
 ```
 
+## Radial gravitational-potential kernels
+
+The mesh-independent cylindrical and spherical kernels use
+`laplacian(Phi) = -4*pi*G*delta_rho`. They include sheet jumps, regular/decaying
+continuations and compact power-law volume sources. Cylindrical coefficient
+responses remain available through `uw.postprocessing.geoid`; the analytical
+implementation is shared rather than copied into each benchmark. Spherical
+normalised response coefficients are distinct from physical potential values.
+
+```{eval-rst}
+.. automodule:: underworld3.analytic.cylindrical_gravity
+   :members:
+
+.. automodule:: underworld3.analytic.spherical_gravity
+   :members:
+```
+
+Real spherical-harmonic conventions and batched evaluators are available in
+`uw.maths.spherical_harmonics`.
+
 ## See also
 
 - {doc}`solvers` — the solvers these solutions validate.

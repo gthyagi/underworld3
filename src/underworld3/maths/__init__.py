@@ -31,6 +31,7 @@ See Also
 underworld3.coordinates : Coordinate system definitions.
 underworld3.discretisation : Mesh classes for integration.
 """
+from . import spherical_harmonics
 from . import tensors as tensor
 from .vector_calculus import mesh_vector_calculus as vector_calculus
 from .vector_calculus import (

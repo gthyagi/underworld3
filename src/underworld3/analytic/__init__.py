@@ -26,6 +26,7 @@ See Also
 underworld3.analytic._base : the contract each solution satisfies.
 """
 
+from . import cylindrical_gravity, spherical_gravity
 from ._base import (
     AnalyticSolution,
     free_slip,
@@ -55,6 +56,8 @@ from .velic import (
 from .zhong2008 import Zhong2008, Zhong2008Response
 
 __all__ = [
+    "cylindrical_gravity",
+    "spherical_gravity",
     "AnalyticSolution",
     "free_slip",
     "prescribed_scalar",
