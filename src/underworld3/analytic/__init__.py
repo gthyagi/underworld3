@@ -37,6 +37,7 @@ from ._base import (
 from .barr_houseman_96 import FaultedMedium
 from .inclusion import EllipticalInclusion
 from .kramer_cylindrical import AssessCylindricalStokes, CylindricalStokes
+from .kramer_spherical import SphericalStokes
 from .richards import GardnerSteady, GardnerTransient
 from .transport import AdvectedFront, ErfcDiffusion, Poisson1D, RotatingGaussian, TwoLayerDarcy
 from .velic import (
@@ -67,6 +68,7 @@ __all__ = [
     "ErfcDiffusion",
     "FaultedMedium",
     "CylindricalStokes",
+    "SphericalStokes",
     "AssessCylindricalStokes",
     "GardnerSteady",
     "GardnerTransient",
@@ -100,6 +102,7 @@ _SOLUTIONS = {
     "AssessCylindricalStokes": AssessCylindricalStokes,
     "AdvectedFront": AdvectedFront,
     "CylindricalStokes": CylindricalStokes,
+    "SphericalStokes": SphericalStokes,
     "EllipticalInclusion": EllipticalInclusion,
     "ErfcDiffusion": ErfcDiffusion,
     "FaultedMedium": FaultedMedium,

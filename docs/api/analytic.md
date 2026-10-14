@@ -36,6 +36,27 @@ Construction, function generation, first evaluation and seven repeated warmed
 measurements are reported separately. These are evaluator timings, not solver
 speedups.
 
+## Kramer spherical fields
+
+`uw.analytic.SphericalStokes` combines radial coefficients, symbolic velocity,
+pressure, strain rate, total/radial/shear stress and cached array evaluators in
+`analytic.kramer_spherical`. Select `ell`, `m`, `component` and `normalization`
+explicitly for non-axisymmetric work. The real orthonormal basis includes the
+sqrt(2) factor for nonzero m; assess's real complex-harmonic oracle does not.
+Delta and smooth forcing support free/zero slip with positive viscosity and
+explicit forcing amplitude. Exceptional ell=0/1 and resonant smooth powers
+are rejected. Cartesian solid harmonics give finite exact pole values.
+
+Use `apply_forcing` once to apply the conforming delta interface jump or smooth
+bulk force. Positive g is inward physical force and an outward normal-stress
+jump; sample bulk equations away from that interface. Radial shear is returned
+as a Cartesian tangential traction vector, not an angular scalar.
+
+`scripts/benchmark_kramer_spherical_evaluators.py --output-json <path>` records
+setup, first-call and seven-repeat warmed timings for three batch sizes, plus
+nonzero-m harmonic comparisons including both poles. These are analytical
+point-evaluator measurements, not solver speedups.
+
 ## Zhong spherical-shell response oracle
 
 `Zhong2008` is a mesh-independent propagator-matrix oracle. It returns the

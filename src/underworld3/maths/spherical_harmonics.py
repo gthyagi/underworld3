@@ -154,6 +154,47 @@ def harmonic_case_label(
     return f"l{degree}_m{order}{suffix}_{norm}"
 
 
+def solid_harmonic_sympy(
+    coordinates, *, degree, order=0, component="cos",
+    normalization=AXISYMMETRIC_UNNORMALIZED,
+):
+    """Return the Cartesian polynomial r**ell Y_ell^m, including both poles.
+
+    Multiplying the associated Legendre polynomial by the real/imaginary
+    part of (x+i*y)**m cancels the apparent azimuthal singularity exactly.
+    No angular coordinates or divisions by the cylindrical radius are used.
+    """
+    degree, order, component, normalization = validate_harmonic(
+        degree, order, component, normalization
+    )
+    if len(coordinates) != 3:
+        raise ValueError("coordinates must contain three Cartesian expressions.")
+    x, y, z = coordinates
+    cosine = sp.Symbol("_harmonic_cosine", real=True)
+    derivative = sp.Poly(sp.diff(sp.legendre(degree, cosine), cosine, order), cosine)
+    azimuth = sum(sp.binomial(order, j)*(-1)**(j//2)*x**(order-j)*y**j
+                  for j in range(0 if component == "cos" else 1, order+1, 2))
+    radius_squared = x*x + y*y + z*z
+    polynomial = (-1)**order * azimuth * sum(
+        coefficient * z**power[0] * radius_squared**((degree-order-power[0])//2)
+        for power, coefficient in derivative.terms()
+    )
+    if normalization == REAL_ORTHONORMAL:
+        factor = sp.sqrt(sp.Rational(2*degree+1, 4)/sp.pi
+                         * sp.factorial(degree-order)/sp.factorial(degree+order))
+        if order:
+            factor *= sp.sqrt(2)
+        polynomial *= factor
+    return sp.expand(polynomial)
+
+
+def real_harmonic_cartesian_sympy(coordinates, **parameters):
+    """Return a pole-safe real harmonic as a Cartesian shell expression."""
+    return solid_harmonic_sympy(coordinates, **parameters) / sp.sqrt(
+        sum(value*value for value in coordinates)
+    )**parameters["degree"]
+
+
 __all__ = [
     "AXISYMMETRIC_UNNORMALIZED",
     "REAL_ORTHONORMAL",
@@ -161,5 +202,7 @@ __all__ = [
     "harmonic_norm",
     "real_harmonic_sympy",
     "real_harmonic_values",
+    "solid_harmonic_sympy",
+    "real_harmonic_cartesian_sympy",
     "validate_harmonic",
 ]
