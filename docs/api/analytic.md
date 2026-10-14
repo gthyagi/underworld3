@@ -95,3 +95,33 @@ Real spherical-harmonic conventions and batched evaluators are available in
 - `docs/developer/subsystems/analytic-solutions.md` — the implementation form,
   the validation protocol every transcription must pass, and the provenance of
   each vendored reference kernel.
+
+## Physical spherical responses and restricted trace support
+
+`analytic.spherical_gravity.spherical_physical_shell_response` returns physical
+potential and geoid with explicit G, densities and inner/outer gravity. It
+supports sheet/volume forcing and linear interface feedback, recording matrix
+conditioning and residuals. This API is distinct from the normalized Zhong
+response.
+
+`postprocessing.spherical_interface_load` supports only continuous P2 scalar
+traces on straight triangular facets of 3D meshes. Facets contribute on their
+owning rank and shared DOFs are added collectively on the mesh communicator.
+Temporary PETSc objects are released on exceptions.
+
+The restricted `install_linear_spherical_stokes_sheet_load` applies radial
+sheet forcing to constant linear ViscousFlowModel/P2 velocity systems after
+homogeneous wall conditions and solver policy have been configured. It uses the
+native assembled Jacobian and an explicit owned-facet weak RHS, whose moment
+against rigid rotations is zero. It rejects nonlinear models, other natural
+loads and nonzero essential data. Reinstall after any model/mesh setup change;
+it is not a general nonlinear residual hook. The generic natural-load route
+remains available for diagnostics, but the benchmark records a same-mesh MPI
+compatibility discrepancy for that route.
+
+`postprocessing.spherical_potential.solve_spherical_potential` keeps geometry,
+labels and solver options caller-owned. Its full-ball continuation defaults to
+the single-mode exterior Robin condition; an explicit analytic Dirichlet
+comparison is also supported. It preserves an owned copy of the base solution
+before borrowing DM work vectors, including for volume-plus-sheet sources.
+The source radius must be supplied for each Dirichlet-comparison sheet.

@@ -31,6 +31,7 @@ __all__ = [
     "spherical_shell_geoid_response",
     "spherical_shell_self_gravity_response",
     "spherical_shell_response_from_rotated_stokes",
+    "spherical_boundary_reaction_coefficient",
     "cylindrical_power_law_volume_potential_coefficient",
     "cylindrical_sheet_potential_coefficient",
     "cylindrical_sheet_radial_derivative_coefficient",
@@ -303,13 +304,16 @@ def _project_spherical_harmonic_samples(
     radius: float,
     harmonic_degree: int,
     response_sign: float,
+    harmonic_order=0,
+    harmonic_component="cos",
+    harmonic_normalization="axisymmetric_unnormalized",
 ) -> float:
     from scipy.spatial import ConvexHull
+    from underworld3.maths.spherical_harmonics import real_harmonic_values, harmonic_norm
 
     unit_coords = coords / np.linalg.norm(coords, axis=1)[:, None]
     hull = ConvexHull(unit_coords, qhull_options="QJ")
     projected_integral = 0.0
-    harmonic = np.polynomial.legendre.Legendre.basis(harmonic_degree)
 
     for simplex in hull.simplices:
         area = _spherical_triangle_area(
@@ -321,11 +325,37 @@ def _project_spherical_harmonic_samples(
         centroid = unit_coords[simplex].mean(axis=0)
         centroid /= np.linalg.norm(centroid)
         projected_integral += (
-            area * float(values[simplex].mean()) * harmonic(np.clip(centroid[2], -1, 1))
+            area * float(values[simplex].mean()) * real_harmonic_values(
+                centroid, degree=harmonic_degree, order=harmonic_order,
+                component=harmonic_component, normalization=harmonic_normalization)
         )
 
-    harmonic_norm = 4.0 * np.pi / (2 * harmonic_degree + 1)
-    return float(response_sign * projected_integral / (radius**2 * harmonic_norm))
+    angular_norm = harmonic_norm(harmonic_degree, harmonic_order,
+                                harmonic_component, harmonic_normalization)
+    return float(response_sign * projected_integral / (radius**2 * angular_norm))
+
+
+def spherical_boundary_reaction_coefficient(
+    stokes, boundary, *, harmonic_degree, harmonic_order=0,
+    harmonic_component="cos", harmonic_normalization="axisymmetric_unnormalized",
+):
+    """Project wall reaction with a real harmonic and the matching FE norm.
+
+    The assembled reaction mean is removed before contraction. Return the
+    modal coefficient, whose sign is reaction_nn=-fluid_sigma_rr. Angular
+    basis values use a Cartesian solid harmonic and remain defined at poles.
+    """
+    from underworld3.maths import BdIntegral
+    from underworld3.maths.spherical_harmonics import real_harmonic_cartesian_sympy
+    if stokes.mesh.dim != 3:
+        raise ValueError("Spherical reaction projection requires a 3D mesh.")
+    harmonic = real_harmonic_cartesian_sympy(list(stokes.mesh.X), degree=harmonic_degree,
+        order=harmonic_order, component=harmonic_component, normalization=harmonic_normalization)
+    numerator = float(stokes.boundary_normal_traction_integral(boundary, harmonic, remove_mean=True))
+    norm = float(BdIntegral(stokes.mesh, fn=harmonic**2, boundary=boundary).evaluate())
+    if not np.isfinite(numerator) or not np.isfinite(norm) or norm <= 0:
+        raise ValueError("Spherical reaction projection requires finite data and a positive FE norm.")
+    return numerator/norm
 
 
 def _rotated_topography_coefficient(
@@ -336,28 +366,19 @@ def _rotated_topography_coefficient(
     buoyancy_scale: float,
     response_sign: float,
     projection: str,
+    harmonic_order=0,
+    harmonic_component="cos",
+    harmonic_normalization="axisymmetric_unnormalized",
 ) -> float:
     buoyancy_scale = float(buoyancy_scale)
     if not np.isfinite(buoyancy_scale) or buoyancy_scale == 0.0:
         raise ValueError("Boundary buoyancy scales must be finite and nonzero.")
 
     if projection == "reaction":
-        import sympy
-        from underworld3.maths import BdIntegral
-
-        theta = stokes.mesh.CoordinateSystem.xR[1]
-        harmonic = sympy.assoc_legendre(harmonic_degree, 0, sympy.cos(theta))
-        traction_integral = stokes.boundary_normal_traction_integral(
-            boundary,
-            harmonic,
-            remove_mean=True,
-        )
-        # The reaction is the load functional assembled on the faceted FE
-        # boundary.  Use the matching discrete inner product for the fitted
-        # coefficient; an analytical spherical norm would mix geometries and
-        # introduce a chord-area bias, especially on the smaller CMB.
-        harmonic_norm = float(BdIntegral(stokes.mesh, fn=harmonic**2, boundary=boundary).evaluate())
-        return float(-response_sign * traction_integral / (buoyancy_scale * harmonic_norm))
+        coefficient = spherical_boundary_reaction_coefficient(stokes, boundary,
+            harmonic_degree=harmonic_degree, harmonic_order=harmonic_order,
+            harmonic_component=harmonic_component, harmonic_normalization=harmonic_normalization)
+        return float(-response_sign*coefficient/buoyancy_scale)
     if projection != "centroid":
         raise ValueError("projection must be 'centroid' or 'reaction'.")
 
@@ -394,6 +415,7 @@ def _rotated_topography_coefficient(
                 radius,
                 harmonic_degree,
                 response_sign,
+                harmonic_order, harmonic_component, harmonic_normalization,
             )
         except Exception as error:
             root_error = f"{type(error).__name__}: {error}"
@@ -423,6 +445,9 @@ def spherical_shell_response_from_rotated_stokes(
     gravity: float | None = None,
     gravitational_constant: float = 6.67430e-11,
     projection: str = "centroid",
+    harmonic_order: int = 0,
+    harmonic_component: str = "cos",
+    harmonic_normalization: str = "axisymmetric_unnormalized",
 ) -> SphericalShellResponse:
     r"""Compute spherical-shell response from a rotated-free-slip Stokes solve.
 
@@ -431,8 +456,8 @@ def spherical_shell_response_from_rotated_stokes(
     contracts the assembled nodal reaction directly with the harmonic test
     function. The latter is a distributed weak/integral quantity that avoids
     consuming slowly converging P2 vertex values on curved boundaries (issue
-    #414). Use the pure coefficient functions directly for other harmonic
-    orders or topography-recovery methods. Density contrasts, planet radius,
+    #414). Explicit order, component and normalization support non-axisymmetric
+    real harmonics while preserving the zonal defaults. Density contrasts, planet radius,
     and gravity are required when ``include_self_gravity`` is true.
     """
 
@@ -450,6 +475,8 @@ def spherical_shell_response_from_rotated_stokes(
             "The rotated-Stokes adapter requires harmonic_degree >= 1 because "
             "boundary_normal_traction() removes the degree-zero mean."
         )
+    from underworld3.maths.spherical_harmonics import validate_harmonic
+    validate_harmonic(degree, harmonic_order, harmonic_component, harmonic_normalization)
     if include_self_gravity:
         missing = [
             name
@@ -474,6 +501,7 @@ def spherical_shell_response_from_rotated_stokes(
         surface_buoyancy_scale,
         1.0,
         projection,
+        harmonic_order, harmonic_component, harmonic_normalization,
     )
     cmb_topography = _rotated_topography_coefficient(
         stokes,
@@ -483,6 +511,7 @@ def spherical_shell_response_from_rotated_stokes(
         cmb_buoyancy_scale,
         -1.0,
         projection,
+        harmonic_order, harmonic_component, harmonic_normalization,
     )
     geoid = spherical_shell_geoid_response(
         radius_inner=ri,

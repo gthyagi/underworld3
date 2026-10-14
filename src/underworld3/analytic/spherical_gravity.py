@@ -551,63 +551,77 @@ def spherical_shell_potential_operator(
     return operator, load
 
 
-def spherical_shell_self_gravity_response(
-    *,
-    radius_inner: Real,
-    radius_outer: Real,
-    harmonic_degree: int,
-    surface_topography_coefficient: Real,
-    cmb_topography_coefficient: Real,
-    surface_density_contrast: Real,
-    cmb_density_contrast: Real,
-    planet_radius: Real,
-    gravity: Real,
-    internal_load_radius: Real | None = None,
-    internal_load_coefficient: Real = 0.0,
-    gravitational_constant: Real = 6.67e-11,
-) -> SphericalSelfGravityResponse:
-    """Return the independent two-interface self-gravity response."""
 
-    operator, load = spherical_shell_potential_operator(
-        radius_inner=radius_inner,
-        radius_outer=radius_outer,
-        harmonic_degree=harmonic_degree,
-        internal_load_radius=internal_load_radius,
-        internal_load_coefficient=internal_load_coefficient,
-    )
-    topography = np.array(
-        [
-            _finite_float(surface_topography_coefficient, "surface_topography_coefficient"),
-            _finite_float(cmb_topography_coefficient, "cmb_topography_coefficient"),
-        ],
-        dtype=float,
-    )
-    density_contrasts = np.array(
-        [
-            _finite_float(surface_density_contrast, "surface_density_contrast"),
-            _finite_float(cmb_density_contrast, "cmb_density_contrast"),
-        ],
-        dtype=float,
-    )
-    planet_radius = _positive_float(planet_radius, "planet_radius")
-    gravity = _positive_float(gravity, "gravity")
-    gravity_constant = _positive_float(gravitational_constant, "gravitational_constant")
+def spherical_physical_shell_response(
+    *, radius_inner, radius_outer, harmonic_degree,
+    outer_topography, inner_topography, outer_density_contrast,
+    inner_density_contrast, outer_gravity, inner_gravity,
+    gravitational_constant, internal_load_radius=None,
+    internal_surface_density=0.0, volume_density=0.0, density_power=2,
+    include_self_gravity=False,
+):
+    """Physical potential/geoid from radial-outward displacement coefficients.
 
-    q = 4.0 * np.pi * gravity_constant * planet_radius * density_contrasts / gravity
-    q_matrix = np.diag(q)
-    system = np.eye(2) - q_matrix @ operator
-    right_hand_side = topography + q_matrix @ load
-    corrected_topography = np.linalg.solve(system, right_hand_side)
-    corrected_geoid = operator @ corrected_topography + load
-    residual = system @ corrected_topography - right_hand_side
+    Radii and densities have caller-selected consistent physical units.
+    Interface contrasts are rho_smaller_radius-rho_larger_radius. All sources
+    and displacements use one real harmonic. Unlike the normalized Zhong API,
+    this returns Phi and Phi/g with G and both gravity values retained.
+    Linear interface feedback solves (I-diag(1/g)*K)h=h_dynamic+Phi_load/g.
+    The initial Stokes stress must not already contain this gravity feedback.
+    """
+    ri, ro, ell = _validate_geometry(radius_inner,radius_outer,harmonic_degree)
+    G = _positive_float(gravitational_constant,'gravitational_constant')
+    contrasts = np.array([_finite_float(outer_density_contrast,'outer_density_contrast'),
+                          _finite_float(inner_density_contrast,'inner_density_contrast')])
+    gravity = np.array([_positive_float(outer_gravity,'outer_gravity'),
+                        _positive_float(inner_gravity,'inner_gravity')])
+    h = np.array([_finite_float(outer_topography,'outer_topography'),
+                  _finite_float(inner_topography,'inner_topography')])
+    sigma = _finite_float(internal_surface_density,'internal_surface_density')
+    rho = _finite_float(volume_density,'volume_density')
+    if not isinstance(include_self_gravity,bool):
+        raise TypeError('include_self_gravity must be bool.')
+    if internal_load_radius is None and sigma:
+        raise ValueError('internal_load_radius is required for a nonzero sheet.')
+    if internal_load_radius is not None:
+        source = _positive_float(internal_load_radius,'internal_load_radius')
+        if not ri < source < ro:raise ValueError('Internal sheet must lie strictly inside the shell.')
+    targets = (ro,ri)
+    operator = np.array([[spherical_sheet_potential_coefficient(
+        source_radius=source_radius,target_radius=target,harmonic_degree=ell,
+        surface_density_coefficient=contrast,gravitational_constant=G)
+        for source_radius,contrast in zip(targets,contrasts)] for target in targets])
+    load=np.zeros(2)
+    for row,target in enumerate(targets):
+        if sigma:
+            load[row]+=spherical_sheet_potential_coefficient(source_radius=source,
+                target_radius=target,harmonic_degree=ell,surface_density_coefficient=sigma,
+                gravitational_constant=G)
+        if rho:
+            load[row]+=spherical_volume_density_potential_coefficient(radius_inner=ri,
+                radius_outer=ro,harmonic_degree=ell,density_power=density_power,
+                density_amplitude=rho,target_radius=target,gravitational_constant=G)
+    potential=operator@h+load
+    result=dict(outer_topography=float(h[0]),inner_topography=float(h[1]),
+                outer_potential=float(potential[0]),inner_potential=float(potential[1]),
+                outer_geoid=float(potential[0]/gravity[0]),inner_geoid=float(potential[1]/gravity[1]))
+    if include_self_gravity:
+        system=np.eye(2)-operator/gravity[:,None]
+        rhs=h+load/gravity
+        condition=float(np.linalg.cond(system))
+        if not np.isfinite(condition) or condition>1/np.finfo(float).eps:
+            raise np.linalg.LinAlgError('Singular spherical interface feedback system.')
+        corrected=np.linalg.solve(system,rhs)
+        corrected_potential=operator@corrected+load
+        result.update(outer_topography_self_gravity=float(corrected[0]),
+                      inner_topography_self_gravity=float(corrected[1]),
+                      outer_potential_self_gravity=float(corrected_potential[0]),
+                      inner_potential_self_gravity=float(corrected_potential[1]),
+                      outer_geoid_self_gravity=float(corrected_potential[0]/gravity[0]),
+                      inner_geoid_self_gravity=float(corrected_potential[1]/gravity[1]),
+                      matrix_condition_number=condition,
+                      matrix_residual_norm=float(np.linalg.norm(system@corrected-rhs)))
+    return result
 
-    return SphericalSelfGravityResponse(
-        surface_topography=float(corrected_topography[0]),
-        cmb_topography=float(corrected_topography[1]),
-        surface_geoid=float(corrected_geoid[0]),
-        cmb_geoid=float(corrected_geoid[1]),
-        q_surface=float(q[0]),
-        q_cmb=float(q[1]),
-        matrix_condition_number=float(np.linalg.cond(system)),
-        matrix_residual_norm=float(np.linalg.norm(residual)),
-    )
+
+__all__.append('spherical_physical_shell_response')
