@@ -231,7 +231,7 @@ def spherical_shell_self_gravity_response(
     )
 
 
-# Import after defining the spherical response API: analytic.Zhong2008 uses
+# Import after defining the spherical response API: analytic.Zhong uses
 # that API while the analytic namespace is initialising.
 from underworld3.analytic.cylindrical_gravity import (
     CylindricalGravityResponse,

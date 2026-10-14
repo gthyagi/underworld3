@@ -59,12 +59,12 @@ point-evaluator measurements, not solver speedups.
 
 ## Zhong spherical-shell response oracle
 
-`Zhong2008` is a mesh-independent propagator-matrix oracle. It returns the
+`Zhong` is a mesh-independent propagator-matrix oracle. It returns the
 boundary response coefficients used by the Zhong et al. (2008) benchmark; it
 does not implement the symbolic mesh-field contract above.
 
 ```{eval-rst}
-.. automodule:: underworld3.analytic.zhong2008
+.. automodule:: underworld3.analytic.zhong
    :members:
    :show-inheritance:
 ```

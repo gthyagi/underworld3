@@ -4,6 +4,17 @@ This log tracks significant development work at a conceptual level, suitable for
 
 ---
 
+## 2026 Q4 (October – December)
+
+### Yearless Zhong analytical API (October 2026)
+
+The shell case selector exposes `case="zhong"`, backed by
+`uw.analytic.Zhong` and `ZhongResponse` in `analytic/zhong.py`. The
+year-suffixed class aliases and `analytic.zhong2008` compatibility module
+have been removed at the user's request. Consumers must use the yearless
+names; published references continue to cite Zhong et al. (2008).
+The propagator equations, response values and physical conventions are unchanged.
+
 ## 2026 Q3 (July – September)
 
 ### Legacy Diffusion Restart Consistency (September 2026, #708)

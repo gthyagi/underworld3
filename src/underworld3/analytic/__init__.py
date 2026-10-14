@@ -54,7 +54,7 @@ from .velic import (
     SolM,
     SolNL,
 )
-from .zhong import Zhong, ZhongResponse, Zhong2008, Zhong2008Response
+from .zhong import Zhong, ZhongResponse
 from .thieulot import ThieulotCylindricalStokes, ThieulotSphericalStokes
 from .stokes import StokesSolution, stokes_cases, compare_coefficients
 
@@ -94,8 +94,6 @@ __all__ = [
     "SolM",
     "SolNL",
     "TwoLayerDarcy",
-    "Zhong2008",
-    "Zhong2008Response",
     "Zhong",
     "ZhongResponse",
     "available",

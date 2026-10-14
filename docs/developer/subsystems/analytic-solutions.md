@@ -144,9 +144,8 @@ rather than a symbolic field object. It has `symbolic=False`, no `fn_*` fields
 or field-error methods. An optional supplied mesh is checked for dimension only;
 radii and physical parameters are never inferred from it. Its normalized
 response coefficients retain their existing units and conventions. The year
-belongs in the citation, not the canonical API name; `Zhong2008` and
-`Zhong2008Response` remain identical compatibility aliases for `Zhong` and
-`ZhongResponse`.
+belongs in the citation, not the API name. Use `Zhong` and `ZhongResponse`;
+the year-suffixed aliases and the old module import path have been removed.
 
 Source ownership is `stokes.py` (selection and coefficient reporting), `_base.py`
 (shared field/error contract), `kramer_cylindrical.py`, `kramer_spherical.py` and
@@ -154,7 +153,7 @@ Source ownership is `stokes.py` (selection and coefficient reporting), `_base.py
 `_shell_response.py` (Kramer stress-to-response adapter), and the existing
 `cylindrical_gravity.py`/`spherical_gravity.py` kernels. `kramer.py` retains
 compatibility imports; `AssessCylindricalStokes` is an optional numeric oracle.
-`zhong.py` owns the propagator; `zhong2008.py` retains compatibility imports.
+`zhong.py` owns the propagator and its response type.
 
 ### Symbolic field representation
 

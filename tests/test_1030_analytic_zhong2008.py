@@ -328,7 +328,7 @@ def _computed_row(depth_fraction, harmonic_degree, *, layered):
             "viscosities": (1.0, 1.0e4),
         }
 
-    response = uw.analytic.Zhong2008(
+    response = uw.analytic.Zhong(
         harmonic_degree=harmonic_degree,
         radius_inner=radius_inner,
         radius_outer=radius_outer,
@@ -366,7 +366,7 @@ def test_layered_responses_match_every_analytic_value_in_table_3(published):
 
 
 def test_no_self_gravity_outputs_match_the_mid_mantle_reference():
-    response = uw.analytic.Zhong2008().response()
+    response = uw.analytic.Zhong().response()
 
     assert np.isclose(response.surface_topography, 0.4191904157)
     assert np.isclose(response.cmb_topography, 0.7705825500)
@@ -375,7 +375,7 @@ def test_no_self_gravity_outputs_match_the_mid_mantle_reference():
 
 
 def test_boundary_states_satisfy_impermeable_free_slip():
-    solution = uw.analytic.Zhong2008(
+    solution = uw.analytic.Zhong(
         harmonic_degree=8,
         internal_load_radius=0.6625,
         viscosity_interfaces=(0.8, 0.95),
@@ -388,8 +388,8 @@ def test_boundary_states_satisfy_impermeable_free_slip():
 
 
 def test_response_is_linear_in_load_amplitude():
-    unit = uw.analytic.Zhong2008(internal_load_coefficient=1.0).response()
-    doubled = uw.analytic.Zhong2008(internal_load_coefficient=2.0).response()
+    unit = uw.analytic.Zhong(internal_load_coefficient=1.0).response()
+    doubled = uw.analytic.Zhong(internal_load_coefficient=2.0).response()
 
     unit_values = np.array(
         [
@@ -444,33 +444,30 @@ def test_response_is_linear_in_load_amplitude():
 )
 def test_invalid_parameters_are_rejected(options, error, message):
     with pytest.raises(error, match=message):
-        uw.analytic.Zhong2008(**options)
+        uw.analytic.Zhong(**options)
 
 
 def test_zhong_oracle_is_public_but_not_a_symbolic_mesh_solution():
     assert "Zhong" in uw.analytic.__all__
     assert "ZhongResponse" in uw.analytic.__all__
     assert "Zhong" not in uw.analytic.available()
-    assert "Zhong2008" in uw.analytic.__all__
-    assert "Zhong2008Response" in uw.analytic.__all__
-    assert "Zhong2008" not in uw.analytic.available()
-    assert "Zhong et al. (2008)" in uw.analytic.Zhong2008.reference
+    assert "Zhong et al. (2008)" in uw.analytic.Zhong.reference
 
 
-def test_yearless_names_and_historical_imports_are_identical():
-    from underworld3.analytic import zhong, zhong2008
+def test_only_yearless_names_and_module_are_available():
+    import importlib.util
+    from underworld3.analytic import zhong
 
-    assert uw.analytic.Zhong is uw.analytic.Zhong2008
-    assert uw.analytic.ZhongResponse is uw.analytic.Zhong2008Response
-    for module in (zhong, zhong2008):
-        assert module.Zhong is module.Zhong2008 is uw.analytic.Zhong
-        assert (
-            module.ZhongResponse
-            is module.Zhong2008Response
-            is uw.analytic.ZhongResponse
-        )
+    assert zhong.__all__ == ["Zhong", "ZhongResponse"]
+    assert zhong.Zhong is uw.analytic.Zhong
+    assert zhong.ZhongResponse is uw.analytic.ZhongResponse
+    for namespace in (uw.analytic, zhong):
+        for name in ("Zhong2008", "Zhong2008Response"):
+            assert name not in namespace.__all__
+            assert not hasattr(namespace, name)
+    assert importlib.util.find_spec("underworld3.analytic.zhong2008") is None
     assert uw.analytic.Zhong.__module__ == "underworld3.analytic.zhong"
-    assert isinstance(zhong2008.Zhong2008().response(), uw.analytic.ZhongResponse)
+    assert isinstance(zhong.Zhong().response(), uw.analytic.ZhongResponse)
 
 
 @pytest.mark.parametrize("degree", [2, 5])

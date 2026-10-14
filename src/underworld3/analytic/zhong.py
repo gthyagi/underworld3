@@ -39,7 +39,7 @@ from underworld3.postprocessing.geoid import (
 )
 
 
-__all__ = ["Zhong", "ZhongResponse", "Zhong2008", "Zhong2008Response"]
+__all__ = ["Zhong", "ZhongResponse"]
 
 
 @dataclass(frozen=True)
@@ -349,8 +349,3 @@ class Zhong:
             cmb_velocity_divergence=float(cmb_divergence),
             self_gravity=self_gravity,
         )
-
-
-# Preserve published constructors and response types as identical objects.
-Zhong2008 = Zhong
-Zhong2008Response = ZhongResponse
