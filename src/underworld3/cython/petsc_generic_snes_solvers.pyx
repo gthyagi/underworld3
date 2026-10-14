@@ -9441,6 +9441,40 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
         self.is_setup = False
 
     @property
+    def rotated_solver_type(self):
+        """Rotated Stokes linear solver: iterative (default) or serial direct.
+
+        Direct uses the existing MUMPS arbiter with a pressure datum and the
+        same strong wall constraints and residual tolerance. It is intended
+        for small serial validation problems with homogeneous essential and
+        wall-normal data; inhomogeneous data are rejected. Changing this policy invalidates
+        the rotated solver workspace without changing the physical forms.
+        """
+        return "direct" if getattr(self, "_rotated_use_lu", False) else "iterative"
+
+    @rotated_solver_type.setter
+    def rotated_solver_type(self, value):
+        if value not in ("iterative", "direct"):
+            raise ValueError("rotated_solver_type must be iterative or direct.")
+        if value == "direct":
+            self._validate_direct_rotated_policy()
+        self._reset_rotated_solver_cache()
+        self._rotated_use_lu = value == "direct"
+
+    def _validate_direct_rotated_policy(self):
+        if self.mesh.dm.getComm().getSize() != 1:
+            raise ValueError("The direct rotated solver is restricted to serial validation.")
+        # The existing direct arbiter does not converge for general nonzero
+        # essential lifts. Refuse that unsupported case rather than expose it
+        # through the public policy. Recheck at solve for data added later.
+        for bc in self.essential_bcs:
+            if any(sympy.sympify(bc.fn[int(c)]).is_zero is not True
+                   for c in bc.components):
+                raise ValueError("The direct rotated solver requires homogeneous essential data.")
+        if self._rotated_freeslip_datum:
+            raise ValueError("The direct rotated solver requires homogeneous wall-normal data.")
+
+    @property
     def petsc_use_pressure_nullspace(self):
         """
         Enable PETSc handling of the constant-pressure nullspace.
@@ -12119,6 +12153,8 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
         # before any setup reads either list, so an unsupported pair costs
         # nothing before it is refused.
         self._reject_mixed_constraint_mechanisms("solve")
+        if self.rotated_solver_type == "direct":
+            self._validate_direct_rotated_policy()
 
         _check_homotopy_value(homotopy)
         if homotopy:

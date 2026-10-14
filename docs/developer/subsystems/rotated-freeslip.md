@@ -351,3 +351,19 @@ vertex error does not. **If you sample only midpoints, pass
 tangent policies, datum linear + nonlinear),
 `tests/parallel/test_1066_rotated_datum_parallel.py` (np≥2: partition
 independence of the linear datum and the nonlinear Newton datum path).
+
+## Serial direct validation policy
+
+`stokes.rotated_solver_type` is `"iterative"` by default. Select `"direct"`
+for a small serial validation problem to use the existing MUMPS arbiter and
+pressure datum with the same strong constraints and residual tolerance.
+Changing the property releases the cached rotated workspace. Invalid values
+and MPI direct requests fail before changing that workspace.
+
+The public direct policy requires homogeneous essential and wall-normal data.
+A nonzero essential-lift probe did not meet its residual tolerance with the
+existing direct arbiter; that general case is not validated by this policy.
+Data are checked both when selecting direct and before solve, so subsequently
+added inhomogeneous conditions are rejected. The iterative path continues to
+handle supported inhomogeneous conditions. An independent representable
+quadratic-flow regression checks both routes and warm-workspace invalidation.
