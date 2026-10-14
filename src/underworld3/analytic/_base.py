@@ -443,6 +443,51 @@ class AnalyticSolution(uw_object):
 
         return uw.function.evaluate(self._exact(field), np.asarray(coords))
 
+    def error_report(self, field, meshvar, norm="l2"):
+        """Absolute and relative global L2 errors as a JSON-ready dictionary.
+
+        ``l2`` sums squared nodal values across MPI ranks, following ``error``;
+        ``integral`` uses the continuous mesh integral for convergence studies.
+        A zero exact norm returns ``relative_l2=None``. Pressure must have the
+        same additive gauge as the reference before comparison.
+        """
+        exact = self._exact(field)
+        if norm == "integral":
+            zero = (
+                sympy.zeros(*exact.shape)
+                if isinstance(exact, sympy.MatrixBase)
+                else sympy.S.Zero
+            )
+            reference = float(uw.maths.L2_norm(zero, exact, self.mesh))
+            computed = meshvar.sym
+            if (
+                isinstance(computed, sympy.MatrixBase)
+                and computed.shape == (1, 1)
+                and not isinstance(exact, sympy.MatrixBase)
+            ):
+                computed = computed[0]
+            absolute = float(uw.maths.L2_norm(computed, exact, self.mesh))
+        elif norm == "l2":
+            array = np.asarray(meshvar.array)
+            components = int(np.prod(array.shape[1:]))
+            computed = array.reshape(len(meshvar.coords), components)
+            values = np.asarray(self.evaluate(field, meshvar.coords)).reshape(
+                computed.shape
+            )
+            sums = np.array([np.sum((computed - values) ** 2), np.sum(values**2)])
+            difference, magnitude = uw.mpi.comm.allreduce(sums)
+            absolute, reference = float(np.sqrt(difference)), float(np.sqrt(magnitude))
+        else:
+            raise ValueError(f"norm must be 'l2' or 'integral'; got {norm!r}")
+        relative = absolute / reference if reference != 0 else None
+        return dict(
+            norm=norm,
+            absolute_l2=absolute,
+            reference_l2=reference,
+            relative_l2=relative,
+            percentage_error=None if relative is None else 100 * relative,
+        )
+
     def error(self, field, meshvar, norm="l2"):
         r"""Relative error of a computed field against the exact solution.
 

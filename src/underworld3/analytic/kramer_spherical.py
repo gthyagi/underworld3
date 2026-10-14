@@ -196,8 +196,8 @@ def analytical_Pl_sympy(soln, r_sym):
     raise TypeError(f"Unsupported analytical solution type: {type(soln)}")
 
 
-def analytical_radial_stress_assess_sympy(soln, r_sym, y_sym):
-    """ASSess analytical radial stress: sigma_rr = tau_rr - p."""
+def analytical_radial_normal_stress_sympy(soln, r_sym, y_sym):
+    """Native analytical radial normal stress: sigma_rr = tau_rr - p."""
 
     P_l = analytical_Pl_sympy(soln, r_sym)
     dPldr = sp.diff(P_l, r_sym)
@@ -205,16 +205,21 @@ def analytical_radial_stress_assess_sympy(soln, r_sym, y_sym):
     return sp.simplify(tau_rr - analytical_pressure_sympy(soln, r_sym, y_sym))
 
 
+# Historical name retained for existing benchmark consumers; no assess import.
+analytical_radial_stress_assess_sympy = analytical_radial_normal_stress_sympy
+
+
 import numpy as np
 from numbers import Integral
 
 from ._base import AnalyticSolution, free_slip, prescribed_velocity
+from ._shell_response import KramerGeoidMixin
 from underworld3.maths.spherical_harmonics import (
     AXISYMMETRIC_UNNORMALIZED, solid_harmonic_sympy, validate_harmonic,
 )
 
 
-class SphericalStokes(AnalyticSolution):
+class SphericalStokes(KramerGeoidMixin, AnalyticSolution):
     r"""Native symbolic Kramer spherical shell with cached Cartesian evaluation.
 
     Parameters ell>=2, 0<=m<=ell, component ('cos'/'sin') and normalization
@@ -231,6 +236,7 @@ class SphericalStokes(AnalyticSolution):
     """
 
     dim = 3
+    geometry = "spherical"
     boundaries = ("Upper", "Lower")
     reference = "Kramer, Davies & Wilson (2021), doi:10.5194/gmd-14-1899-2021."
     evaluation_cse = True

@@ -20,6 +20,128 @@ module*, which is why the suite could not grow there: the name is owned by a
 
 ## One implementation form: SymPy
 
+### Cylindrical and spherical Stokes cases
+
+Use one geometry/case selector for the native shell solutions:
+
+```python
+sol = uw.analytic.StokesSolution(
+    mesh, geometry="cylindrical", case="kramer",
+    n=2, k=2, r_inner=1.22, r_outer=2.22, r_int=2.0,
+    density="delta", boundary="free", forcing=1.0,
+)
+# The same entry point selects Thieulot's manufactured annulus:
+sol = uw.analytic.StokesSolution(
+    mesh, geometry="cylindrical", case="thieulot",
+    k=2, r_inner=1.0, r_outer=2.0,
+)
+# For a spherical mesh:
+sol = uw.analytic.StokesSolution(
+    mesh, geometry="spherical", case="thieulot", m=3,
+    r_inner=0.5, r_outer=1.0, mu_0=1.0,
+)
+```
+
+`stokes_cases(geometry)` lists supported cases. The factory returns the concrete
+`AnalyticSolution`; it does not wrap fields or duplicate formulas. Existing
+`CylindricalStokes` and `SphericalStokes` names remain the same Kramer classes,
+including their old import paths and constructor defaults.
+
+| Geometry / case | Main parameters | Exact boundary data | Geoid convenience method |
+| --- | --- | --- | --- |
+| cylindrical / kramer | n Fourier mode, k density power; delta/smooth, free/zero slip | impermeability and zero tangential traction, or zero velocity | free-slip cases |
+| spherical / kramer | ell degree, m order, component, normalization, k density power; delta/smooth, free/zero slip | same slip choices | free-slip cases |
+| cylindrical / thieulot | k Fourier mode >=0, C=`amplitude`, constant `viscosity`, optional `rho_0` | prescribed exact wall velocity | not supplied |
+| spherical / thieulot | m viscosity exponent parameter, gamma, mu_0; eta=mu_0*r**(m+1) | prescribed exact wall velocity | not supplied |
+
+Parameters retain their published case meanings: Thieulot spherical `m` is not
+Kramer harmonic order. Its m=-1 case has constant viscosity, m=3 is a commonly
+used power-law case, and the degenerate m=-4 logarithmic family is rejected.
+Tangential wall velocity does not imply zero tangential traction, so Thieulot's
+wall data must not be replaced with homogeneous free slip. Both Thieulot cases
+use the consistent body-force convention `f=-rho*e_r`, with unit inward gravity.
+The spherical Cartesian fields include both published tangential components and
+are finite at the poles. Sources: [ASPECT annulus benchmark](https://aspect-documentation.readthedocs.io/en/latest/user/benchmarks/benchmarks/annulus/doc/annulus.html)
+and [Thieulot (2017)](https://doi.org/10.5194/se-8-1181-2017).
+
+Common field/evaluation/solve comparison usage is:
+
+```python
+stokes.constitutive_model.Parameters.shear_viscosity_0 = sol.fn_viscosity
+sol.apply_forcing(stokes)             # Kramer delta also installs the interface load
+sol.apply_boundary_conditions(stokes)
+stokes.solve()
+values = sol.evaluate("velocity", points)  # cached batched NumPy evaluation
+metrics = sol.error_report("velocity", stokes.u, norm="integral")
+```
+
+Use a mesh with the solution's radii and named boundaries. Kramer delta requires
+an `Internal` boundary at r_int. Forcing/BC methods add data; call them once when
+configuring the solver. Thieulot's viscosity is assigned separately as above.
+`fn_velocity`, `fn_pressure`, `fn_stress`, `fn_strainrate`, `fn_viscosity`,
+`fn_bodyforce` and `fn_radial_normal_stress` are symbolic expressions on mesh.X.
+Thieulot additionally supplies `fn_density`; both Kramer solutions supply radial
+shear stress. Named `evaluate` returns arrays, with vector shape `(N, dim)` and
+tensor shape `(N, dim, dim)`.
+
+`error_report` returns absolute_l2, reference_l2, relative_l2 and percentage_error.
+The `l2` option is the global nodal norm (with the existing seam weighting);
+`integral` is the continuous mesh norm suited to convergence comparisons. A
+zero reference gives `relative_l2=None`. Pressure must have the same additive
+gauge before comparison. This reports evidence, not an accuracy acceptance flag.
+
+For a free-slip Kramer solution, convert exact boundary stresses to analytical
+topography and geoid using the maintained gravity kernels:
+
+```python
+sol = uw.analytic.StokesSolution(
+    mesh, geometry="spherical", case="kramer", ell=2,
+    r_inner=0.55, r_outer=1.0, r_int=0.775, forcing=1.0,
+    normalization="real_orthonormal", density="delta", boundary="free",
+)
+analytical = sol.geoid_response(
+    outer_density_contrast=1.0, inner_density_contrast=1.0,
+    outer_reference_gravity=1.0, inner_reference_gravity=1.0,
+    gravitational_constant=0.01, source_density_coefficient=1.0,
+    include_self_gravity=True,
+)
+# Select the matching signed numerical coefficients from postprocessing:
+reference = {key: analytical[key] for key in ("outer_geoid", "inner_geoid")}
+report = uw.analytic.compare_coefficients(numerical, reference)
+```
+
+That illustrative unit system must be consistent with the solution's radii and
+stress. Explicit source density is necessary: forcing is not a physical density
+until forcing gravity and dimensional scales are specified. It is a sheet
+density for delta, or the amplitude of `(r/r_outer)**k` for smooth. Under unit
+inward forcing gravity in consistent units it equals the Kramer forcing `g`.
+All coefficients use the solution's angular basis. Topography is radial-outward:
+`h_outer=-sigma_rr/(Delta_rho*g_outer)` and
+`h_inner=+sigma_rr/(Delta_rho*g_inner)`. Density contrasts are smaller-radius
+density minus larger-radius density. Potential obeys `laplacian(Phi)=-4*pi*G*rho`
+and geoid is `Phi/g_reference`. `_self_gravity` response fields contain the
+optional linear interface-feedback result. This evaluates formulas without
+running Stokes or Poisson. `boundary_stress_coefficients()` is also available.
+
+`compare_coefficients` reports signed numerical/reference values, absolute,
+relative and percentage errors; relative errors use abs(reference), with None
+for a zero reference. Compare matching projection, harmonic normalization and
+units. Comparing an RMS magnitude against a signed reference is invalid.
+
+Thieulot's manufactured fields support velocity/pressure/stress validation;
+their density profiles and driven-wall conditions do not yet have this geoid
+response adapter. Zhong remains `Zhong2008(...).response()`: a mesh-free layered
+propagator returning response coefficients rather than a symbolic field object.
+
+Source ownership is `stokes.py` (selection and coefficient reporting), `_base.py`
+(shared field/error contract), `kramer_cylindrical.py`, `kramer_spherical.py` and
+`thieulot.py` (each family's symbolic fields and cached evaluation),
+`_shell_response.py` (Kramer stress-to-response adapter), and the existing
+`cylindrical_gravity.py`/`spherical_gravity.py` kernels. `kramer.py` retains
+compatibility imports; `AssessCylindricalStokes` is an optional numeric oracle.
+
+### Symbolic field representation
+
 **Every analytic solution is a pure SymPy expression on `mesh.X`.** No exceptions,
 no tiers. A solution written this way:
 
@@ -317,7 +439,7 @@ straight-facet integral the assembler evaluates, and keeps the constant pressure
 a null vector to machine precision. Pass an analytic normal such as `X/|X|` only
 when the constraint must follow the *true* surface rather than the mesh; it is
 exact for the geometry but keeps a consistency error that grows with facet
-non-uniformity. `CylindricalStokes`, the one curved-geometry solution here, uses
+non-uniformity. The native Kramer curved-geometry solutions use
 the default deliberately. See
 [rotated-freeslip.md](rotated-freeslip.md) ("Which normal to use").
 
@@ -851,7 +973,7 @@ them unavailable rather than omitting them — omitting would make the listing
 truthful about what constructs and silent about what exists, leaving a user with
 no way to discover that a benchmark is one `pip install` away.
 
-There is one: `CylindricalStokes`, wrapping `assess` (Kramer et al. 2021) for
+There is one: `AssessCylindricalStokes`, wrapping `assess` (Kramer et al. 2021) for
 curved-geometry Stokes. It is declared as the `benchmarks` extra:
 
 ```bash
@@ -868,8 +990,10 @@ rather than skipping themselves into a green tick.
 ### It is an oracle, not a member of the family
 
 `assess` gives numeric callables, so there is nothing to differentiate — a
-Kramer solution can be compared against a solver but **cannot be checked against
-the equations it claims to solve**. None of the six gates reaches it.
+numeric Assess wrapper can be compared against a solver but **cannot be checked against
+the equations it claims to solve**. None of the six symbolic gates reaches it.
+The native Kramer solutions expose SymPy fields and do pass symbolic residual
+checks, with Assess used independently for comparison.
 
 What can still be asked is asked by finite differences, which is the same idea
 as Gate 4 with a weaker instrument. All four cases give
@@ -1012,7 +1136,7 @@ contributors for.
 lambdas, or NumPy code. `mesh.X` gives the coordinate symbols; build everything
 from those. Expressions route through the JIT, so an analytic viscosity or body
 force compiles to C *and* supplies its own Jacobian — neither of which a numeric
-callable can do. `CylindricalStokes` is the one exception in the suite and it
+callable can do. `AssessCylindricalStokes` is the numeric oracle exception and it
 pays for it: none of the six gates can reach it.
 
 **Do not simplify.** Preserve whatever grouping the derivation produced. The

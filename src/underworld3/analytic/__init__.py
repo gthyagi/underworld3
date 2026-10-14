@@ -55,6 +55,8 @@ from .velic import (
     SolNL,
 )
 from .zhong2008 import Zhong2008, Zhong2008Response
+from .thieulot import ThieulotCylindricalStokes, ThieulotSphericalStokes
+from .stokes import StokesSolution, stokes_cases, compare_coefficients
 
 __all__ = [
     "cylindrical_gravity",
@@ -69,6 +71,11 @@ __all__ = [
     "FaultedMedium",
     "CylindricalStokes",
     "SphericalStokes",
+    "StokesSolution",
+    "stokes_cases",
+    "compare_coefficients",
+    "ThieulotCylindricalStokes",
+    "ThieulotSphericalStokes",
     "AssessCylindricalStokes",
     "GardnerSteady",
     "GardnerTransient",
@@ -103,6 +110,8 @@ _SOLUTIONS = {
     "AdvectedFront": AdvectedFront,
     "CylindricalStokes": CylindricalStokes,
     "SphericalStokes": SphericalStokes,
+    "ThieulotCylindricalStokes": ThieulotCylindricalStokes,
+    "ThieulotSphericalStokes": ThieulotSphericalStokes,
     "EllipticalInclusion": EllipticalInclusion,
     "ErfcDiffusion": ErfcDiffusion,
     "FaultedMedium": FaultedMedium,

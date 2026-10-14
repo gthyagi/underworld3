@@ -14,6 +14,7 @@ import sympy as sp
 import underworld3 as uw
 
 from ._base import AnalyticSolution, free_slip, prescribed_velocity
+from ._shell_response import KramerGeoidMixin
 
 
 def coefficients_cylinder_delta_fs(Rp, Rm, rp, n, g, nu, sign):
@@ -674,7 +675,7 @@ class AssessCylindricalStokes(AnalyticSolution):
         solver.petsc_use_pressure_nullspace = True
 
 
-class CylindricalStokes(AssessCylindricalStokes):
+class CylindricalStokes(KramerGeoidMixin, AssessCylindricalStokes):
     r"""Native symbolic Kramer annulus solution with cached array evaluation.
 
     The four delta/smooth, free/zero-slip cases use the same parameter defaults
@@ -723,6 +724,8 @@ class CylindricalStokes(AssessCylindricalStokes):
         radial_normal_stress="fn_radial_normal_stress",
         radial_shear_stress="fn_radial_shear_stress",
     )
+
+    geometry = "cylindrical"
 
     def __init__(
         self,

@@ -256,6 +256,20 @@ def test_integral_norm_agrees_with_the_nodal_norm(mesh):
     velocity.array[:, 0, :] = exact * (1.0 + eps)
 
     assert np.isclose(sol.error("velocity", velocity, norm="integral"), eps, rtol=1e-4)
+    report = sol.error_report("velocity", velocity, norm="integral")
+    assert report["relative_l2"] == pytest.approx(eps, rel=1e-4)
+    assert report["reference_l2"] == pytest.approx(np.sqrt(2 / 3), rel=1e-4)
+    assert report["absolute_l2"] == pytest.approx(eps * np.sqrt(2 / 3), rel=1e-4)
+
+
+def test_scalar_zero_reference_integral_report(mesh):
+    sol = Quadratic(mesh)
+    pressure = uw.discretisation.MeshVariable("Pzero_report", mesh, 1, degree=1)
+    pressure.array[...] = 2.0
+    report = sol.error_report("pressure", pressure, norm="integral")
+    assert report["absolute_l2"] == pytest.approx(2.0, rel=1e-4)
+    assert report["reference_l2"] == 0.0
+    assert report["relative_l2"] is None
 
 
 def test_unknown_norm_is_rejected(mesh):
