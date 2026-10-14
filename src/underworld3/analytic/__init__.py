@@ -37,11 +37,19 @@ from ._base import (
 from .barr_houseman_96 import FaultedMedium
 from .inclusion import EllipticalInclusion
 from .cylindrical import (
+    AssessKramerCylindricalStokes,
+    KramerCylindricalStokes,
     AssessCylindricalStokes,
     CylindricalStokes,
     ThieulotCylindricalStokes,
 )
-from .spherical import SphericalStokes, ThieulotSphericalStokes, Zhong, ZhongResponse
+from .spherical import (
+    KramerSphericalStokes,
+    SphericalStokes,
+    ThieulotSphericalStokes,
+    Zhong,
+    ZhongResponse,
+)
 from .richards import GardnerSteady, GardnerTransient
 from .transport import AdvectedFront, ErfcDiffusion, Poisson1D, RotatingGaussian, TwoLayerDarcy
 from .velic import (
@@ -73,6 +81,9 @@ __all__ = [
     "EllipticalInclusion",
     "ErfcDiffusion",
     "FaultedMedium",
+    "KramerCylindricalStokes",
+    "KramerSphericalStokes",
+    "AssessKramerCylindricalStokes",
     "CylindricalStokes",
     "SphericalStokes",
     "StokesSolution",
@@ -110,10 +121,10 @@ __all__ = [
 # contract, and so a solution needing an optional dependency can be listed
 # without being importable.
 _SOLUTIONS = {
-    "AssessCylindricalStokes": AssessCylindricalStokes,
+    "AssessKramerCylindricalStokes": AssessKramerCylindricalStokes,
     "AdvectedFront": AdvectedFront,
-    "CylindricalStokes": CylindricalStokes,
-    "SphericalStokes": SphericalStokes,
+    "KramerCylindricalStokes": KramerCylindricalStokes,
+    "KramerSphericalStokes": KramerSphericalStokes,
     "ThieulotCylindricalStokes": ThieulotCylindricalStokes,
     "ThieulotSphericalStokes": ThieulotSphericalStokes,
     "EllipticalInclusion": EllipticalInclusion,
@@ -139,6 +150,14 @@ _SOLUTIONS = {
 }
 
 
+# Resolve old lookup names without listing any concrete solution twice.
+_SOLUTION_ALIASES = {
+    "AssessCylindricalStokes": "AssessKramerCylindricalStokes",
+    "CylindricalStokes": "KramerCylindricalStokes",
+    "SphericalStokes": "KramerSphericalStokes",
+}
+
+
 def is_available(name):
     """Whether *name* can actually be constructed here and now.
 
@@ -157,7 +176,7 @@ def is_available(name):
     bool
     """
 
-    solution = _SOLUTIONS[name]
+    solution = _SOLUTIONS[_SOLUTION_ALIASES.get(name, name)]
     requires = getattr(solution, "requires", None)
 
     if requires is None:
@@ -169,7 +188,7 @@ def is_available(name):
 
 
 def available(installed_only=False):
-    """Names of the solutions in this namespace, in alphabetical order.
+    """Canonical solution names in alphabetical order, without alias duplicates.
 
     Parameters
     ----------
@@ -206,7 +225,7 @@ def describe(name):
     """
 
     try:
-        solution = _SOLUTIONS[name]
+        solution = _SOLUTIONS[_SOLUTION_ALIASES.get(name, name)]
     except KeyError:
         raise ValueError(
             f"no analytic solution named {name!r}; available: "

@@ -6,6 +6,7 @@ https://doi.org/10.5194/gmd-14-1899-2021
 """
 
 from .spherical.kramer import (
+    KramerSphericalStokes,
     coefficients_sphere_delta_fs,
     coefficients_sphere_delta_ns,
     coefficients_sphere_smooth_fs,
@@ -21,6 +22,7 @@ from .spherical.kramer import (
 )
 
 __all__ = [
+    "KramerSphericalStokes",
     "coefficients_sphere_delta_fs",
     "coefficients_sphere_delta_ns",
     "coefficients_sphere_smooth_fs",

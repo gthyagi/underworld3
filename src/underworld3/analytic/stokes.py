@@ -13,14 +13,14 @@ spherical shell using CitcomS: https://doi.org/10.1029/2008GC002048
 
 import math
 
-from .cylindrical import CylindricalStokes, ThieulotCylindricalStokes
-from .spherical import SphericalStokes, ThieulotSphericalStokes, Zhong
+from .cylindrical import KramerCylindricalStokes, ThieulotCylindricalStokes
+from .spherical import KramerSphericalStokes, ThieulotSphericalStokes, Zhong
 
 
 _CASES = {
-    "cylindrical": {"kramer": CylindricalStokes, "thieulot": ThieulotCylindricalStokes},
+    "cylindrical": {"kramer": KramerCylindricalStokes, "thieulot": ThieulotCylindricalStokes},
     "spherical": {
-        "kramer": SphericalStokes,
+        "kramer": KramerSphericalStokes,
         "thieulot": ThieulotSphericalStokes,
         "zhong": Zhong,
     },
@@ -44,7 +44,8 @@ def StokesSolution(mesh=None, *, geometry, case="kramer", **parameters):
     Kramer uses ``ell, m`` (harmonic); spherical Thieulot uses ``m`` (viscosity
     exponent parameter, eta=mu_0*r**(m+1)). No parameters are silently translated.
 
-    Existing ``CylindricalStokes`` and ``SphericalStokes`` remain Kramer classes.
+    Concrete field classes use ``<Case><Geometry>Stokes`` names. Historical
+    ``CylindricalStokes`` and ``SphericalStokes`` imports remain aliases.
     Spherical ``case="zhong"`` returns the mesh-free ``Zhong`` propagator.
     Use its ``response()`` for coefficients; it has no symbolic mesh fields or
     field-error methods. A supplied mesh is checked for dimension only: geometry,

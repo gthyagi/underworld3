@@ -10,14 +10,18 @@ Zhong exposes response coefficients; Kramer/Thieulot expose symbolic fields.
 """
 
 from . import kramer, thieulot, zhong
-from .kramer import SphericalStokes
+from .kramer import KramerSphericalStokes
 from .thieulot import ThieulotSphericalStokes
 from .zhong import Zhong, ZhongResponse
+
+# Compatibility alias for the former unqualified Kramer name.
+SphericalStokes = KramerSphericalStokes
 
 __all__ = [
     "kramer",
     "thieulot",
     "zhong",
+    "KramerSphericalStokes",
     "SphericalStokes",
     "ThieulotSphericalStokes",
     "Zhong",

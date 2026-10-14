@@ -225,7 +225,7 @@ from underworld3.maths.spherical_harmonics import (
 )
 
 
-class SphericalStokes(KramerGeoidMixin, AnalyticSolution):
+class KramerSphericalStokes(KramerGeoidMixin, AnalyticSolution):
     r"""Native symbolic Kramer spherical shell with cached Cartesian evaluation.
 
     Parameters ell>=2, 0<=m<=ell, component ('cos'/'sin') and normalization
@@ -396,3 +396,7 @@ class SphericalStokes(KramerGeoidMixin, AnalyticSolution):
         phi = np.arange(count)*2.399963229728653
         return radii[:,None]*np.column_stack((np.sqrt(1-z*z)*np.cos(phi),
                                              np.sqrt(1-z*z)*np.sin(phi),z))
+
+
+# Historical name refers to the canonical class; no second implementation.
+SphericalStokes = KramerSphericalStokes

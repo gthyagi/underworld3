@@ -8,12 +8,18 @@ Each case module owns its symbolic construction and evaluation class.
 """
 
 from . import kramer, thieulot
-from .kramer import AssessCylindricalStokes, CylindricalStokes
+from .kramer import AssessKramerCylindricalStokes, KramerCylindricalStokes
 from .thieulot import ThieulotCylindricalStokes
+
+# Compatibility aliases for callers using the former unqualified names.
+AssessCylindricalStokes = AssessKramerCylindricalStokes
+CylindricalStokes = KramerCylindricalStokes
 
 __all__ = [
     "kramer",
     "thieulot",
+    "KramerCylindricalStokes",
+    "AssessKramerCylindricalStokes",
     "CylindricalStokes",
     "AssessCylindricalStokes",
     "ThieulotCylindricalStokes",

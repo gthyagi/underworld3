@@ -4,7 +4,7 @@ Reference: Thieulot, C. (2017), Analytical solution for viscous incompressible
 Stokes flow in a spherical shell, Solid Earth 8, 1181-1191.
 https://doi.org/10.5194/se-8-1181-2017
 Exact wall velocity is prescribed. The Cartesian representation is finite at
-the poles; shared stress/array evaluation machinery lives in analytic._thieulot.
+the poles; shared stress/array evaluation machinery lives in analytic._shell_fields.
 """
 
 from numbers import Integral
@@ -12,10 +12,10 @@ from numbers import Integral
 import numpy as np
 import sympy as sp
 
-from .._thieulot import _ThieulotStokes
+from .._shell_fields import _PrescribedShellStokes
 
 
-class ThieulotSphericalStokes(_ThieulotStokes):
+class ThieulotSphericalStokes(_PrescribedShellStokes):
     """Thieulot (2017) shell with eta=mu_0*r**(m+1) and prescribed wall velocity.
 
     ``m=-1`` is constant viscosity; ``m=3`` is the common variable-viscosity
@@ -26,6 +26,7 @@ class ThieulotSphericalStokes(_ThieulotStokes):
 
     dim = 3
     geometry = "spherical"
+    case = "thieulot"
     reference = "Thieulot (2017), Solid Earth 8, 1181–1191, doi:10.5194/se-8-1181-2017."
 
     def __init__(self, mesh, m=-1, r_inner=0.5, r_outer=1.0, gamma=1.0, mu_0=1.0):

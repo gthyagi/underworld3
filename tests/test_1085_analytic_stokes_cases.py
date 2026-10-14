@@ -22,9 +22,9 @@ def mesh(dim):
 @pytest.mark.parametrize(
     "geometry,case,name",
     [
-        ("cylindrical", "kramer", "CylindricalStokes"),
+        ("cylindrical", "kramer", "KramerCylindricalStokes"),
         ("cylindrical", "thieulot", "ThieulotCylindricalStokes"),
-        ("spherical", "kramer", "SphericalStokes"),
+        ("spherical", "kramer", "KramerSphericalStokes"),
         ("spherical", "thieulot", "ThieulotSphericalStokes"),
         ("spherical", "zhong", "Zhong"),
     ],
@@ -37,6 +37,7 @@ def test_geometry_package_owns_each_case(geometry, case, name):
     cls = getattr(module, name)
     assert cls is getattr(uw.analytic, name)
     assert cls is getattr(getattr(uw.analytic, geometry), name)
+    assert cls.__name__ == name
     assert cls.__module__ == module.__name__
     assert inspect.getsourcefile(cls).endswith(f"/analytic/{geometry}/{case}.py")
     assert "https://" in module.__doc__
@@ -62,9 +63,9 @@ def test_flat_modules_only_reexport_canonical_objects(old, current):
         assert getattr(previous, name) is getattr(canonical, name)
 
 
-def test_shared_thieulot_helper_and_flat_imports():
+def test_shared_shell_field_helper_and_flat_imports():
     from underworld3.analytic import thieulot
-    from underworld3.analytic._thieulot import _ThieulotStokes
+    from underworld3.analytic._shell_fields import _PrescribedShellStokes
 
     assert (
         thieulot.ThieulotCylindricalStokes
@@ -74,8 +75,37 @@ def test_shared_thieulot_helper_and_flat_imports():
         thieulot.ThieulotSphericalStokes
         is uw.analytic.spherical.ThieulotSphericalStokes
     )
-    assert issubclass(thieulot.ThieulotCylindricalStokes, _ThieulotStokes)
-    assert issubclass(thieulot.ThieulotSphericalStokes, _ThieulotStokes)
+    assert issubclass(thieulot.ThieulotCylindricalStokes, _PrescribedShellStokes)
+    assert issubclass(thieulot.ThieulotSphericalStokes, _PrescribedShellStokes)
+
+
+@pytest.mark.parametrize(
+    "old,canonical",
+    [
+        ("CylindricalStokes", "KramerCylindricalStokes"),
+        ("SphericalStokes", "KramerSphericalStokes"),
+        ("AssessCylindricalStokes", "AssessKramerCylindricalStokes"),
+    ],
+)
+def test_legacy_names_resolve_without_duplicate_discovery(old, canonical):
+    assert getattr(uw.analytic, old) is getattr(uw.analytic, canonical)
+    assert getattr(uw.analytic, canonical).__name__ == canonical
+    assert canonical in uw.analytic.available()
+    assert old not in uw.analytic.available()
+    assert uw.analytic.describe(old) == uw.analytic.describe(canonical)
+    assert uw.analytic.is_available(old) == uw.analytic.is_available(canonical)
+
+
+def test_selector_returns_named_case_classes():
+    for geometry, dimension in (("cylindrical", 2), ("spherical", 3)):
+        for case in ("kramer", "thieulot"):
+            name = case.capitalize() + geometry.capitalize() + "Stokes"
+            solution = uw.analytic.StokesSolution(
+                mesh(dimension), geometry=geometry, case=case
+            )
+            assert type(solution) is getattr(uw.analytic, name)
+            assert solution.case == case
+            assert solution.geometry == geometry
 
 
 @pytest.mark.parametrize(

@@ -10,10 +10,19 @@ Model Development 14, 1899-1919. https://doi.org/10.5194/gmd-14-1899-2021
 """
 
 from .cylindrical.kramer import (
+    AssessKramerCylindricalStokes,
+    KramerCylindricalStokes,
     AssessCylindricalStokes,
     CylindricalStokes,
     assess_available,
     require_assess,
 )
 
-__all__ = ["AssessCylindricalStokes", "CylindricalStokes", "assess_available", "require_assess"]
+__all__ = [
+    "AssessKramerCylindricalStokes",
+    "KramerCylindricalStokes",
+    "AssessCylindricalStokes",
+    "CylindricalStokes",
+    "assess_available",
+    "require_assess",
+]

@@ -1,7 +1,8 @@
-"""Shared Thieulot Cartesian field assembly and cached evaluation machinery.
+"""Shared Cartesian field assembly and evaluation for prescribed shell flows.
 
 Geometry-specific radial formulas live in cylindrical/thieulot.py and
-spherical/thieulot.py. The two case classes share this private implementation.
+spherical/thieulot.py. Thieulot uses this helper for its two geometries. Kramer owns its branched
+field/evaluation machinery in each geometry module.
 Sources: ASPECT static annulus documentation (Thieulot, Puckett, Gassmoeller),
 https://aspect-documentation.readthedocs.io/en/latest/user/benchmarks/benchmarks/annulus/doc/annulus.html
 and Thieulot (2017), Analytical solution for viscous incompressible Stokes flow
@@ -15,9 +16,8 @@ import sympy as sp
 from ._base import AnalyticSolution, prescribed_velocity
 
 
-class _ThieulotStokes(AnalyticSolution):
+class _PrescribedShellStokes(AnalyticSolution):
     boundaries = ("Upper", "Lower")
-    case = "thieulot"
     evaluation_cse = True
     _fields = dict(
         AnalyticSolution._fields,
@@ -76,7 +76,7 @@ class _ThieulotStokes(AnalyticSolution):
     def compile_evaluators(self, *fields):
         for field in fields:
             if field not in self._expressions:
-                raise ValueError(f"Unknown Thieulot field {field!r}.")
+                raise ValueError(f"Unknown analytical field {field!r}.")
             key = (field, bool(self.evaluation_cse))
             if key not in self._evaluators:
                 expression = self._expressions[field]

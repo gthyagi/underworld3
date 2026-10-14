@@ -51,7 +51,7 @@ response = reference.response()
 `stokes_cases(geometry)` lists supported cases. The factory returns the concrete
 field solution or response reference; it does not wrap or duplicate formulas.
 Existing
-`CylindricalStokes` and `SphericalStokes` names remain the same Kramer classes,
+`KramerCylindricalStokes` and `KramerSphericalStokes` names remain the same Kramer classes,
 including their old import paths and constructor defaults.
 
 | Geometry / case | Main parameters | Exact boundary data | Geoid convenience method |
@@ -161,7 +161,7 @@ analytic/
 │   ├── thieulot.py
 │   └── zhong.py
 ├── _base.py
-├── _thieulot.py
+├── _shell_fields.py
 ├── _shell_response.py
 ├── stokes.py
 ├── cylindrical_gravity.py
@@ -169,16 +169,29 @@ analytic/
 ```
 
 Case modules own their radial formulas and solution/evaluation classes. The
-private `_thieulot.py` helper shares Cartesian stress assembly and cached NumPy
+private `_shell_fields.py` helper shares Cartesian stress assembly and cached NumPy
 evaluation between Thieulot's two geometries without duplicating radial
 formulas. `stokes.py` owns selection and coefficient reporting, `_base.py` the
 field/error contract, and `_shell_response.py` the Kramer response adapter.
 Gravity kernels retain their existing shared owners. All five case classes
 are exported from their geometry package and the root namespace as the same
-objects. The optional `AssessCylindricalStokes` oracle stays with cylindrical
+objects. The optional `AssessKramerCylindricalStokes` oracle stays with cylindrical
 Kramer. Flat `kramer_cylindrical.py`, `kramer_spherical.py`, `thieulot.py`,
 `zhong.py` and `kramer.py` retain only compatibility imports; they contain no
 maintained formulas. This does not restore the removed Zhong year aliases.
+
+Field class names follow `<Case><Geometry>Stokes` uniformly:
+`KramerCylindricalStokes`, `ThieulotCylindricalStokes`,
+`KramerSphericalStokes`, and `ThieulotSphericalStokes`. The optional external
+oracle is `AssessKramerCylindricalStokes`. Old unqualified Kramer names remain
+same-object aliases for existing imports and lookup calls, while `available()`
+lists only canonical names. `StokesSolution` dispatches directly to the named
+case classes. Zhong retains its distinct response API name.
+
+`_shell_fields.py` implements private prescribed-flow field assembly and
+evaluation; currently Thieulot uses it. Kramer builds branched density solutions
+and evaluates them inside its geometry modules, so no `_kramer.py` helper is
+needed. The private helper contains no geometry-specific radial formulas.
 
 ### Symbolic field representation
 
@@ -1013,7 +1026,7 @@ them unavailable rather than omitting them — omitting would make the listing
 truthful about what constructs and silent about what exists, leaving a user with
 no way to discover that a benchmark is one `pip install` away.
 
-There is one: `AssessCylindricalStokes`, wrapping `assess` (Kramer et al. 2021) for
+There is one: `AssessKramerCylindricalStokes`, wrapping `assess` (Kramer et al. 2021) for
 curved-geometry Stokes. It is declared as the `benchmarks` extra:
 
 ```bash
@@ -1176,7 +1189,7 @@ contributors for.
 lambdas, or NumPy code. `mesh.X` gives the coordinate symbols; build everything
 from those. Expressions route through the JIT, so an analytic viscosity or body
 force compiles to C *and* supplies its own Jacobian — neither of which a numeric
-callable can do. `AssessCylindricalStokes` is the numeric oracle exception and it
+callable can do. `AssessKramerCylindricalStokes` is the numeric oracle exception and it
 pays for it: none of the six gates can reach it.
 
 **Do not simplify.** Preserve whatever grouping the derivation produced. The

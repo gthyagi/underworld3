@@ -31,7 +31,7 @@ analytic/
 │   ├── thieulot.py
 │   └── zhong.py
 ├── _base.py
-├── _thieulot.py
+├── _shell_fields.py
 ├── _shell_response.py
 ├── stokes.py
 ├── cylindrical_gravity.py
@@ -44,12 +44,31 @@ reference = uw.analytic.StokesSolution(geometry="spherical", case="zhong", harmo
 ```
 
 Each case module owns its radial formulas and solution/evaluation class.
-The private `_thieulot.py` helper shares Cartesian field assembly and cached
+The private `_shell_fields.py` helper shares Cartesian field assembly and cached
 array evaluation between the two Thieulot geometries. Gravity kernels and the
 common field/error contract remain shared. Geometry packages expose the same
 class objects as the root namespace. Flat `kramer_cylindrical`,
 `kramer_spherical`, `thieulot`, `zhong` and `kramer` modules contain compatibility
 imports only. The removed year-suffixed Zhong aliases/module remain absent.
+
+Concrete field classes consistently use `<Case><Geometry>Stokes`:
+
+| Geometry | Kramer | Thieulot |
+| --- | --- | --- |
+| Cylindrical | `KramerCylindricalStokes` | `ThieulotCylindricalStokes` |
+| Spherical | `KramerSphericalStokes` | `ThieulotSphericalStokes` |
+
+The optional numeric oracle is `AssessKramerCylindricalStokes`. Zhong keeps
+`Zhong` and `ZhongResponse` because it supplies response coefficients rather
+than the field contract. `CylindricalStokes`, `SphericalStokes`, and
+`AssessCylindricalStokes` remain aliases to the canonical Kramer classes;
+`available()` lists each class once under its canonical name, while
+`describe()` and `is_available()` also accept the historical names.
+
+`_shell_fields.py` is private field-assembly/evaluation machinery currently
+shared by the two Thieulot classes. Their radial formulas stay in the case
+modules. Kramer handles its distinct density branches inside each geometry
+module, so it does not require a parallel `_kramer.py` helper.
 
 ## Kramer cylindrical fields
 
@@ -57,12 +76,12 @@ The single `underworld3.analytic.cylindrical.kramer` module owns coefficients,
 symbolic fields and cached numerical evaluators. `analytic.kramer` preserves
 legacy imports without a second implementation.
 
-`uw.analytic.CylindricalStokes` supplies native symbolic velocity, pressure,
+`uw.analytic.KramerCylindricalStokes` supplies native symbolic velocity, pressure,
 strain rate and total/radial/shear stress, without requiring `assess`. Named-field
 evaluation uses cached vectorised NumPy evaluators with CSE; symbolic expressions
 remain usable by the UW3 JIT. `compile_evaluators("velocity", "pressure")` can
 prepare the evaluators before repeated measurements. The optional
-`AssessCylindricalStokes` class retains the former numerical reference wrapper.
+`AssessKramerCylindricalStokes` class retains the former numerical reference wrapper.
 
 The point-evaluation comparison is reproducible with
 `scripts/benchmark_kramer_evaluators.py --output-json <common-output-path>`.
@@ -72,7 +91,7 @@ speedups.
 
 ## Kramer spherical fields
 
-`uw.analytic.SphericalStokes` combines radial coefficients, symbolic velocity,
+`uw.analytic.KramerSphericalStokes` combines radial coefficients, symbolic velocity,
 pressure, strain rate, total/radial/shear stress and cached array evaluators in
 `analytic.spherical.kramer`. Select `ell`, `m`, `component` and `normalization`
 explicitly for non-axisymmetric work. The real orthonormal basis includes the

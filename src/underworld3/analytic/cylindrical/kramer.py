@@ -3,7 +3,7 @@ r"""Cylindrical Kramer (2021) Stokes solutions: symbolic fields and array evalua
 The separated streamfunction is transcribed from the benchmark formulas and
 validated independently against assess and the Stokes equations. Coefficients,
 symbolic expressions and cached numerical evaluators have one implementation
-here. Only the optional AssessCylindricalStokes oracle requires assess.
+here. Only the optional AssessKramerCylindricalStokes oracle requires assess.
 
 Reference
 ---------
@@ -494,7 +494,7 @@ def assess_available():
     return True
 
 
-class AssessCylindricalStokes(AnalyticSolution):
+class AssessKramerCylindricalStokes(AnalyticSolution):
     r"""Stokes flow in a cylindrical annulus, after Kramer et al. (2021).
 
     Four cases, chosen by *density* and *boundary*:
@@ -681,14 +681,14 @@ class AssessCylindricalStokes(AnalyticSolution):
         solver.petsc_use_pressure_nullspace = True
 
 
-class CylindricalStokes(KramerGeoidMixin, AssessCylindricalStokes):
+class KramerCylindricalStokes(KramerGeoidMixin, AssessKramerCylindricalStokes):
     r"""Native symbolic Kramer annulus solution with cached array evaluation.
 
     The four delta/smooth, free/zero-slip cases use the same parameter defaults
     as the former assess wrapper. Velocity, pressure and total stress are SymPy
     expressions on ``mesh.X`` and can be passed to the UW3 JIT. Named fields are
     evaluated by lazy, cached NumPy functions over whole coordinate arrays.
-    ``assess`` is needed only by the separate :class:`AssessCylindricalStokes`
+    ``assess`` is needed only by the separate :class:`AssessKramerCylindricalStokes`
     oracle, not by this solution.
 
     Parameters
@@ -940,3 +940,8 @@ class CylindricalStokes(KramerGeoidMixin, AssessCylindricalStokes):
         radii[np.isclose(radii, self.r_int)] += 1e-4 * (self.r_outer - self.r_inner)
         theta = np.arange(count) * 2.399963229728653
         return radii[:, None] * np.column_stack((np.cos(theta), np.sin(theta)))
+
+
+# Historical names refer to the canonical classes; no second implementation.
+AssessCylindricalStokes = AssessKramerCylindricalStokes
+CylindricalStokes = KramerCylindricalStokes

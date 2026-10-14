@@ -52,11 +52,11 @@ def test_the_solution_is_listed_even_when_it_cannot_be_built():
     benchmark with no way to discover that one is a `pip install` away.
     """
 
-    assert "AssessCylindricalStokes" in uw.analytic.available()
+    assert "AssessKramerCylindricalStokes" in uw.analytic.available()
     assert uw.analytic.is_available("AssessCylindricalStokes") == assess_available()
 
     installed = uw.analytic.available(installed_only=True)
-    assert ("AssessCylindricalStokes" in installed) == assess_available()
+    assert ("AssessKramerCylindricalStokes" in installed) == assess_available()
 
     # The missing case is covered unconditionally by the `without_assess`
     # tests below, which simulate absence rather than waiting for it.
@@ -64,7 +64,7 @@ def test_the_solution_is_listed_even_when_it_cannot_be_built():
 
 def test_every_other_solution_is_unconditionally_available():
     for name in uw.analytic.available():
-        if name == "AssessCylindricalStokes":
+        if name == "AssessKramerCylindricalStokes":
             continue
         assert uw.analytic.is_available(name), name
         assert getattr(uw.analytic, name).requires is None
@@ -130,8 +130,8 @@ def test_describe_says_what_is_missing(without_assess):
 
 
 def test_it_is_dropped_from_the_installed_only_listing(without_assess):
-    assert "AssessCylindricalStokes" in uw.analytic.available()
-    assert "AssessCylindricalStokes" not in uw.analytic.available(installed_only=True)
+    assert "AssessKramerCylindricalStokes" in uw.analytic.available()
+    assert "AssessKramerCylindricalStokes" not in uw.analytic.available(installed_only=True)
 
 
 def test_constructing_it_explains_rather_than_tracebacks(without_assess):
@@ -160,7 +160,7 @@ def test_it_declares_that_the_residual_gates_cannot_reach_it():
     assert uw.analytic.AssessCylindricalStokes.requires == "assess"
 
     for name in uw.analytic.available():
-        if name != "AssessCylindricalStokes":
+        if name != "AssessKramerCylindricalStokes":
             assert getattr(uw.analytic, name).symbolic, name
 
 

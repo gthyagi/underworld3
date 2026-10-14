@@ -6,6 +6,8 @@ https://doi.org/10.5194/gmd-14-1899-2021
 """
 
 from .cylindrical.kramer import (
+    AssessKramerCylindricalStokes,
+    KramerCylindricalStokes,
     coefficients_cylinder_delta_fs,
     coefficients_cylinder_delta_ns,
     coefficients_cylinder_smooth_fs,
@@ -24,6 +26,8 @@ from .cylindrical.kramer import (
 )
 
 __all__ = [
+    "AssessKramerCylindricalStokes",
+    "KramerCylindricalStokes",
     "coefficients_cylinder_delta_fs",
     "coefficients_cylinder_delta_ns",
     "coefficients_cylinder_smooth_fs",
