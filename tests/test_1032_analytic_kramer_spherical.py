@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 import sympy as sp
-from underworld3.analytic.kramer_spherical import SphericalStokes
+from underworld3.analytic.spherical.kramer import SphericalStokes
 from underworld3.analytic.kramer import assess_available
 from underworld3.analytic import _validation
 from underworld3.maths.spherical_harmonics import real_harmonic_values, solid_harmonic_sympy

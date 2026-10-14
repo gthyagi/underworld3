@@ -147,13 +147,38 @@ response coefficients retain their existing units and conventions. The year
 belongs in the citation, not the API name. Use `Zhong` and `ZhongResponse`;
 the year-suffixed aliases and the old module import path have been removed.
 
-Source ownership is `stokes.py` (selection and coefficient reporting), `_base.py`
-(shared field/error contract), `kramer_cylindrical.py`, `kramer_spherical.py` and
-`thieulot.py` (each family's symbolic fields and cached evaluation),
-`_shell_response.py` (Kramer stress-to-response adapter), and the existing
-`cylindrical_gravity.py`/`spherical_gravity.py` kernels. `kramer.py` retains
-compatibility imports; `AssessCylindricalStokes` is an optional numeric oracle.
-`zhong.py` owns the propagator and its response type.
+Source ownership follows geometry packages:
+
+```text
+analytic/
+├── cylindrical/
+│   ├── __init__.py
+│   ├── kramer.py
+│   └── thieulot.py
+├── spherical/
+│   ├── __init__.py
+│   ├── kramer.py
+│   ├── thieulot.py
+│   └── zhong.py
+├── _base.py
+├── _thieulot.py
+├── _shell_response.py
+├── stokes.py
+├── cylindrical_gravity.py
+└── spherical_gravity.py
+```
+
+Case modules own their radial formulas and solution/evaluation classes. The
+private `_thieulot.py` helper shares Cartesian stress assembly and cached NumPy
+evaluation between Thieulot's two geometries without duplicating radial
+formulas. `stokes.py` owns selection and coefficient reporting, `_base.py` the
+field/error contract, and `_shell_response.py` the Kramer response adapter.
+Gravity kernels retain their existing shared owners. All five case classes
+are exported from their geometry package and the root namespace as the same
+objects. The optional `AssessCylindricalStokes` oracle stays with cylindrical
+Kramer. Flat `kramer_cylindrical.py`, `kramer_spherical.py`, `thieulot.py`,
+`zhong.py` and `kramer.py` retain only compatibility imports; they contain no
+maintained formulas. This does not restore the removed Zhong year aliases.
 
 ### Symbolic field representation
 

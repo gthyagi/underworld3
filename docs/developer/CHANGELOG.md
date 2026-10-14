@@ -6,6 +6,16 @@ This log tracks significant development work at a conceptual level, suitable for
 
 ## 2026 Q4 (October – December)
 
+### Geometry-owned analytical case packages (October 2026)
+
+Cylindrical Kramer/Thieulot implementations now live in `analytic/cylindrical`;
+spherical Kramer/Thieulot/Zhong implementations live in `analytic/spherical`.
+The geometry packages and root namespace export the same classes, with
+`StokesSolution` retaining general geometry/case selection. Thieulot's common
+Cartesian assembly/evaluation code is shared in a private helper. Flat import
+paths retain re-exports only; the removed year-suffixed Zhong API stays absent.
+All original function/class bodies and numerical conventions are unchanged.
+
 ### Yearless Zhong analytical API (October 2026)
 
 The shell case selector exposes `case="zhong"`, backed by

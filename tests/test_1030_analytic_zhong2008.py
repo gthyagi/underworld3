@@ -466,7 +466,7 @@ def test_only_yearless_names_and_module_are_available():
             assert name not in namespace.__all__
             assert not hasattr(namespace, name)
     assert importlib.util.find_spec("underworld3.analytic.zhong2008") is None
-    assert uw.analytic.Zhong.__module__ == "underworld3.analytic.zhong"
+    assert uw.analytic.Zhong.__module__ == "underworld3.analytic.spherical.zhong"
     assert isinstance(zhong.Zhong().response(), uw.analytic.ZhongResponse)
 
 

@@ -20,6 +20,65 @@ def mesh(dim):
 
 
 @pytest.mark.parametrize(
+    "geometry,case,name",
+    [
+        ("cylindrical", "kramer", "CylindricalStokes"),
+        ("cylindrical", "thieulot", "ThieulotCylindricalStokes"),
+        ("spherical", "kramer", "SphericalStokes"),
+        ("spherical", "thieulot", "ThieulotSphericalStokes"),
+        ("spherical", "zhong", "Zhong"),
+    ],
+)
+def test_geometry_package_owns_each_case(geometry, case, name):
+    import importlib
+    import inspect
+
+    module = importlib.import_module(f"underworld3.analytic.{geometry}.{case}")
+    cls = getattr(module, name)
+    assert cls is getattr(uw.analytic, name)
+    assert cls is getattr(getattr(uw.analytic, geometry), name)
+    assert cls.__module__ == module.__name__
+    assert inspect.getsourcefile(cls).endswith(f"/analytic/{geometry}/{case}.py")
+    assert "https://" in module.__doc__
+    if case == "zhong":
+        assert module.__all__ == ["Zhong", "ZhongResponse"]
+        assert not hasattr(module, "Zhong2008")
+
+
+@pytest.mark.parametrize(
+    "old,current",
+    [
+        ("kramer_cylindrical", "cylindrical.kramer"),
+        ("kramer_spherical", "spherical.kramer"),
+        ("zhong", "spherical.zhong"),
+    ],
+)
+def test_flat_modules_only_reexport_canonical_objects(old, current):
+    import importlib
+
+    previous = importlib.import_module(f"underworld3.analytic.{old}")
+    canonical = importlib.import_module(f"underworld3.analytic.{current}")
+    for name in previous.__all__:
+        assert getattr(previous, name) is getattr(canonical, name)
+
+
+def test_shared_thieulot_helper_and_flat_imports():
+    from underworld3.analytic import thieulot
+    from underworld3.analytic._thieulot import _ThieulotStokes
+
+    assert (
+        thieulot.ThieulotCylindricalStokes
+        is uw.analytic.cylindrical.ThieulotCylindricalStokes
+    )
+    assert (
+        thieulot.ThieulotSphericalStokes
+        is uw.analytic.spherical.ThieulotSphericalStokes
+    )
+    assert issubclass(thieulot.ThieulotCylindricalStokes, _ThieulotStokes)
+    assert issubclass(thieulot.ThieulotSphericalStokes, _ThieulotStokes)
+
+
+@pytest.mark.parametrize(
     "geometry,dim,cls",
     [
         ("cylindrical", 2, uw.analytic.CylindricalStokes),

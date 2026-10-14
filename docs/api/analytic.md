@@ -8,8 +8,8 @@
 
 ## The contract
 
-Every solution satisfies the same contract, so a validation run reads the same way
-whichever one you use.
+Symbolic field solutions share this contract. The Zhong response propagator
+exposes a separate coefficient-response contract, described below.
 
 ```{eval-rst}
 .. automodule:: underworld3.analytic._base
@@ -17,9 +17,43 @@ whichever one you use.
    :show-inheritance:
 ```
 
+## Geometry packages and case selection
+
+```text
+analytic/
+├── cylindrical/
+│   ├── __init__.py
+│   ├── kramer.py
+│   └── thieulot.py
+├── spherical/
+│   ├── __init__.py
+│   ├── kramer.py
+│   ├── thieulot.py
+│   └── zhong.py
+├── _base.py
+├── _thieulot.py
+├── _shell_response.py
+├── stokes.py
+├── cylindrical_gravity.py
+└── spherical_gravity.py
+```
+
+```python
+sol = uw.analytic.StokesSolution(mesh, geometry="cylindrical", case="kramer", n=2)
+reference = uw.analytic.StokesSolution(geometry="spherical", case="zhong", harmonic_degree=5)
+```
+
+Each case module owns its radial formulas and solution/evaluation class.
+The private `_thieulot.py` helper shares Cartesian field assembly and cached
+array evaluation between the two Thieulot geometries. Gravity kernels and the
+common field/error contract remain shared. Geometry packages expose the same
+class objects as the root namespace. Flat `kramer_cylindrical`,
+`kramer_spherical`, `thieulot`, `zhong` and `kramer` modules contain compatibility
+imports only. The removed year-suffixed Zhong aliases/module remain absent.
+
 ## Kramer cylindrical fields
 
-The single `underworld3.analytic.kramer_cylindrical` module owns coefficients,
+The single `underworld3.analytic.cylindrical.kramer` module owns coefficients,
 symbolic fields and cached numerical evaluators. `analytic.kramer` preserves
 legacy imports without a second implementation.
 
@@ -40,7 +74,7 @@ speedups.
 
 `uw.analytic.SphericalStokes` combines radial coefficients, symbolic velocity,
 pressure, strain rate, total/radial/shear stress and cached array evaluators in
-`analytic.kramer_spherical`. Select `ell`, `m`, `component` and `normalization`
+`analytic.spherical.kramer`. Select `ell`, `m`, `component` and `normalization`
 explicitly for non-axisymmetric work. The real orthonormal basis includes the
 sqrt(2) factor for nonzero m; assess's real complex-harmonic oracle does not.
 Delta and smooth forcing support free/zero slip with positive viscosity and
@@ -64,7 +98,7 @@ boundary response coefficients used by the Zhong et al. (2008) benchmark; it
 does not implement the symbolic mesh-field contract above.
 
 ```{eval-rst}
-.. automodule:: underworld3.analytic.zhong
+.. automodule:: underworld3.analytic.spherical.zhong
    :members:
    :show-inheritance:
 ```

@@ -25,14 +25,14 @@ class KramerGeoidMixin:
         """
         r = sp.Symbol("_response_r", positive=True)
         if self.geometry == "cylindrical":
-            from .kramer_cylindrical import analytical_radial_normal_stress_sympy
+            from .cylindrical.kramer import analytical_radial_normal_stress_sympy
 
             theta = sp.Symbol("_response_theta", real=True)
             expression = lambda branch: analytical_radial_normal_stress_sympy(
                 branch, r, theta
             ).subs(theta, 0)
         else:
-            from .kramer_spherical import analytical_radial_normal_stress_sympy
+            from .spherical.kramer import analytical_radial_normal_stress_sympy
 
             expression = lambda branch: analytical_radial_normal_stress_sympy(
                 branch, r, sp.S.One

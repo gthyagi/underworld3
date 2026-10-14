@@ -13,10 +13,8 @@ spherical shell using CitcomS: https://doi.org/10.1029/2008GC002048
 
 import math
 
-from .kramer_cylindrical import CylindricalStokes
-from .kramer_spherical import SphericalStokes
-from .thieulot import ThieulotCylindricalStokes, ThieulotSphericalStokes
-from .zhong import Zhong
+from .cylindrical import CylindricalStokes, ThieulotCylindricalStokes
+from .spherical import SphericalStokes, ThieulotSphericalStokes, Zhong
 
 
 _CASES = {

@@ -36,8 +36,12 @@ from ._base import (
 
 from .barr_houseman_96 import FaultedMedium
 from .inclusion import EllipticalInclusion
-from .kramer_cylindrical import AssessCylindricalStokes, CylindricalStokes
-from .kramer_spherical import SphericalStokes
+from .cylindrical import (
+    AssessCylindricalStokes,
+    CylindricalStokes,
+    ThieulotCylindricalStokes,
+)
+from .spherical import SphericalStokes, ThieulotSphericalStokes, Zhong, ZhongResponse
 from .richards import GardnerSteady, GardnerTransient
 from .transport import AdvectedFront, ErfcDiffusion, Poisson1D, RotatingGaussian, TwoLayerDarcy
 from .velic import (
@@ -54,13 +58,13 @@ from .velic import (
     SolM,
     SolNL,
 )
-from .zhong import Zhong, ZhongResponse
-from .thieulot import ThieulotCylindricalStokes, ThieulotSphericalStokes
 from .stokes import StokesSolution, stokes_cases, compare_coefficients
 
 __all__ = [
     "cylindrical_gravity",
     "spherical_gravity",
+    "cylindrical",
+    "spherical",
     "AnalyticSolution",
     "free_slip",
     "prescribed_scalar",
