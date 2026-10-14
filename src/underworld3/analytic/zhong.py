@@ -15,12 +15,13 @@ the generic functions in :mod:`underworld3.postprocessing.geoid`.
 References
 ----------
 Hager, B.H. & O'Connell, R.J. (1981). A simple global model of plate dynamics
-and mantle convection. *Journal of Geophysical Research* 86, 4843--4878.
-doi:10.1029/JB086iB06p04843
+and mantle convection. *Journal of Geophysical Research* 86, 4843--4867.
+https://doi.org/10.1029/JB086iB06p04843
 
-Zhong, S. et al. (2008). A benchmark study on mantle convection in a 3-D
+Zhong, S., McNamara, A., Tan, E., Moresi, L. and Gurnis, M. (2008).
+A benchmark study on mantle convection in a 3-D
 spherical shell using CitcomS. *Geochemistry, Geophysics, Geosystems* 9,
-Q10017. doi:10.1029/2008GC002048
+Q10017. https://doi.org/10.1029/2008GC002048
 """
 
 from __future__ import annotations

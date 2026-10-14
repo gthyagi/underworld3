@@ -2,6 +2,12 @@ r"""Native Kramer spherical Stokes coefficients, fields and batch evaluators.
 
 Radial formulas follow Kramer, Davies & Wilson (2021), GMD 14, 1899–1919.
 The Cartesian solid-harmonic representation avoids coordinate pole singularities.
+
+Reference
+---------
+Kramer, S. C., Davies, D. R. and Wilson, C. R. (2021), Analytical solutions
+for mantle flow in cylindrical and spherical shells, Geoscientific Model
+Development 14, 1899-1919. https://doi.org/10.5194/gmd-14-1899-2021
 """
 
 from types import SimpleNamespace

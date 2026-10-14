@@ -1,4 +1,11 @@
-"""Kramer stress-to-geoid adapter; all gravity kernels retain their owners."""
+"""Kramer stress-to-geoid adapter; all gravity kernels retain their owners.
+
+Stokes reference: Kramer, Davies and Wilson (2021), Analytical solutions for
+mantle flow in cylindrical and spherical shells.
+https://doi.org/10.5194/gmd-14-1899-2021
+Gravity and interface feedback are UW3 extensions using the documented kernels
+in cylindrical_gravity/spherical_gravity, not published Kramer geoid results.
+"""
 
 from dataclasses import asdict
 

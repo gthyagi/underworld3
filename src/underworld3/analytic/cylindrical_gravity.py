@@ -3,6 +3,17 @@ r"""Analytical cylindrical sheet/volume gravity and coefficient responses.
 The source convention is laplacian(Phi)=-4*pi*G*delta_rho and N=Phi/g.
 These coefficient kernels need no mesh, Stokes solver or MPI imports.
 The n=0 logarithmic monopole is unsupported; n>=1 is accepted.
+
+Source provenance
+-----------------
+The cylindrical sheet/topography construction follows Simons, M. (1996),
+Localization of Gravity and Topography: Constraints on the Tectonics and Mantle
+Dynamics of Earth and Venus, PhD thesis, Massachusetts Institute of Technology,
+Appendix B. Volume-density and feedback support are UW3 extensions derived from
+the stated Poisson equation; they are not claimed as published Simons results.
+Related Stokes benchmark: Kramer, Davies and Wilson (2021), Analytical solutions
+for mantle flow in cylindrical and spherical shells.
+https://doi.org/10.5194/gmd-14-1899-2021
 """
 
 from __future__ import annotations

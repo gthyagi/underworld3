@@ -15,6 +15,16 @@ matches the coefficient convention used by the Zhong et al. (2008) response
 benchmark.  A positive outward internal-load coefficient is represented by a
 negative density-sheet coefficient and consequently enters the load vector
 with a negative sign.
+
+Reference and provenance
+------------------------
+Zhong, S., McNamara, A., Tan, E., Moresi, L. and Gurnis, M. (2008), A benchmark
+study on mantle convection in a 3-D spherical shell using CitcomS, Geochemistry,
+Geophysics, Geosystems 9, Q10017, Appendix A.
+https://doi.org/10.1029/2008GC002048
+The physical sheet/volume kernels are derived here from the displayed Poisson
+equation. General powers, finite-boundary kernels and multi-mode support are
+UW3 extensions; the citation identifies the normalized response convention.
 """
 
 from __future__ import annotations

@@ -5,6 +5,17 @@ Puckett and Gassmoeller). The shell follows Thieulot (2017),
 doi:10.5194/se-8-1181-2017. Both prescribe the exact wall velocity: tangential
 velocity alone does not imply zero tangential traction. Density is defined by
 div(sigma)+f=0 with f=-rho*e_r and unit inward gravity throughout.
+
+References
+----------
+Annulus formula source: ASPECT documentation, The 2D annulus benchmark,
+contributed by C. Thieulot, E. G. Puckett and R. Gassmoeller:
+https://aspect-documentation.readthedocs.io/en/latest/user/benchmarks/benchmarks/annulus/doc/annulus.html
+This documents the static annulus formulas; no separate paper is claimed here.
+
+Spherical source: Thieulot, C. (2017), Analytical solution for viscous
+incompressible Stokes flow in a spherical shell, Solid Earth 8, 1181-1191.
+https://doi.org/10.5194/se-8-1181-2017
 """
 
 from numbers import Integral
@@ -147,7 +158,10 @@ class ThieulotCylindricalStokes(_ThieulotStokes):
 
     dim = 2
     geometry = "cylindrical"
-    reference = "ASPECT annulus benchmark, Thieulot, Puckett and Gassmoeller."
+    reference = (
+        "ASPECT annulus benchmark, Thieulot, Puckett and Gassmoeller. "
+        "https://aspect-documentation.readthedocs.io/en/latest/user/benchmarks/benchmarks/annulus/doc/annulus.html"
+    )
 
     def __init__(
         self,
