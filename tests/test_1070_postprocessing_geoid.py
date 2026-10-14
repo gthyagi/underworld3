@@ -11,7 +11,7 @@ pytestmark = pytest.mark.level_2
 
 def test_spherical_shell_postprocessing_is_public():
     assert hasattr(uw, "postprocessing")
-    assert uw.postprocessing.__all__ == ["geoid"]
+    assert "geoid" in uw.postprocessing.__all__
     assert hasattr(uw.postprocessing.geoid, "spherical_shell_geoid_response")
     assert hasattr(uw.postprocessing.geoid, "spherical_shell_self_gravity_response")
     assert hasattr(uw.postprocessing.geoid, "spherical_shell_response_from_rotated_stokes")

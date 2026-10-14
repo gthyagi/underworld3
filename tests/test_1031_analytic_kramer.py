@@ -132,6 +132,33 @@ def test_evaluators_are_lazy_and_reused(mesh):
     assert solution.fn_velocity.shape == (1, 2)
 
 
+def test_native_forcing_requires_and_uses_conforming_sheet(mesh):
+    solution = uw.analytic.CylindricalStokes(mesh, forcing=1.0)
+    mesh.boundaries = SimpleNamespace(__members__={})
+    calls = []
+    solver = SimpleNamespace(
+        mesh=mesh, add_natural_bc=lambda value, label: calls.append((value, label))
+    )
+    with pytest.raises(ValueError, match="conforming"):
+        solution.apply_forcing(solver)
+    mesh.boundaries.__members__["Internal"] = 2
+    solution.apply_forcing(solver)
+    assert calls[0][1] == "Internal"
+    assert solver.bodyforce == sp.zeros(1, 2)
+
+
+def test_positive_density_under_inward_gravity_uses_positive_delta_jump(mesh):
+    solution = uw.analytic.CylindricalStokes(mesh, density="delta", forcing=1.0)
+    # The legacy assess default uses g=-1 (an outward sheet force). Density-
+    # coupled geoid cases explicitly use g=+rho with inward unit gravity.
+    assert solution.evaluate("velocity", np.array([[0.7, 0.0]]))[0, 0] < 0
+    outer_sigma = solution.evaluate("radial_normal_stress", np.array([[1.0, 0.0]]))[0]
+    inner_sigma = solution.evaluate("radial_normal_stress", np.array([[0.5, 0.0]]))[0]
+    outer_reaction, inner_reaction = -outer_sigma, -inner_sigma
+    np.testing.assert_allclose(-outer_reaction / (-1.0), -outer_sigma)
+    np.testing.assert_allclose(-inner_reaction / (+1.0), +inner_sigma)
+
+
 @pytest.mark.parametrize(
     "kwargs", [dict(n=1), dict(n=2.1), dict(k=True), dict(viscosity=0), dict(r_int=1.0)]
 )

@@ -39,6 +39,7 @@ __all__ = [
     "cylindrical_annulus_self_gravity_response",
     "cylindrical_cosine_boundary_coefficient",
     "cylindrical_annulus_response_from_rotated_stokes",
+    "gather_unique_boundary_samples",
 ]
 
 
@@ -522,6 +523,35 @@ def spherical_shell_response_from_rotated_stokes(
     )
 
 
+def gather_unique_boundary_samples(
+    coords,
+    values,
+    dimension: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Gather diagnostic boundary samples; production reactions use FE integrals.
+
+    This replicated sample utility is intended for plotting and pointwise stress
+    diagnostics, not for fitting production reaction/topography coefficients.
+    """
+
+    local_rows = np.column_stack((np.asarray(coords, dtype=float), np.asarray(values, dtype=float)))
+    gathered_rows = MPI.COMM_WORLD.allgather(local_rows)
+    nonempty_rows = [rows for rows in gathered_rows if rows.size]
+    if not nonempty_rows:
+        raise RuntimeError("No boundary samples were recovered.")
+
+    merged = {}
+    for row in np.vstack(nonempty_rows):
+        key = tuple(np.round(row[:dimension], 12))
+        if key not in merged:
+            merged[key] = [row[:dimension].copy(), 0.0, 0]
+        merged[key][1] += float(row[dimension])
+        merged[key][2] += 1
+    global_coords = np.array([entry[0] for entry in merged.values()])
+    global_values = np.array([entry[1] / entry[2] for entry in merged.values()], dtype=float)
+    return global_coords, global_values
+
+
 def _trapezoidal_integral(values: np.ndarray, coordinates: np.ndarray) -> float:
     """Integrate samples without requiring NumPy's version-specific helpers."""
 
@@ -674,6 +704,12 @@ def cylindrical_annulus_response_from_rotated_stokes(
     .. math::
 
        h=-reaction_{nn}/signed\_buoyancy\_scale
+
+    The scales are caller-supplied sign conventions. If the recovered reaction
+    is ``-sigma_rr`` and h is positive radially outward, hydrostatic balance
+    requires outer scale ``-Delta_rho*g`` and inner scale ``+Delta_rho*g``.
+    Historical defaults are retained for compatibility; density-coupled
+    benchmarks pass their physical signed scales explicitly.
 
     and projects each boundary onto the unnormalised real basis
     :math:`\cos(n\theta)`. The numerator and harmonic norm use the same finite-

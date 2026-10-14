@@ -420,7 +420,28 @@ class CylindricalStokes(AssessCylindricalStokes):
         )
         self.fn_radial_normal_stress = spatial("radial_normal_stress")
         self.fn_radial_shear_stress = spatial("radial_shear_stress")
+        self.fn_interface_stress_jump = (
+            self.g * sp.cos(self.n * sp.atan2(y, x)) if density == "delta" else sp.S.Zero
+        )
         self._evaluators = {}
+
+    def apply_forcing(self, solver, internal_boundary="Internal"):
+        """Apply bulk forcing and, for delta density, its conforming weak load.
+
+        Call once, separately from apply_boundary_conditions. A delta case
+        requires the labelled conforming internal interface. Its natural datum
+        is the stress jump g*cos(n*theta)*e_r; in div(sigma)+f=0 the physical
+        sheet force is its negative. No Gaussian regularisation is introduced.
+        """
+        if solver.mesh is not self.mesh:
+            raise ValueError("The solver and analytic solution must share the same mesh.")
+        if self.density == "delta" and internal_boundary not in self.mesh.boundaries.__members__:
+            raise ValueError(f"Delta forcing needs a conforming {internal_boundary!r} interface.")
+        solver.bodyforce = self.fn_bodyforce
+        if self.density == "delta":
+            x, y = self.mesh.X[0], self.mesh.X[1]
+            unit_r = sp.Matrix([x, y]) / sp.sqrt(x * x + y * y)
+            solver.add_natural_bc(self.fn_interface_stress_jump * unit_r, internal_boundary)
 
     def evaluate(self, field, coords):
         """Evaluate a named field in batches; arbitrary expressions use UW3 JIT."""

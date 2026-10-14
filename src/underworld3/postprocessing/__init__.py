@@ -6,5 +6,6 @@ multiple model scripts but do not belong in a solver implementation.
 """
 
 from . import geoid
+from . import cylindrical_potential
 
-__all__ = ["geoid"]
+__all__ = ["geoid", "cylindrical_potential"]
