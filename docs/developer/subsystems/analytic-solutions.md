@@ -137,8 +137,9 @@ for a zero reference. Compare matching projection, harmonic normalization and
 units. Comparing an RMS magnitude against a signed reference is invalid.
 
 Thieulot's manufactured fields support velocity/pressure/stress validation;
-their density profiles and driven-wall conditions do not yet have this geoid
-response adapter. Zhong uses `ZhongSphericalStokes(...).response()` or the common selector with
+geoid functionality is explicitly outside the current scope. The future-reference
+notes below distinguish density-only gravity from an assumed stress-to-topography
+diagnostic. Zhong uses `ZhongSphericalStokes(...).response()` or the common selector with
 `case="zhong"`: a mesh-free layered propagator returning response coefficients
 rather than a symbolic field object. It has `symbolic=False`, no `fn_*` fields
 or field-error methods. An optional supplied mesh is checked for dimension only;
@@ -197,6 +198,56 @@ branched density solutions inside its geometry modules, while `_kramer_geoid.py`
 shares stress-to-topography/geoid conversion. Geometry-specific gravity kernels
 live in `cylindrical.gravity` and `spherical.gravity`. Neither private helper
 contains geometry-specific radial formulas.
+
+### Thieulot gravity: future reference
+
+Scope decision, 2026-10-14: do not add geoid functionality to the Thieulot
+analytical classes or benchmark drivers as part of the current work. These
+notes preserve the scientific distinctions for a separate future design; they
+do not schedule implementation or model runs.
+
+**Density-only potential/geoid.** A possible future calculation would use the
+Thieulot density anomaly as the Poisson source, retaining the existing convention:
+
+```text
+laplacian(Phi) = -4*pi*G*delta_rho
+N = Phi / g_reference
+```
+
+This calculation needs no wall-stress-to-topography conversion. Specify the
+background density being subtracted, the harmonic basis, and the potential's
+interior/exterior continuation or finite-domain boundary conditions. In the
+current field implementation, `bodyforce = -density * e_r`, corresponding to
+unit inward gravity. The symbolic density is therefore in the benchmark's
+chosen scales, not automatically kg/m^3. Either retain a consistent
+nondimensional system or supply the length, density and other reference scales
+for dimensional values. The cylindrical `rho_0` term is hydrostatic background
+density and must be distinguished from the anomaly used for gravity.
+
+**Density plus inferred boundary topography.** This would add interface mass
+perturbations derived from dynamic normal stress. For outward radial
+displacements and density contrasts defined as smaller-radius density minus
+larger-radius density, the same hydrostatic diagnostic as Kramer would be:
+
+```text
+h_outer = -sigma_rr_dynamic_outer / (Delta_rho_outer * g_outer)
+h_inner = +sigma_rr_dynamic_inner / (Delta_rho_inner * g_inner)
+```
+
+Reference gravity magnitudes must be positive and the signed density contrasts
+nonzero. Remove the appropriate hydrostatic background and specify the pressure
+reference when extracting dynamic stress. Thieulot prescribes wall velocities:
+the wall traction is the reaction supporting those constraints, not a computed
+interface displacement. Interpreting it as topography requires an explicit
+assumption that gravity balances the normal stress at material interfaces.
+Report such a quantity as inferred topography under that assumption; the
+manufactured Stokes solution itself does not evolve or deform its boundaries.
+
+If reconsidered in future, density-only potential/geoid would be the first
+independent extension to evaluate against a UW3 Poisson calculation. Adding
+topography contributions or linear self-gravity feedback would be separate
+steps with their boundary assumptions and source conventions documented. No
+published Thieulot geoid reference or validation pass is claimed by these notes.
 
 ### Symbolic field representation
 
