@@ -6094,13 +6094,12 @@ class SNES_Scalar(SolverBaseClass):
                                 NULL,
                                 )
 
-                UW_PetscDSSetBdJacobianPreconditioner(ds.ds, c_label.dmlabel, label_val, boundary_id,
-                                0, 0, 0,
-                                ext.fns_bd_jacobian[i_bd_jac[bc.fns["uu_G0"]]],
-                                ext.fns_bd_jacobian[i_bd_jac[bc.fns["uu_G1"]]],
-                                NULL,
-                                NULL,
-                                )
+                # Scalar FEM uses the same exact operator for J and P and
+                # does not register a separate volume preconditioner form.
+                # Register the boundary tangent only once, consistently with
+                # the volume tangent. DMPlex independently adds BdJacobian and
+                # BdJacobianPreconditioner when both exist; with J == P that
+                # doubles Robin terms and breaks the residual derivative.
 
         # Set constants on DS before copying to coarse levels
         self._set_constants_on_ds(ds)
