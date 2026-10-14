@@ -26,6 +26,8 @@ def test_sheet_correction_preserves_volume_solution_when_dm_reuses_snes_storage(
         def restoreLocalVec(self,vec):pass
         def restoreGlobalVec(self,vec):pass
         def localToGlobal(self,local,global_,addv):global_.array[:]=local.array
+    from underworld3.postprocessing import _spherical_solver_contract
+    monkeypatch.setattr(_spherical_solver_contract, "require_native_solver_mesh", lambda mesh: None)
     dm=DM()
     variables=[]
     def variable(*args,**kwargs):

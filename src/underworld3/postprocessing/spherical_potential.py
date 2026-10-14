@@ -70,16 +70,23 @@ def _volume_region_indicator(mesh, field_name, regions):
 
 def solve_spherical_potential(*, mesh, field_name, harmonic_degree,
         harmonic_order=0, harmonic_component='cos', harmonic_normalization='axisymmetric_unnormalized',
-        sheet_densities=None, sheet_radii=None, volume_density=0., density_power=2,
+        sheet_densities=None, sheet_radii=None, sheet_modes=(), volume_density=0., density_power=2,
         volume_regions=None,
         exterior_condition='robin',
         radius_inner, radius_outer, radius_exterior,
         inner_boundary='CMB', outer_boundary='Surface', exterior_boundary='OuterBoundary',
         gravitational_constant, solver_options=None, tolerance=1e-10):
-    """Solve -laplacian(Phi)=4*pi*G*rho for one real mode on a full ball.
+    """Solve -laplacian(Phi)=4*pi*G*rho for a real harmonic degree on a full ball.
 
     sheet_densities maps caller-specified interface labels to density
     coefficients. Sheets use uniquely owned triangular P2 trace loads.
+    sheet_modes adds same-degree angular modes, each a dictionary containing
+    sheet_densities and optional harmonic_order/component/normalization. The
+    primary mode still selects volume forcing and returned trace coefficients.
+    All angular modes of one degree share the exact exterior Robin coefficient;
+    mixed-degree Robin continuation requires separate solves, not one local
+    Robin coefficient. Solver adapters require the world communicator and
+    nonempty mesh charts on every rank.
     Volume density is rho0*(r/r_outer)**k in radius_inner<=r<=radius_outer.
     volume_regions optionally maps caller-supplied volume labels to integer
     values. It confines that radial profile to their union of complete mesh
@@ -97,6 +104,17 @@ def solve_spherical_potential(*, mesh, field_name, harmonic_degree,
     """
     ell,m,component,normalization=validate_harmonic(harmonic_degree,harmonic_order,
                                                  harmonic_component,harmonic_normalization)
+    from ._spherical_solver_contract import require_native_solver_mesh
+    require_native_solver_mesh(mesh)
+    sources=[(m,component,normalization,dict(sheet_densities or {}))]
+    for spec in sheet_modes:
+        degree,order,part,norm=validate_harmonic(spec.get('harmonic_degree',ell),spec.get('harmonic_order',0),
+            spec.get('harmonic_component','cos'),spec.get('harmonic_normalization',normalization))
+        if degree!=ell:
+            raise ValueError('sheet_modes must share harmonic_degree; mixed degrees require separate solves.')
+        sources.append((order,part,norm,dict(spec['sheet_densities'])))
+    if any(not np.isfinite(float(value)) for _,_,_,densities in sources for value in densities.values()):
+        raise ValueError('Sheet densities must be finite.')
     if mesh.dim!=3:raise ValueError('Spherical potential requires a 3D full-ball mesh.')
     if not 0<radius_inner<radius_outer<radius_exterior:raise ValueError('Expected ordered positive radii.')
     if not isinstance(density_power, Integral) or isinstance(density_power, bool):
@@ -130,19 +148,24 @@ def solve_spherical_potential(*, mesh, field_name, harmonic_degree,
         poisson.add_natural_bc(sp.Matrix([(ell+1)*phi.sym[0]/radius_exterior]),exterior_boundary)
     elif exterior_condition=='dirichlet_exact':
         radii=dict(sheet_radii or {})
-        coefficient=0.
-        for label,density in dict(sheet_densities or {}).items():
-            if label not in radii:raise ValueError(f'Explicit source radius required for {label!r}.')
-            coefficient+=spherical_sheet_potential_coefficient(source_radius=radii[label],
-                target_radius=radius_exterior,harmonic_degree=ell,
-                surface_density_coefficient=density,gravitational_constant=gravitational_constant)
+        boundary_value=0.
+        for index,(order,part,norm,densities) in enumerate(sources):
+            coefficient=0.
+            for label,density in densities.items():
+                if label not in radii:raise ValueError(f'Explicit source radius required for {label!r}.')
+                coefficient+=spherical_sheet_potential_coefficient(source_radius=radii[label],
+                    target_radius=radius_exterior,harmonic_degree=ell,
+                    surface_density_coefficient=density,gravitational_constant=gravitational_constant)
+            H=solid_harmonic_sympy(list(mesh.X),degree=ell,order=order,component=part,normalization=norm)
+            boundary_value+=coefficient*radius_exterior**(ell+1)*H/radius**(2*ell+1)
         if volume_density:
-            coefficient+=spherical_volume_density_potential_coefficient(radius_inner=radius_inner,
+            coefficient=spherical_volume_density_potential_coefficient(radius_inner=radius_inner,
                 radius_outer=radius_outer,harmonic_degree=ell,density_power=density_power,
                 density_amplitude=volume_density,target_radius=radius_exterior,
                 gravitational_constant=gravitational_constant)
-        H=solid_harmonic_sympy(list(mesh.X),degree=ell,order=m,component=component,normalization=normalization)
-        poisson.add_dirichlet_bc([coefficient*radius_exterior**(ell+1)*H/radius**(2*ell+1)],exterior_boundary)
+            H=solid_harmonic_sympy(list(mesh.X),degree=ell,order=m,component=component,normalization=normalization)
+            boundary_value+=coefficient*radius_exterior**(ell+1)*H/radius**(2*ell+1)
+        poisson.add_dirichlet_bc([boundary_value],exterior_boundary)
     else:raise ValueError('exterior_condition must be dirichlet_exact or robin.')
     poisson.tolerance=tolerance
     options={'snes_type':'ksponly'} | dict(solver_options or {})
@@ -160,16 +183,17 @@ def solve_spherical_potential(*, mesh, field_name, harmonic_degree,
         base_solution=poisson.snes.getSolution().copy()
         cleanup.callback(base_solution.destroy)
         combined=None
-        for label,coefficient in dict(sheet_densities or {}).items():
-            vector,report=assemble_spherical_harmonic_sheet_load(mesh=mesh,load_variable=load,
-                interface=label,harmonic_degree=ell,harmonic_order=m,harmonic_component=component,
-                harmonic_normalization=normalization,density_coefficient=float(coefficient),
-                gravitational_constant=gravitational_constant)
-            cleanup.callback(vector.destroy)
-            diagnostics[label]=report
-            if combined is None:
-                combined=vector.copy();cleanup.callback(combined.destroy)
-            else:combined.axpy(1.,vector)
+        for index,(order,part,norm,densities) in enumerate(sources):
+            for label,coefficient in densities.items():
+                vector,report=assemble_spherical_harmonic_sheet_load(mesh=mesh,load_variable=load,
+                    interface=label,harmonic_degree=ell,harmonic_order=order,harmonic_component=part,
+                    harmonic_normalization=norm,density_coefficient=float(coefficient),
+                    gravitational_constant=gravitational_constant)
+                cleanup.callback(vector.destroy)
+                diagnostics[label if index==0 else f'mode{index}:{label}']=report
+                if combined is None:
+                    combined=vector.copy();cleanup.callback(combined.destroy)
+                else:combined.axpy(1.,vector)
         if combined is not None:
             iset,subdm=mesh.dm.createSubDM(load.field_id)
             cleanup.callback(iset.destroy);cleanup.callback(subdm.destroy)

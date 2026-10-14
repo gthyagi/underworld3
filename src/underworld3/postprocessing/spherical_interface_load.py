@@ -504,6 +504,7 @@ def install_linear_spherical_stokes_sheet_load(
     *, stokes, interface, harmonic_degree, density_coefficient,
     harmonic_order=0, harmonic_component='cos',
     harmonic_normalization=AXISYMMETRIC_UNNORMALIZED, quadrature_points=8,
+    modes=None,
 ):
     """Install a radial sheet load in a constant linear P2 Stokes system.
 
@@ -514,16 +515,34 @@ def install_linear_spherical_stokes_sheet_load(
     plus the owned-facet P2 weak load, avoiding generic facet-trace interpolation.
     Each facet load has exactly zero moment against all rigid rotations.
     Reinstall after any model/mesh setup change. The SNES callback owns its RHS
-    vector for the lifetime of this solve setup; no benchmark policy is selected.
+    vector for the lifetime of this solve setup; reinstalling releases its old
+    RHS. ``modes`` optionally replaces the single mode with a nonempty sequence
+    of dictionaries containing harmonic_degree, density_coefficient and the
+    optional harmonic_order/component/normalization keys. Different degrees
+    can share this Stokes operator. Native solver adapters currently require
+    the world communicator and nonempty mesh charts on every rank.
     """
     import sympy as sp
+    from ._spherical_solver_contract import require_native_solver_mesh
     mesh=stokes.mesh
+    require_native_solver_mesh(mesh)
     comm=mesh.dm.getComm().tompi4py()
-    validate_harmonic(harmonic_degree,harmonic_order,harmonic_component,harmonic_normalization)
+    specifications=[dict(harmonic_degree=harmonic_degree, harmonic_order=harmonic_order,
+        harmonic_component=harmonic_component, harmonic_normalization=harmonic_normalization,
+        density_coefficient=density_coefficient)] if modes is None else list(modes)
+    if not specifications:raise ValueError('modes must contain at least one harmonic.')
+    validated=[]
+    for spec in specifications:
+        degree,order,component,normalization=validate_harmonic(spec['harmonic_degree'],
+            spec.get('harmonic_order',0),spec.get('harmonic_component','cos'),
+            spec.get('harmonic_normalization',harmonic_normalization))
+        amplitude=float(spec['density_coefficient'])
+        if not np.isfinite(amplitude):raise ValueError('Invalid mode density.')
+        validated.append((degree,order,component,normalization,amplitude))
     if mesh.dim!=3 or stokes.u.degree!=2 or not stokes.u.continuous:
         raise ValueError('This load needs a 3D continuous P2 velocity space.')
     if interface not in mesh.boundaries.__members__:raise ValueError(f'Unknown interface {interface!r}.')
-    if quadrature_points<2 or not np.isfinite(density_coefficient):raise ValueError('Invalid quadrature/density.')
+    if quadrature_points<2:raise ValueError('Invalid quadrature.')
     if type(stokes.constitutive_model) is not uw.constitutive_models.ViscousFlowModel:
         raise ValueError('Only the constant linear ViscousFlowModel is supported.')
     viscosity=stokes.constitutive_model.Parameters.shear_viscosity_0
@@ -541,10 +560,14 @@ def install_linear_spherical_stokes_sheet_load(
     stokes._build(False,False,None)
     mesh.update_lvec();stokes.dm.setAuxiliaryVec(mesh.lvec,None)
     stokes._update_constants(record=True)
+    # A direct computeJacobian requires SNES setup. Rotational-nullspace
+    # setup happened to do this for free-slip callers; other callers can
+    # otherwise receive null Jacobian handles and crash inside PETSc.
+    stokes.snes.setUp()
     zero=stokes.dm.createGlobalVec();zero.set(0.)
     J,Jp=stokes.snes.getJacobian()[:2]
-    stokes.snes.computeJacobian(zero,J,Jp)
-    zero.destroy()
+    try:stokes.snes.computeJacobian(zero,J,Jp)
+    finally:zero.destroy()
     stokes.u._set_vec(available=True)
     ilocal=None
     if comm.size>1:_nroots,ilocal,_iremote=mesh.dm.getPointSF().getGraph()
@@ -554,9 +577,9 @@ def install_linear_spherical_stokes_sheet_load(
     with ExitStack() as cleanup:
         local=stokes.u.vec.duplicate();cleanup.callback(local.destroy);local.set(0.)
         values=local.array.reshape(-1,3)
-        tree=stokes.u._get_kdtree()
-        for facet in mesh._boundary_facets(interface):
-            if int(facet) in ghosts:continue
+        owned_facets=[int(facet) for facet in mesh._boundary_facets(interface) if int(facet) not in ghosts]
+        tree=stokes.u._get_kdtree() if owned_facets else None
+        for facet in owned_facets:
             vertices=_vertex_coordinates(mesh,int(facet))
             trace=np.vstack((vertices,(vertices[0]+vertices[1])/2,
                              (vertices[1]+vertices[2])/2,(vertices[2]+vertices[0])/2))
@@ -570,21 +593,31 @@ def install_linear_spherical_stokes_sheet_load(
                     point=bary@vertices
                     l0,l1,l2=bary
                     basis=np.array([l0*(2*l0-1),l1*(2*l1-1),l2*(2*l2-1),4*l0*l1,4*l1*l2,4*l2*l0])
-                    Y=real_harmonic_values(point,degree=harmonic_degree,order=harmonic_order,
-                        component=harmonic_component,normalization=harmonic_normalization)
+                    density=sum(amplitude*real_harmonic_values(point,degree=degree,order=order,
+                        component=component,normalization=normalization)
+                        for degree,order,component,normalization,amplitude in validated)
                     direction=point/np.linalg.norm(point)
-                    contribution+=np.outer(basis,density_coefficient*Y*direction)*cross*u*weights[i]*weights[j]
+                    contribution+=np.outer(basis,density*direction)*cross*u*weights[i]*weights[j]
             np.add.at(values,rows,contribution)
         rhs=stokes.dm.createGlobalVec();rhs.set(0.)
         velocity_is,velocity_dm=stokes._subdict['velocity']
-        sub=rhs.getSubVector(velocity_is)
-        try:velocity_dm.localToGlobal(local,sub,addv=PETSc.InsertMode.ADD_VALUES)
-        finally:rhs.restoreSubVector(velocity_is,sub)
+        try:
+            sub=rhs.getSubVector(velocity_is)
+            try:velocity_dm.localToGlobal(local,sub,addv=PETSc.InsertMode.ADD_VALUES)
+            finally:rhs.restoreSubVector(velocity_is,sub)
+        except Exception:
+            rhs.destroy()
+            raise
     def residual(snes,vector,out):
         J.mult(vector,out)
         out.axpy(1.,rhs)
-    stokes.snes.setFunction(residual)
+    try:stokes.snes.setFunction(residual)
+    except Exception:
+        rhs.destroy()
+        raise
+    previous=getattr(stokes,'_linear_spherical_sheet_rhs',None)
     stokes._linear_spherical_sheet_rhs=rhs
+    if previous is not None:previous.destroy()
     return rhs
 
 
