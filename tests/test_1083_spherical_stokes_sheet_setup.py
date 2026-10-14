@@ -3,13 +3,15 @@ import os
 from contextlib import ExitStack
 import numpy as np
 import sympy as sp
+import pytest
 from scipy.integrate import dblquad
 from petsc4py import PETSc
 import underworld3 as uw
 from underworld3.postprocessing.spherical_interface_load import install_linear_spherical_stokes_sheet_load
 
 
-def test_sheet_adapter_sets_up_lazy_snes_and_releases_rhs():
+@pytest.mark.parametrize('viscosity_case', ('uniform', 'smooth_spatial', 'layered_spatial'))
+def test_sheet_adapter_sets_up_lazy_snes_and_releases_rhs(viscosity_case):
     root_pid=uw.mpi.comm.bcast(os.getpid() if uw.mpi.rank==0 else None,root=0)
     mesh=uw.meshing.UnstructuredSimplexBox(minCoords=(1.,1.,1.),maxCoords=(2.,2.,2.),
         cellSize=.5,regular=True,qdegree=4,filename=f'/tmp/uw-sheet-setup-{root_pid}.msh')
@@ -17,10 +19,30 @@ def test_sheet_adapter_sets_up_lazy_snes_and_releases_rhs():
     p=uw.discretisation.MeshVariable('SheetSetupP',mesh,1,degree=1)
     stokes=uw.systems.Stokes(mesh,velocityField=u,pressureField=p)
     stokes.constitutive_model=uw.constitutive_models.ViscousFlowModel
-    stokes.constitutive_model.Parameters.shear_viscosity_0=1.
+    x,y,z=mesh.X
+    viscosity={'uniform':sp.Float(1.),'smooth_spatial':1+x*x,
+               'layered_spatial':sp.Piecewise((sp.Float(1e4),x>1.5),(sp.Float(1.),True))}[viscosity_case]
+    stokes.constitutive_model.Parameters.shear_viscosity_0=viscosity
     stokes.bodyforce=sp.zeros(1,3)
     stokes.petsc_use_nullspace=False
     stokes.petsc_use_pressure_nullspace=False
+    if viscosity_case!='uniform':
+        # Independently verify that the actual native residual is linear and
+        # matches its assembled Jacobian before replacing only the sheet RHS.
+        stokes._build(False,False,None)
+        mesh.update_lvec();stokes.dm.setAuxiliaryVec(mesh.lvec,None)
+        stokes._update_constants(record=True);stokes.snes.setUp()
+        with ExitStack() as cleanup:
+            zero=stokes.dm.createGlobalVec();cleanup.callback(zero.destroy);zero.set(0.)
+            vector=zero.duplicate();cleanup.callback(vector.destroy)
+            lo,hi=vector.getOwnershipRange();vector.array[:]=1e-4*np.sin(np.arange(lo,hi))
+            native=zero.duplicate();cleanup.callback(native.destroy)
+            linear=zero.duplicate();cleanup.callback(linear.destroy)
+            J,Jp=stokes.snes.getJacobian()[:2]
+            stokes.snes.computeJacobian(zero,J,Jp)
+            stokes.snes.computeFunction(vector,native)
+            J.mult(vector,linear);linear.axpy(-1.,native)
+            assert linear.norm()<1e-12*max(native.norm(),1.)
     # Top is z=2 for this box. No solve/nullspace setup can hide lazy matrices.
     arguments=dict(stokes=stokes,interface='Top',harmonic_degree=1,density_coefficient=1.)
     rhs=install_linear_spherical_stokes_sheet_load(**arguments)
@@ -40,6 +62,17 @@ def test_sheet_adapter_sets_up_lazy_snes_and_releases_rhs():
                 expected=dblquad(lambda y,x: [x,y,2.][axis]*2./(x*x+y*y+4),
                     1.,2.,lambda x:1.,lambda x:2.,epsabs=1e-12,epsrel=1e-12)[0]
                 np.testing.assert_allclose(actual,expected,rtol=1e-11,atol=1e-13)
+            # A radial force has zero work against every rigid rotation,
+            # independently of facet quadrature or the viscosity profile.
+            cx,cy,cz=u.coords.T
+            null=np.zeros_like(cx)
+            for mode in (np.column_stack((null,-cz,cy)),
+                         np.column_stack((cz,null,-cx)),
+                         np.column_stack((-cy,cx,null))):
+                local.array.reshape(-1,3)[:]=mode
+                global_.set(0.)
+                subdm.localToGlobal(local,global_,addv=PETSc.InsertMode.INSERT_VALUES)
+                assert abs(float(sub.dot(global_)))<1e-12*max(rhs.norm(),1.)
     finally:rhs.restoreSubVector(iset,sub)
     second=install_linear_spherical_stokes_sheet_load(**(arguments|{'density_coefficient':-.7}))
     assert not bool(rhs) and second.norm()>0.
@@ -51,3 +84,21 @@ def test_sheet_adapter_sets_up_lazy_snes_and_releases_rhs():
     third=install_linear_spherical_stokes_sheet_load(**arguments)
     stokes._reset()
     assert not bool(third)
+
+
+@pytest.mark.parametrize('dependence', ('velocity', 'pressure', 'velocity_gradient'))
+def test_sheet_adapter_rejects_unknown_dependent_viscosity(dependence):
+    root_pid=uw.mpi.comm.bcast(os.getpid() if uw.mpi.rank==0 else None,root=0)
+    mesh=uw.meshing.UnstructuredSimplexBox(minCoords=(1.,1.,1.),maxCoords=(2.,2.,2.),
+        cellSize=.5,regular=True,qdegree=4,filename=f'/tmp/uw-sheet-nonlinear-{root_pid}.msh')
+    u=uw.discretisation.MeshVariable('SheetGuardU',mesh,3,degree=2,vtype=uw.VarType.VECTOR)
+    p=uw.discretisation.MeshVariable('SheetGuardP',mesh,1,degree=1)
+    stokes=uw.systems.Stokes(mesh,velocityField=u,pressureField=p)
+    stokes.constitutive_model=uw.constitutive_models.ViscousFlowModel
+    coefficient={'velocity':u.sym[0], 'pressure':p.sym[0],
+                 'velocity_gradient':sp.diff(u.sym[0],mesh.X[0])}[dependence]
+    stokes.constitutive_model.Parameters.shear_viscosity_0=1+coefficient**2
+    stokes.bodyforce=sp.zeros(1,3)
+    with pytest.raises(ValueError,match='solution-independent viscosity'):
+        install_linear_spherical_stokes_sheet_load(stokes=stokes,interface='Top',
+            harmonic_degree=1,density_coefficient=1.)

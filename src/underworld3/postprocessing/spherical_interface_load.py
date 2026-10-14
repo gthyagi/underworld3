@@ -506,12 +506,14 @@ def install_linear_spherical_stokes_sheet_load(
     harmonic_normalization=AXISYMMETRIC_UNNORMALIZED, quadrature_points=8,
     modes=None,
 ):
-    """Install a radial sheet load in a constant linear P2 Stokes system.
+    """Install a radial sheet load in a linear P2 Stokes system.
 
     Call after viscosity, wall conditions and solver policy are configured,
     instead of adding the same sheet as a natural BC. Only straight triangular
-    facets, continuous P2 velocity, zero bulk force and constant linear viscosity
-    are supported. The exact linear residual uses the native assembled Jacobian
+    facets, continuous P2 velocity, zero bulk force and solution-independent
+    viscosity (including fixed spatial/layered viscosity) are supported. Viscosity
+    that depends on velocity, pressure or their derivatives is rejected. The
+    exact linear residual uses the native assembled Jacobian
     plus the owned-facet P2 weak load, avoiding generic facet-trace interpolation.
     Each facet load has exactly zero moment against all rigid rotations.
     Reinstall after any model/mesh setup change. The SNES callback owns its RHS
@@ -523,6 +525,7 @@ def install_linear_spherical_stokes_sheet_load(
     the world communicator and nonempty mesh charts on every rank.
     """
     import sympy as sp
+    from underworld3.function.expressions import mesh_vars_in_expression, unwrap
     from ._spherical_solver_contract import require_native_solver_mesh
     mesh=stokes.mesh
     require_native_solver_mesh(mesh)
@@ -544,18 +547,22 @@ def install_linear_spherical_stokes_sheet_load(
     if interface not in mesh.boundaries.__members__:raise ValueError(f'Unknown interface {interface!r}.')
     if quadrature_points<2:raise ValueError('Invalid quadrature.')
     if type(stokes.constitutive_model) is not uw.constitutive_models.ViscousFlowModel:
-        raise ValueError('Only the constant linear ViscousFlowModel is supported.')
+        raise ValueError('Only the linear ViscousFlowModel is supported.')
     viscosity=stokes.constitutive_model.Parameters.shear_viscosity_0
-    viscosity=uw.function.unwrap(viscosity)
+    viscosity=unwrap(viscosity,keep_constants=False,return_self=False)
     force=uw.function.unwrap(stokes.bodyforce)
-    if not sp.sympify(viscosity).is_number or force.is_zero_matrix is not True:
-        raise ValueError('This restricted API requires constant viscosity and zero bulk force.')
+    _,regular,derivatives=mesh_vars_in_expression(sp.sympify(viscosity))
+    coefficient_variables={getattr(fn.meshvar(),'_base_var',fn.meshvar()) for fn in regular}
+    coefficient_variables.update(getattr(var,'_base_var',var) for var in derivatives)
+    unknowns={getattr(var,'_base_var',var) for var in (stokes.u,stokes.p)}
+    if coefficient_variables.intersection(unknowns) or force.is_zero_matrix is not True:
+        raise ValueError('This restricted API requires solution-independent viscosity and zero bulk force.')
     if stokes.natural_bcs:
         raise ValueError('Install this sheet instead of natural load data, not in addition to them.')
     for bc in stokes.essential_bcs:
         if any(sp.sympify(value).is_zero is not True for value in bc.fn if value is not None):
             raise ValueError('Only homogeneous essential data are supported by this linear load API.')
-    # Build the unchanged native constant linear operator before installing the
+    # Build the unchanged native linear operator before installing the
     # RHS. It is also the operator used by the rotated constraint solve.
     stokes._build(False,False,None)
     mesh.update_lvec();stokes.dm.setAuxiliaryVec(mesh.lvec,None)
