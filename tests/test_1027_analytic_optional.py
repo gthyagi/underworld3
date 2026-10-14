@@ -41,7 +41,7 @@ def test_importing_underworld_does_not_need_the_optional_package():
 
     import underworld3.analytic.kramer  # noqa: F401
 
-    assert uw.analytic.CylindricalStokes is not None
+    assert uw.analytic.AssessCylindricalStokes is not None
 
 
 def test_the_solution_is_listed_even_when_it_cannot_be_built():
@@ -52,11 +52,11 @@ def test_the_solution_is_listed_even_when_it_cannot_be_built():
     benchmark with no way to discover that one is a `pip install` away.
     """
 
-    assert "CylindricalStokes" in uw.analytic.available()
-    assert uw.analytic.is_available("CylindricalStokes") == assess_available()
+    assert "AssessCylindricalStokes" in uw.analytic.available()
+    assert uw.analytic.is_available("AssessCylindricalStokes") == assess_available()
 
     installed = uw.analytic.available(installed_only=True)
-    assert ("CylindricalStokes" in installed) == assess_available()
+    assert ("AssessCylindricalStokes" in installed) == assess_available()
 
     # The missing case is covered unconditionally by the `without_assess`
     # tests below, which simulate absence rather than waiting for it.
@@ -64,7 +64,7 @@ def test_the_solution_is_listed_even_when_it_cannot_be_built():
 
 def test_every_other_solution_is_unconditionally_available():
     for name in uw.analytic.available():
-        if name == "CylindricalStokes":
+        if name == "AssessCylindricalStokes":
             continue
         assert uw.analytic.is_available(name), name
         assert getattr(uw.analytic, name).requires is None
@@ -93,9 +93,9 @@ def without_assess(monkeypatch):
     monkeypatch.delitem(sys.modules, "assess", raising=False)
     monkeypatch.setattr(builtins, "__import__", blocked)
     monkeypatch.setattr(
-        importlib.util, "find_spec", lambda name, *a, **k: None
-        if name == "assess"
-        else _real_find_spec(name, *a, **k)
+        importlib.util,
+        "find_spec",
+        lambda name, *a, **k: None if name == "assess" else _real_find_spec(name, *a, **k),
     )
 
 
@@ -109,28 +109,36 @@ def test_the_absence_simulation_actually_blocks(without_assess):
 
     from underworld3.analytic import kramer
 
-    assert not uw.analytic.is_available("CylindricalStokes")
+    assert not uw.analytic.is_available("AssessCylindricalStokes")
     with pytest.raises(ImportError):
         kramer.require_assess()
 
 
+def test_native_solution_constructs_without_assess(without_assess):
+    mesh = uw.meshing.Annulus(radiusOuter=1.0, radiusInner=0.5, cellSize=0.25)
+    solution = uw.analytic.CylindricalStokes(mesh)
+    assert solution.symbolic and solution.requires is None
+    assert uw.analytic.is_available("CylindricalStokes")
+    assert np.all(np.isfinite(solution.evaluate("radial_normal_stress", solution.sample_points())))
+
+
 def test_describe_says_what_is_missing(without_assess):
-    summary = uw.analytic.describe("CylindricalStokes")
+    summary = uw.analytic.describe("AssessCylindricalStokes")
 
     assert "unavailable" in summary
     assert "assess" in summary
 
 
 def test_it_is_dropped_from_the_installed_only_listing(without_assess):
-    assert "CylindricalStokes" in uw.analytic.available()
-    assert "CylindricalStokes" not in uw.analytic.available(installed_only=True)
+    assert "AssessCylindricalStokes" in uw.analytic.available()
+    assert "AssessCylindricalStokes" not in uw.analytic.available(installed_only=True)
 
 
 def test_constructing_it_explains_rather_than_tracebacks(without_assess):
     mesh = uw.meshing.Annulus(radiusOuter=1.0, radiusInner=0.5, cellSize=0.2)
 
     with pytest.raises(ImportError) as raised:
-        uw.analytic.CylindricalStokes(mesh)
+        uw.analytic.AssessCylindricalStokes(mesh)
 
     message = str(raised.value)
     assert "pip install" in message
@@ -148,11 +156,11 @@ def test_it_declares_that_the_residual_gates_cannot_reach_it():
     pass it never earned.
     """
 
-    assert uw.analytic.CylindricalStokes.symbolic is False
-    assert uw.analytic.CylindricalStokes.requires == "assess"
+    assert uw.analytic.AssessCylindricalStokes.symbolic is False
+    assert uw.analytic.AssessCylindricalStokes.requires == "assess"
 
     for name in uw.analytic.available():
-        if name != "CylindricalStokes":
+        if name != "AssessCylindricalStokes":
             assert getattr(uw.analytic, name).symbolic, name
 
 
@@ -166,10 +174,10 @@ def test_it_rejects_unknown_cases_before_reaching_the_dependency(monkeypatch):
     mesh = uw.meshing.Annulus(radiusOuter=1.0, radiusInner=0.5, cellSize=0.2)
 
     with pytest.raises(ValueError, match="density must be"):
-        uw.analytic.CylindricalStokes(mesh, density="gaussian")
+        uw.analytic.AssessCylindricalStokes(mesh, density="gaussian")
 
     with pytest.raises(ValueError, match="boundary must be"):
-        uw.analytic.CylindricalStokes(mesh, boundary="sticky")
+        uw.analytic.AssessCylindricalStokes(mesh, boundary="sticky")
 
 
 @pytest.fixture(scope="module")
@@ -219,9 +227,7 @@ def _divergence(sol, points, step=1e-6):
 @pytest.mark.parametrize("density", ["delta", "smooth"])
 @pytest.mark.parametrize("boundary", ["free", "zero"])
 def test_all_four_cases_construct_and_evaluate(annulus, density, boundary):
-    sol = uw.analytic.CylindricalStokes(
-        annulus, n=2, k=2, density=density, boundary=boundary
-    )
+    sol = uw.analytic.AssessCylindricalStokes(annulus, n=2, k=2, density=density, boundary=boundary)
 
     coords = annulus.X.coords
     velocity = sol.evaluate("velocity", coords)
@@ -237,9 +243,7 @@ def test_all_four_cases_construct_and_evaluate(annulus, density, boundary):
 @pytest.mark.parametrize("density", ["delta", "smooth"])
 @pytest.mark.parametrize("boundary", ["free", "zero"])
 def test_the_velocity_is_incompressible(annulus, density, boundary):
-    sol = uw.analytic.CylindricalStokes(
-        annulus, n=2, k=2, density=density, boundary=boundary
-    )
+    sol = uw.analytic.AssessCylindricalStokes(annulus, n=2, k=2, density=density, boundary=boundary)
 
     points = _interior_points()
     scale = np.abs(sol.evaluate("velocity", points)).max()
@@ -275,9 +279,7 @@ def test_free_slip_stops_wall_normal_flow_but_not_tangential(annulus, density):
     this one.
     """
 
-    sol = uw.analytic.CylindricalStokes(
-        annulus, n=2, k=2, density=density, boundary="free"
-    )
+    sol = uw.analytic.AssessCylindricalStokes(annulus, n=2, k=2, density=density, boundary="free")
 
     for radius in (sol.r_inner, sol.r_outer):
         wall = _wall_points(radius)
@@ -291,9 +293,7 @@ def test_free_slip_stops_wall_normal_flow_but_not_tangential(annulus, density):
 @needs_assess
 @pytest.mark.parametrize("density", ["delta", "smooth"])
 def test_zero_slip_stops_the_wall_entirely(annulus, density):
-    sol = uw.analytic.CylindricalStokes(
-        annulus, n=2, k=2, density=density, boundary="zero"
-    )
+    sol = uw.analytic.AssessCylindricalStokes(annulus, n=2, k=2, density=density, boundary="zero")
 
     for radius in (sol.r_inner, sol.r_outer):
         velocity = sol.evaluate("velocity", _wall_points(radius))
@@ -307,7 +307,7 @@ def test_zero_slip_stops_the_wall_entirely(annulus, density):
 def test_the_delta_case_is_genuinely_two_sided(annulus):
     """The branch selection is the benchmark, so it has to actually branch."""
 
-    sol = uw.analytic.CylindricalStokes(annulus, density="delta", r_int=0.8)
+    sol = uw.analytic.AssessCylindricalStokes(annulus, density="delta", r_int=0.8)
     assert sol._above is not sol._below
 
     radii = np.array([[0.6, 0.0], [0.9, 0.0]])
@@ -317,7 +317,7 @@ def test_the_delta_case_is_genuinely_two_sided(annulus):
 
 @needs_assess
 def test_it_rejects_fields_it_does_not_have(annulus):
-    sol = uw.analytic.CylindricalStokes(annulus)
+    sol = uw.analytic.AssessCylindricalStokes(annulus)
 
     with pytest.raises(ValueError, match="velocity"):
         sol.evaluate("temperature", annulus.X.coords)

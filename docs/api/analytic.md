@@ -17,6 +17,21 @@ whichever one you use.
    :show-inheritance:
 ```
 
+## Kramer cylindrical fields
+
+`uw.analytic.CylindricalStokes` supplies native symbolic velocity, pressure,
+strain rate and total/radial/shear stress, without requiring `assess`. Named-field
+evaluation uses cached vectorised NumPy evaluators with CSE; symbolic expressions
+remain usable by the UW3 JIT. `compile_evaluators("velocity", "pressure")` can
+prepare the evaluators before repeated measurements. The optional
+`AssessCylindricalStokes` class retains the former numerical reference wrapper.
+
+The point-evaluation comparison is reproducible with
+`scripts/benchmark_kramer_evaluators.py --output-json <common-output-path>`.
+Construction, function generation, first evaluation and seven repeated warmed
+measurements are reported separately. These are evaluator timings, not solver
+speedups.
+
 ## Zhong spherical-shell response oracle
 
 `Zhong2008` is a mesh-independent propagator-matrix oracle. It returns the

@@ -1,35 +1,20 @@
-r"""Curved-geometry Stokes solutions, wrapping the external `assess` library.
+r"""Kramer (2021) curved-shell Stokes solutions and optional assess oracle.
 
-Kramer et al. (2021) give exact Stokes solutions in a cylindrical annulus and a
-spherical shell, for smooth and delta-function density anomalies under free-slip
-or zero-slip walls. They are the reference for benchmarking a solver on curved
-boundaries, which nothing else in this suite covers — every other solution here
-is posed on a box.
+CylindricalStokes is a native symbolic solution with cached vectorised numerical
+evaluation. AssessCylindricalStokes preserves the former point-by-point numeric
+wrapper as an independent optional reference. Only the latter requires assess
+and declares symbolic=False; the native solution participates in physics gates.
 
-Unlike the rest of the suite these are **not SymPy**, and the difference is not
-cosmetic. `assess` provides numeric callables, so a Kramer solution can be
-compared against a solver but cannot be checked against the equations it claims
-to solve: there is nothing to differentiate. It therefore declares
-``symbolic = False``, exposes no ``fn_*``, and the conformance suite skips it on
-that declaration rather than by name.
-
-Treat it as an external oracle rather than a validated member of the family. It
-is here so the curved-geometry benchmarks stop importing an undeclared
-dependency, and so that when the dependency is missing the failure is a sentence
-rather than a traceback.
-
-Installation::
-
-    pip install "underworld3[benchmarks]"      # or: pip install assess
-
-References
-----------
-Kramer, S.C., Davies, D.R. & Wilson, C.R. (2021). Analytical solutions for
-mantle flow in cylindrical and spherical shells. *Geoscientific Model
-Development* 14, 1899-1919. doi:10.5194/gmd-14-1899-2021
+Reference: Kramer, Davies & Wilson (2021), GMD 14, 1899–1919,
+doi:10.5194/gmd-14-1899-2021.
 """
 
 import numpy as np
+import sympy as sp
+from numbers import Integral
+import underworld3 as uw
+
+from . import kramer_cylindrical as cylindrical
 
 from ._base import AnalyticSolution, free_slip, prescribed_velocity
 
@@ -37,7 +22,7 @@ from ._base import AnalyticSolution, free_slip, prescribed_velocity
 _INSTALL_MESSAGE = (
     "The Kramer benchmark solutions need the 'assess' package, which "
     "Underworld3 does not depend on.\n"
-    "    pip install \"underworld3[benchmarks]\"\n"
+    '    pip install "underworld3[benchmarks]"\n'
     "or  pip install assess\n"
     "See Kramer, Davies & Wilson (2021), doi:10.5194/gmd-14-1899-2021."
 )
@@ -85,7 +70,7 @@ def assess_available():
     return True
 
 
-class CylindricalStokes(AnalyticSolution):
+class AssessCylindricalStokes(AnalyticSolution):
     r"""Stokes flow in a cylindrical annulus, after Kramer et al. (2021).
 
     Four cases, chosen by *density* and *boundary*:
@@ -167,14 +152,10 @@ class CylindricalStokes(AnalyticSolution):
         self.boundary = boundary
 
         slip = "FreeSlip" if boundary == "free" else "ZeroSlip"
-        family = getattr(
-            assess, f"CylindricalStokesSolution{density.capitalize()}{slip}"
-        )
+        family = getattr(assess, f"CylindricalStokesSolution{density.capitalize()}{slip}")
 
         if density == "delta":
-            shared = dict(
-                Rp=self.r_outer, Rm=self.r_inner, rp=self.r_int, nu=1.0, g=-1.0
-            )
+            shared = dict(Rp=self.r_outer, Rm=self.r_inner, rp=self.r_int, nu=1.0, g=-1.0)
             self._above = family(self.n, +1, **shared)
             self._below = family(self.n, -1, **shared)
         else:
@@ -206,8 +187,7 @@ class CylindricalStokes(AnalyticSolution):
 
         if field not in ("velocity", "pressure"):
             raise ValueError(
-                f"{type(self).__name__} provides 'velocity' and 'pressure'; "
-                f"got {field!r}"
+                f"{type(self).__name__} provides 'velocity' and 'pressure'; " f"got {field!r}"
             )
 
         coords = np.asarray(coords, dtype=float)
@@ -220,9 +200,7 @@ class CylindricalStokes(AnalyticSolution):
             if not mask.any():
                 continue
             call = getattr(solution, f"{field}_cartesian")
-            values[mask] = np.array([call(point) for point in coords[mask]]).reshape(
-                -1, width
-            )
+            values[mask] = np.array([call(point) for point in coords[mask]]).reshape(-1, width)
 
         return values if width == 2 else values[:, 0]
 
@@ -246,9 +224,7 @@ class CylindricalStokes(AnalyticSolution):
         exact = np.atleast_2d(self.evaluate(field, coords).T).T
         computed = meshvar.data.reshape(exact.shape)
 
-        local = np.array(
-            [((computed - exact) ** 2).sum(), (exact**2).sum()], dtype=float
-        )
+        local = np.array([((computed - exact) ** 2).sum(), (exact**2).sum()], dtype=float)
         difference, magnitude = mpi.comm.allreduce(local)
 
         return float(np.sqrt(difference / magnitude))
@@ -279,3 +255,241 @@ class CylindricalStokes(AnalyticSolution):
             free_slip(solver, self.boundaries)
 
         solver.petsc_use_pressure_nullspace = True
+
+
+class CylindricalStokes(AssessCylindricalStokes):
+    r"""Native symbolic Kramer annulus solution with cached array evaluation.
+
+    The four delta/smooth, free/zero-slip cases use the same parameter defaults
+    as the former assess wrapper. Velocity, pressure and total stress are SymPy
+    expressions on ``mesh.X`` and can be passed to the UW3 JIT. Named fields are
+    evaluated by lazy, cached NumPy functions over whole coordinate arrays.
+    ``assess`` is needed only by the separate :class:`AssessCylindricalStokes`
+    oracle, not by this solution.
+
+    Parameters
+    ----------
+    mesh : Mesh
+        A two-dimensional mesh. The solution domain is the specified annulus.
+    n, k : int
+        Fourier mode (n>=2) and radial power for smooth density.
+    r_inner, r_outer, r_int : float
+        Annulus and internal-sheet radii. The sheet must be strictly inside.
+    density : {"delta", "smooth"}
+        Delta sheet or volume density proportional to ``(r/r_outer)**k``.
+    boundary : {"free", "zero"}
+        Free-slip or zero-slip on both bounding arcs.
+    viscosity : float
+        Positive constant viscosity.
+    forcing : float, optional
+        Kramer coefficient g: default -1 for delta and +1 for smooth. The
+        smooth bulk force is ``-g*(r/r_outer)**k*cos(n*theta)*e_r``.
+
+    Notes
+    -----
+    Delta bulk forcing is zero. Its sheet is encoded by the jump of the two
+    branches, not by differentiating a smoothed density. The outward normal
+    stress jump is ``g*cos(n*theta)``; in ``div(sigma)+f=0`` the sheet force is
+    its negative. At the sheet radius
+    point evaluation selects the outer branch. Bulk residual checks must sample
+    away from the interface; interface jump checks are separate.
+    ``evaluation_cse`` controls common-subexpression elimination before a cached
+    evaluator is first generated. It does not change the symbolic fields.
+    """
+
+    symbolic = True
+    requires = None
+    reference = "Kramer, Davies & Wilson (2021), GMD 14, 1899–1919, doi:10.5194/gmd-14-1899-2021."
+    evaluation_cse = True
+    _fields = dict(
+        AnalyticSolution._fields,
+        radial_normal_stress="fn_radial_normal_stress",
+        radial_shear_stress="fn_radial_shear_stress",
+    )
+
+    def __init__(
+        self,
+        mesh,
+        n=2,
+        k=2,
+        r_inner=0.5,
+        r_outer=1.0,
+        r_int=0.8,
+        density="delta",
+        boundary="free",
+        viscosity=1.0,
+        forcing=None,
+    ):
+        AnalyticSolution.__init__(self, mesh)
+        if density not in ("delta", "smooth"):
+            raise ValueError(f"density must be 'delta' or 'smooth'; got {density!r}")
+        if boundary not in ("free", "zero"):
+            raise ValueError(f"boundary must be 'free' or 'zero'; got {boundary!r}")
+        if isinstance(n, bool) or not isinstance(n, Integral) or n < 2:
+            raise ValueError(
+                "n must be an integer >=2; the exceptional n=0/1 Stokes families are not implemented."
+            )
+        if isinstance(k, bool) or not isinstance(k, Integral):
+            raise TypeError("k must be an integer.")
+        self.n, self.k = int(n), int(k)
+        self.r_inner, self.r_outer, self.r_int = map(float, (r_inner, r_outer, r_int))
+        self.viscosity = float(viscosity)
+        self.g = float((-1.0 if density == "delta" else 1.0) if forcing is None else forcing)
+        if not np.all(
+            np.isfinite((self.r_inner, self.r_outer, self.r_int, self.viscosity, self.g))
+        ):
+            raise ValueError("Radii, viscosity and forcing must be finite.")
+        if not 0 < self.r_inner < self.r_outer or self.viscosity <= 0:
+            raise ValueError("Expected 0 < r_inner < r_outer and viscosity > 0.")
+        if density == "delta" and not self.r_inner < self.r_int < self.r_outer:
+            raise ValueError("r_int must lie strictly inside the annulus for a delta sheet.")
+        self.density, self.boundary = density, boundary
+        args = (self.r_outer, self.r_inner)
+        if density == "delta":
+            self._above = cylindrical.build_delta_solution(
+                *args, self.r_int, self.n, self.g, self.viscosity, +1, boundary == "zero"
+            )
+            self._below = cylindrical.build_delta_solution(
+                *args, self.r_int, self.n, self.g, self.viscosity, -1, boundary == "zero"
+            )
+        else:
+            self._above = cylindrical.build_smooth_solution(
+                *args, self.k, self.n, self.g, self.viscosity, boundary == "zero"
+            )
+            self._below = self._above
+        self._r, self._theta = sp.symbols("_kramer_r _kramer_theta", positive=True, real=True)
+        r, theta = self._r, self._theta
+        rotation = sp.Matrix([[sp.cos(theta), -sp.sin(theta)], [sp.sin(theta), sp.cos(theta)]])
+        self._polar_fields = []
+        for branch in (self._below, self._above):
+            velocity = cylindrical.analytical_velocity_cartesian_sympy(branch, r, theta, rotation.T)
+            pressure = cylindrical.analytical_pressure_sympy(branch, r, theta)
+            tau = cylindrical.analytical_radial_deviatoric_stress_sympy(branch, r, theta)
+            shear = cylindrical.analytical_radial_shear_stress_sympy(branch, r, theta)
+            stress = (
+                rotation
+                * sp.Matrix([[tau - pressure, shear], [shear, -tau - pressure]])
+                * rotation.T
+            )
+            force = (
+                sp.zeros(2, 1)
+                if density == "delta"
+                else -self.g
+                * (r / self.r_outer) ** self.k
+                * sp.cos(self.n * theta)
+                * rotation[:, 0]
+            )
+            self._polar_fields.append(
+                dict(
+                    velocity=velocity,
+                    pressure=pressure,
+                    stress=stress,
+                    strainrate=(stress + pressure * sp.eye(2)) / (2 * self.viscosity),
+                    viscosity=sp.Float(self.viscosity),
+                    bodyforce=force,
+                    radial_normal_stress=tau - pressure,
+                    radial_shear_stress=shear,
+                )
+            )
+        x, y = mesh.X[0], mesh.X[1]
+        radius = sp.sqrt(x * x + y * y)
+        substitutions = {r: radius, theta: sp.atan2(y, x)}
+
+        def spatial(field):
+            expressions = [item[field] for item in self._polar_fields]
+            if density == "smooth":
+                return expressions[0].subs(substitutions)
+            if isinstance(expressions[0], sp.MatrixBase):
+                return sp.Matrix(
+                    expressions[0].rows,
+                    expressions[0].cols,
+                    lambda i, j: sp.Piecewise(
+                        (expressions[1][i, j], r >= self.r_int), (expressions[0][i, j], True)
+                    ),
+                ).subs(substitutions)
+            return sp.Piecewise((expressions[1], r >= self.r_int), (expressions[0], True)).subs(
+                substitutions
+            )
+
+        self.set_fields(
+            velocity=list(spatial("velocity")),
+            pressure=spatial("pressure"),
+            viscosity=self.viscosity,
+            bodyforce=list(spatial("bodyforce")),
+            stress=spatial("stress"),
+        )
+        self.fn_radial_normal_stress = spatial("radial_normal_stress")
+        self.fn_radial_shear_stress = spatial("radial_shear_stress")
+        self._evaluators = {}
+
+    def evaluate(self, field, coords):
+        """Evaluate a named field in batches; arbitrary expressions use UW3 JIT."""
+        if not isinstance(field, str):
+            return AnalyticSolution.evaluate(self, field, coords)
+        if field not in self._polar_fields[0]:
+            raise ValueError(f"Unknown field {field!r}; available: {sorted(self._polar_fields[0])}")
+        points = np.asarray(coords, dtype=float)
+        if points.ndim != 2 or points.shape[1] != 2 or not np.all(np.isfinite(points)):
+            raise ValueError("coords must be a finite array of shape (N, 2).")
+        radius = np.linalg.norm(points, axis=1)
+        if np.any(radius == 0):
+            raise ValueError("The Kramer shell solution is undefined at the origin.")
+        theta = np.arctan2(points[:, 1], points[:, 0])
+        expression = self._polar_fields[0][field]
+        shape = expression.shape if isinstance(expression, sp.MatrixBase) else ()
+        if field in ("velocity", "bodyforce"):
+            shape = (2,)
+        result = np.empty((len(points), *shape))
+        above = (
+            radius >= self.r_int if self.density == "delta" else np.zeros(len(points), dtype=bool)
+        )
+        for branch, mask in ((0, ~above), (1, above)):
+            if not np.any(mask):
+                continue
+            key = (field, branch, bool(self.evaluation_cse))
+            if key not in self._evaluators:
+                self._compile_evaluator(field, branch)
+            values = self._evaluators[key](radius[mask], theta[mask])
+            flat = np.column_stack(
+                [np.broadcast_to(value, (np.count_nonzero(mask),)) for value in values]
+            )
+            result[mask] = flat.reshape((np.count_nonzero(mask), *shape))
+        return result
+
+    def _compile_evaluator(self, field, branch):
+        key = (field, branch, bool(self.evaluation_cse))
+        if key not in self._evaluators:
+            expression = self._polar_fields[branch][field]
+            terms = list(expression) if isinstance(expression, sp.MatrixBase) else [expression]
+            self._evaluators[key] = sp.lambdify(
+                (self._r, self._theta),
+                terms,
+                "numpy",
+                cse=bool(self.evaluation_cse),
+                docstring_limit=0,
+            )
+
+    def compile_evaluators(self, *fields):
+        """Prepare named-field NumPy evaluators once, without evaluating points."""
+        for field in fields:
+            if field not in self._polar_fields[0]:
+                raise ValueError(f"Unknown Kramer field {field!r}.")
+            for branch in range(2 if self.density == "delta" else 1):
+                self._compile_evaluator(field, branch)
+
+    def error(self, field, meshvar, norm="l2"):
+        """Use cached named-field nodal evaluation or the symbolic integral norm."""
+        if norm != "l2" or not isinstance(field, str):
+            return AnalyticSolution.error(self, field, meshvar, norm)
+        computed = np.asarray(meshvar.array).reshape(len(meshvar.coords), -1)
+        exact = self.evaluate(field, meshvar.coords).reshape(computed.shape)
+        sums = np.array([np.sum((computed - exact) ** 2), np.sum(exact**2)])
+        difference, magnitude = uw.mpi.comm.allreduce(sums)
+        return float(np.sqrt(difference / magnitude))
+
+    def sample_points(self, count=12):
+        """Deterministic bulk points on both sides, excluding the sheet itself."""
+        radii = self.r_inner + (self.r_outer - self.r_inner) * (np.arange(count) + 0.37) / count
+        radii[np.isclose(radii, self.r_int)] += 1e-4 * (self.r_outer - self.r_inner)
+        theta = np.arange(count) * 2.399963229728653
+        return radii[:, None] * np.column_stack((np.cos(theta), np.sin(theta)))
