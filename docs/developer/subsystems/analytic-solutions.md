@@ -138,13 +138,13 @@ units. Comparing an RMS magnitude against a signed reference is invalid.
 
 Thieulot's manufactured fields support velocity/pressure/stress validation;
 their density profiles and driven-wall conditions do not yet have this geoid
-response adapter. Zhong uses `Zhong(...).response()` or the common selector with
+response adapter. Zhong uses `ZhongSphericalStokes(...).response()` or the common selector with
 `case="zhong"`: a mesh-free layered propagator returning response coefficients
 rather than a symbolic field object. It has `symbolic=False`, no `fn_*` fields
 or field-error methods. An optional supplied mesh is checked for dimension only;
 radii and physical parameters are never inferred from it. Its normalized
 response coefficients retain their existing units and conventions. The year
-belongs in the citation, not the API name. Use `Zhong` and `ZhongResponse`;
+belongs in the citation, not the API name. Use `ZhongSphericalStokes` and `ZhongSphericalStokesResponse`;
 the year-suffixed aliases and the old module import path have been removed.
 
 Source ownership follows geometry packages:
@@ -180,13 +180,16 @@ Kramer. Flat case wrappers and flat gravity modules have been removed;
 import case helpers and gravity kernels through their geometry packages.
 This does not restore the removed Zhong year aliases.
 
-Field class names follow `<Case><Geometry>Stokes` uniformly:
+Shell case class names follow `<Case><Geometry>Stokes` uniformly:
 `KramerCylindricalStokes`, `ThieulotCylindricalStokes`,
-`KramerSphericalStokes`, and `ThieulotSphericalStokes`. The optional external
+`KramerSphericalStokes`, `ThieulotSphericalStokes`, and `ZhongSphericalStokes`.
+The optional external
 oracle is `AssessKramerCylindricalStokes`. Old unqualified Kramer names remain
 same-object aliases for existing imports and lookup calls, while `available()`
 lists only canonical names. `StokesSolution` dispatches directly to the named
-case classes. Zhong retains its distinct response API name.
+case classes. `ZhongSphericalStokes.response()` returns
+`ZhongSphericalStokesResponse` with the existing coefficient-response contract.
+The short `Zhong` and `ZhongResponse` names are removed.
 
 `_thieulot_fields.py` implements private prescribed-flow field assembly and
 evaluation shared by the two Thieulot classes. Kramer builds and evaluates
@@ -1097,7 +1100,7 @@ by `available()` because it cannot satisfy that class's symbolic mesh-field
 contract.
 
 ```python
-reference = uw.analytic.Zhong(
+reference = uw.analytic.ZhongSphericalStokes(
     harmonic_degree=2,
     radius_inner=0.55,
     radius_outer=1.0,
@@ -1163,7 +1166,7 @@ The topography coefficients then pass through the generic
 `spherical_shell_self_gravity_response()` functions. The propagator module does
 not carry a second geoid implementation.
 
-`ZhongResponse.surface_topography` and `.surface_geoid` are the
+`ZhongSphericalStokesResponse.surface_topography` and `.surface_geoid` are the
 no-self-gravity quantities. The corresponding Table 2 or Table 3 quantities
 are under `.self_gravity`. Velocity is unchanged by that postprocessing.
 

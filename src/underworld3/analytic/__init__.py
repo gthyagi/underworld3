@@ -47,8 +47,8 @@ from .spherical import (
     KramerSphericalStokes,
     SphericalStokes,
     ThieulotSphericalStokes,
-    Zhong,
-    ZhongResponse,
+    ZhongSphericalStokes,
+    ZhongSphericalStokesResponse,
 )
 from .richards import GardnerSteady, GardnerTransient
 from .transport import AdvectedFront, ErfcDiffusion, Poisson1D, RotatingGaussian, TwoLayerDarcy
@@ -107,8 +107,8 @@ __all__ = [
     "SolM",
     "SolNL",
     "TwoLayerDarcy",
-    "Zhong",
-    "ZhongResponse",
+    "ZhongSphericalStokes",
+    "ZhongSphericalStokesResponse",
     "available",
     "describe",
     "is_available",

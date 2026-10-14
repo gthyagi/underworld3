@@ -20,10 +20,12 @@ Shared helper names identify their roles: `_thieulot_fields.py` and
 year-suffixed Zhong API stays absent.
 All original function/class bodies and numerical conventions are unchanged.
 
-### Yearless Zhong analytical API (October 2026)
+### Named Zhong spherical Stokes API (October 2026)
 
 The shell case selector exposes `case="zhong"`, backed by
-`uw.analytic.Zhong` and `ZhongResponse` in `analytic/spherical/zhong.py`. The
+`uw.analytic.ZhongSphericalStokes` and `ZhongSphericalStokesResponse` in
+`analytic/spherical/zhong.py`, matching the Kramer and Thieulot class naming.
+The short `Zhong`/`ZhongResponse` names are removed. The
 year-suffixed class aliases and `analytic.zhong2008` compatibility module
 have been removed at the user's request. Consumers must use the yearless
 names; published references continue to cite Zhong et al. (2008).
@@ -438,7 +440,7 @@ component exactly — correct on curved, tilted, and deformed boundaries (#293).
 - The spherical-shell geoid adapter accepts `projection="reaction"` to use
   the same fitted integral without pointwise P2 recovery or a rank-zero
   surface triangulation; `projection="centroid"` remains the default.
-- `uw.analytic.Zhong2008` implements the Hager--O'Connell propagator-matrix
+- `uw.analytic.ZhongSphericalStokes` implements the Hager--O'Connell propagator-matrix
   oracle used for the Zhong et al. spherical-shell response benchmark. It
   supports piecewise-constant radial viscosity and reproduces every analytical
   response printed in Zhong Tables 2 and 3; geoid and self-gravity are delegated

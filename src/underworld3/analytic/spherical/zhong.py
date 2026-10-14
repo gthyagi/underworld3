@@ -39,11 +39,11 @@ from underworld3.postprocessing.geoid import (
 )
 
 
-__all__ = ["Zhong", "ZhongResponse"]
+__all__ = ["ZhongSphericalStokes", "ZhongSphericalStokesResponse"]
 
 
 @dataclass(frozen=True)
-class ZhongResponse:
+class ZhongSphericalStokesResponse:
     r"""Boundary response coefficients for one harmonic delta load.
 
     ``surface_topography``, ``cmb_topography``, and the two corresponding geoid
@@ -64,7 +64,7 @@ class ZhongResponse:
     self_gravity: SelfGravityResponse
 
 
-class Zhong:
+class ZhongSphericalStokes:
     r"""Propagator-matrix reference solution for Zhong et al. (2008).
 
     Parameters
@@ -117,13 +117,13 @@ class Zhong:
     --------
     The isoviscous, degree-two, mid-mantle case from Table 2:
 
-    >>> result = Zhong(harmonic_degree=2, internal_load_radius=0.775).response()
+    >>> result = ZhongSphericalStokes(harmonic_degree=2, internal_load_radius=0.775).response()
     >>> round(result.self_gravity.surface_topography, 4)
     0.4998
 
     The layered case from Table 3 has a :math:`10^4` viscosity lid:
 
-    >>> result = Zhong(
+    >>> result = ZhongSphericalStokes(
     ...     harmonic_degree=2,
     ...     internal_load_radius=0.775,
     ...     viscosity_interfaces=(0.971875,),
@@ -300,7 +300,7 @@ class Zhong:
         surface_state = self._propagate(cmb_state, self.radius_inner, self.radius_outer)
         return cmb_state, surface_state
 
-    def response(self) -> ZhongResponse:
+    def response(self) -> ZhongSphericalStokesResponse:
         r"""Compute no-self-gravity and self-gravity response coefficients."""
 
         cmb_state, surface_state = self._boundary_states()
@@ -338,7 +338,7 @@ class Zhong:
             gravitational_constant=self.gravitational_constant,
         )
 
-        return ZhongResponse(
+        return ZhongSphericalStokesResponse(
             surface_topography=float(surface_topography),
             cmb_topography=float(cmb_topography),
             surface_geoid=geoid.surface_geoid,

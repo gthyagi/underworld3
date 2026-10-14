@@ -51,16 +51,17 @@ class objects as the root namespace. Case and gravity imports use the
 geometry packages directly; the flat case/gravity modules have been removed.
 The removed year-suffixed Zhong aliases/module remain absent.
 
-Concrete field classes consistently use `<Case><Geometry>Stokes`:
+Concrete shell case classes consistently use `<Case><Geometry>Stokes`:
 
-| Geometry | Kramer | Thieulot |
-| --- | --- | --- |
-| Cylindrical | `KramerCylindricalStokes` | `ThieulotCylindricalStokes` |
-| Spherical | `KramerSphericalStokes` | `ThieulotSphericalStokes` |
+| Geometry | Kramer | Thieulot | Zhong |
+| --- | --- | --- | --- |
+| Cylindrical | `KramerCylindricalStokes` | `ThieulotCylindricalStokes` | — |
+| Spherical | `KramerSphericalStokes` | `ThieulotSphericalStokes` | `ZhongSphericalStokes` |
 
-The optional numeric oracle is `AssessKramerCylindricalStokes`. Zhong keeps
-`Zhong` and `ZhongResponse` because it supplies response coefficients rather
-than the field contract. `CylindricalStokes`, `SphericalStokes`, and
+The optional numeric oracle is `AssessKramerCylindricalStokes`.
+`ZhongSphericalStokes.response()` returns `ZhongSphericalStokesResponse`;
+it retains its mesh-free coefficient-response contract. The short `Zhong` and
+`ZhongResponse` names are removed. `CylindricalStokes`, `SphericalStokes`, and
 `AssessCylindricalStokes` remain aliases to the canonical Kramer classes;
 `available()` lists each class once under its canonical name, while
 `describe()` and `is_available()` also accept the historical names.
@@ -114,7 +115,7 @@ point-evaluator measurements, not solver speedups.
 
 ## Zhong spherical-shell response oracle
 
-`Zhong` is a mesh-independent propagator-matrix oracle. It returns the
+`ZhongSphericalStokes` is a mesh-independent propagator-matrix oracle. It returns the
 boundary response coefficients used by the Zhong et al. (2008) benchmark; it
 does not implement the symbolic mesh-field contract above.
 

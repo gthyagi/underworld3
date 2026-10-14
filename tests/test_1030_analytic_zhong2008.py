@@ -328,7 +328,7 @@ def _computed_row(depth_fraction, harmonic_degree, *, layered):
             "viscosities": (1.0, 1.0e4),
         }
 
-    response = uw.analytic.Zhong(
+    response = uw.analytic.ZhongSphericalStokes(
         harmonic_degree=harmonic_degree,
         radius_inner=radius_inner,
         radius_outer=radius_outer,
@@ -366,7 +366,7 @@ def test_layered_responses_match_every_analytic_value_in_table_3(published):
 
 
 def test_no_self_gravity_outputs_match_the_mid_mantle_reference():
-    response = uw.analytic.Zhong().response()
+    response = uw.analytic.ZhongSphericalStokes().response()
 
     assert np.isclose(response.surface_topography, 0.4191904157)
     assert np.isclose(response.cmb_topography, 0.7705825500)
@@ -375,7 +375,7 @@ def test_no_self_gravity_outputs_match_the_mid_mantle_reference():
 
 
 def test_boundary_states_satisfy_impermeable_free_slip():
-    solution = uw.analytic.Zhong(
+    solution = uw.analytic.ZhongSphericalStokes(
         harmonic_degree=8,
         internal_load_radius=0.6625,
         viscosity_interfaces=(0.8, 0.95),
@@ -388,8 +388,8 @@ def test_boundary_states_satisfy_impermeable_free_slip():
 
 
 def test_response_is_linear_in_load_amplitude():
-    unit = uw.analytic.Zhong(internal_load_coefficient=1.0).response()
-    doubled = uw.analytic.Zhong(internal_load_coefficient=2.0).response()
+    unit = uw.analytic.ZhongSphericalStokes(internal_load_coefficient=1.0).response()
+    doubled = uw.analytic.ZhongSphericalStokes(internal_load_coefficient=2.0).response()
 
     unit_values = np.array(
         [
@@ -444,30 +444,34 @@ def test_response_is_linear_in_load_amplitude():
 )
 def test_invalid_parameters_are_rejected(options, error, message):
     with pytest.raises(error, match=message):
-        uw.analytic.Zhong(**options)
+        uw.analytic.ZhongSphericalStokes(**options)
 
 
 def test_zhong_oracle_is_public_but_not_a_symbolic_mesh_solution():
-    assert "Zhong" in uw.analytic.__all__
-    assert "ZhongResponse" in uw.analytic.__all__
-    assert "Zhong" not in uw.analytic.available()
-    assert "Zhong et al. (2008)" in uw.analytic.Zhong.reference
+    assert "ZhongSphericalStokes" in uw.analytic.__all__
+    assert "ZhongSphericalStokesResponse" in uw.analytic.__all__
+    assert "ZhongSphericalStokes" not in uw.analytic.available()
+    assert "Zhong et al. (2008)" in uw.analytic.ZhongSphericalStokes.reference
 
 
-def test_only_yearless_names_and_module_are_available():
+def test_spherical_case_names_without_short_or_year_aliases():
     import importlib.util
     from underworld3.analytic.spherical import zhong
 
-    assert zhong.__all__ == ["Zhong", "ZhongResponse"]
-    assert zhong.Zhong is uw.analytic.Zhong
-    assert zhong.ZhongResponse is uw.analytic.ZhongResponse
-    for namespace in (uw.analytic, zhong):
-        for name in ("Zhong2008", "Zhong2008Response"):
+    assert zhong.__all__ == ["ZhongSphericalStokes", "ZhongSphericalStokesResponse"]
+    assert zhong.ZhongSphericalStokes is uw.analytic.ZhongSphericalStokes
+    assert zhong.ZhongSphericalStokesResponse is uw.analytic.ZhongSphericalStokesResponse
+    assert uw.analytic.spherical.ZhongSphericalStokes is zhong.ZhongSphericalStokes
+    assert uw.analytic.spherical.ZhongSphericalStokesResponse is zhong.ZhongSphericalStokesResponse
+    assert zhong.ZhongSphericalStokes.__name__ == "ZhongSphericalStokes"
+    assert zhong.ZhongSphericalStokesResponse.__name__ == "ZhongSphericalStokesResponse"
+    for namespace in (uw.analytic, uw.analytic.spherical, zhong):
+        for name in ("Zhong", "ZhongResponse", "Zhong2008", "Zhong2008Response"):
             assert name not in namespace.__all__
             assert not hasattr(namespace, name)
     assert importlib.util.find_spec("underworld3.analytic.zhong2008") is None
-    assert uw.analytic.Zhong.__module__ == "underworld3.analytic.spherical.zhong"
-    assert isinstance(zhong.Zhong().response(), uw.analytic.ZhongResponse)
+    assert uw.analytic.ZhongSphericalStokes.__module__ == "underworld3.analytic.spherical.zhong"
+    assert isinstance(zhong.ZhongSphericalStokes().response(), uw.analytic.ZhongSphericalStokesResponse)
 
 
 @pytest.mark.parametrize("degree", [2, 5])
@@ -481,10 +485,10 @@ def test_common_selector_preserves_zhong_parameters_and_response(degree, viscosi
         viscosities=viscosities,
     )
     selected = uw.analytic.StokesSolution(geometry="spherical", case="zhong", **options)
-    assert type(selected) is uw.analytic.Zhong
+    assert type(selected) is uw.analytic.ZhongSphericalStokes
     assert selected.geometry == "spherical" and selected.case == "zhong"
     assert selected.symbolic is False
-    assert selected.response() == uw.analytic.Zhong(**options).response()
+    assert selected.response() == uw.analytic.ZhongSphericalStokes(**options).response()
     assert not hasattr(selected, "fn_velocity")
 
 
@@ -495,7 +499,7 @@ def test_selector_mesh_handling_and_supported_geometry():
     selected = uw.analytic.StokesSolution(
         SimpleNamespace(dim=3), geometry="spherical", case="zhong"
     )
-    assert selected.response() == uw.analytic.Zhong().response()
+    assert selected.response() == uw.analytic.ZhongSphericalStokes().response()
     with pytest.raises(ValueError, match="3D"):
         uw.analytic.StokesSolution(
             SimpleNamespace(dim=2), geometry="spherical", case="zhong"

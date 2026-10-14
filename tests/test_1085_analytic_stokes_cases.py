@@ -26,7 +26,7 @@ def mesh(dim):
         ("cylindrical", "thieulot", "ThieulotCylindricalStokes"),
         ("spherical", "kramer", "KramerSphericalStokes"),
         ("spherical", "thieulot", "ThieulotSphericalStokes"),
-        ("spherical", "zhong", "Zhong"),
+        ("spherical", "zhong", "ZhongSphericalStokes"),
     ],
 )
 def test_geometry_package_owns_each_case(geometry, case, name):
@@ -42,7 +42,7 @@ def test_geometry_package_owns_each_case(geometry, case, name):
     assert inspect.getsourcefile(cls).endswith(f"/analytic/{geometry}/{case}.py")
     assert "https://" in module.__doc__
     if case == "zhong":
-        assert module.__all__ == ["Zhong", "ZhongResponse"]
+        assert module.__all__ == ["ZhongSphericalStokes", "ZhongSphericalStokesResponse"]
         assert not hasattr(module, "Zhong2008")
 
 

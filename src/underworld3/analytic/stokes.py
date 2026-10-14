@@ -14,7 +14,11 @@ spherical shell using CitcomS: https://doi.org/10.1029/2008GC002048
 import math
 
 from .cylindrical import KramerCylindricalStokes, ThieulotCylindricalStokes
-from .spherical import KramerSphericalStokes, ThieulotSphericalStokes, Zhong
+from .spherical import (
+    KramerSphericalStokes,
+    ThieulotSphericalStokes,
+    ZhongSphericalStokes,
+)
 
 
 _CASES = {
@@ -22,7 +26,7 @@ _CASES = {
     "spherical": {
         "kramer": KramerSphericalStokes,
         "thieulot": ThieulotSphericalStokes,
-        "zhong": Zhong,
+        "zhong": ZhongSphericalStokes,
     },
 }
 
@@ -46,7 +50,8 @@ def StokesSolution(mesh=None, *, geometry, case="kramer", **parameters):
 
     Concrete field classes use ``<Case><Geometry>Stokes`` names. Historical
     ``CylindricalStokes`` and ``SphericalStokes`` imports remain aliases.
-    Spherical ``case="zhong"`` returns the mesh-free ``Zhong`` propagator.
+    Spherical ``case="zhong"`` returns the mesh-free ``ZhongSphericalStokes``
+    propagator.
     Use its ``response()`` for coefficients; it has no symbolic mesh fields or
     field-error methods. A supplied mesh is checked for dimension only: geometry,
     viscosity and physical constants come from the explicit parameters, not the
@@ -56,7 +61,7 @@ def StokesSolution(mesh=None, *, geometry, case="kramer", **parameters):
     if case not in names:
         raise ValueError(f"unsupported {geometry} case {case!r}; choose from {names}")
     solution = _CASES[geometry][case]
-    if solution is Zhong:
+    if solution is ZhongSphericalStokes:
         if mesh is not None and mesh.dim != 3:
             raise ValueError(
                 "Zhong is a 3D spherical reference; this mesh must have dim=3."
