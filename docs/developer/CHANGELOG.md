@@ -12,14 +12,18 @@ Cylindrical Kramer/Thieulot implementations now live in `analytic/cylindrical`;
 spherical Kramer/Thieulot/Zhong implementations live in `analytic/spherical`.
 The geometry packages and root namespace export the same classes, with
 `StokesSolution` retaining general geometry/case selection. Thieulot's common
-Cartesian assembly/evaluation code is shared in a private helper. Flat import
-paths retain re-exports only; the removed year-suffixed Zhong API stays absent.
+Cartesian assembly/evaluation code is shared in a private helper. Flat case
+wrappers have been removed; import each case through its geometry package.
+Gravity kernels now live in `cylindrical/gravity.py` and `spherical/gravity.py`.
+Shared helper names identify their roles: `_thieulot_fields.py` and
+`_kramer_geoid.py`. Root class exports remain available. The removed
+year-suffixed Zhong API stays absent.
 All original function/class bodies and numerical conventions are unchanged.
 
 ### Yearless Zhong analytical API (October 2026)
 
 The shell case selector exposes `case="zhong"`, backed by
-`uw.analytic.Zhong` and `ZhongResponse` in `analytic/zhong.py`. The
+`uw.analytic.Zhong` and `ZhongResponse` in `analytic/spherical/zhong.py`. The
 year-suffixed class aliases and `analytic.zhong2008` compatibility module
 have been removed at the user's request. Consumers must use the yearless
 names; published references continue to cite Zhong et al. (2008).

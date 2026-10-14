@@ -7,7 +7,7 @@ https://aspect-documentation.readthedocs.io/en/latest/user/benchmarks/benchmarks
 Each case module owns its symbolic construction and evaluation class.
 """
 
-from . import kramer, thieulot
+from . import gravity, kramer, thieulot
 from .kramer import AssessKramerCylindricalStokes, KramerCylindricalStokes
 from .thieulot import ThieulotCylindricalStokes
 
@@ -16,6 +16,7 @@ AssessCylindricalStokes = AssessKramerCylindricalStokes
 CylindricalStokes = KramerCylindricalStokes
 
 __all__ = [
+    "gravity",
     "kramer",
     "thieulot",
     "KramerCylindricalStokes",

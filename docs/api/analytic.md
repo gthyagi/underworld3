@@ -23,19 +23,19 @@ exposes a separate coefficient-response contract, described below.
 analytic/
 ├── cylindrical/
 │   ├── __init__.py
+│   ├── gravity.py
 │   ├── kramer.py
 │   └── thieulot.py
 ├── spherical/
 │   ├── __init__.py
+│   ├── gravity.py
 │   ├── kramer.py
 │   ├── thieulot.py
 │   └── zhong.py
 ├── _base.py
-├── _shell_fields.py
-├── _shell_response.py
-├── stokes.py
-├── cylindrical_gravity.py
-└── spherical_gravity.py
+├── _thieulot_fields.py
+├── _kramer_geoid.py
+└── stokes.py
 ```
 
 ```python
@@ -44,12 +44,12 @@ reference = uw.analytic.StokesSolution(geometry="spherical", case="zhong", harmo
 ```
 
 Each case module owns its radial formulas and solution/evaluation class.
-The private `_shell_fields.py` helper shares Cartesian field assembly and cached
-array evaluation between the two Thieulot geometries. Gravity kernels and the
-common field/error contract remain shared. Geometry packages expose the same
-class objects as the root namespace. Flat `kramer_cylindrical`,
-`kramer_spherical`, `thieulot`, `zhong` and `kramer` modules contain compatibility
-imports only. The removed year-suffixed Zhong aliases/module remain absent.
+The private `_thieulot_fields.py` helper shares Cartesian field assembly and cached
+array evaluation between the two Thieulot geometries. Each geometry owns its
+gravity kernels; the common field/error contract remains in `_base.py`. Geometry packages expose the same
+class objects as the root namespace. Case and gravity imports use the
+geometry packages directly; the flat case/gravity modules have been removed.
+The removed year-suffixed Zhong aliases/module remain absent.
 
 Concrete field classes consistently use `<Case><Geometry>Stokes`:
 
@@ -65,16 +65,18 @@ than the field contract. `CylindricalStokes`, `SphericalStokes`, and
 `available()` lists each class once under its canonical name, while
 `describe()` and `is_available()` also accept the historical names.
 
-`_shell_fields.py` is private field-assembly/evaluation machinery currently
+`_thieulot_fields.py` is private field-assembly/evaluation machinery currently
 shared by the two Thieulot classes. Their radial formulas stay in the case
 modules. Kramer handles its distinct density branches inside each geometry
-module, so it does not require a parallel `_kramer.py` helper.
+module. `_kramer_geoid.py` shares its stress-to-topography/geoid adapter across
+both geometries. Geometry-specific kernels are in `cylindrical.gravity` and
+`spherical.gravity`.
 
 ## Kramer cylindrical fields
 
 The single `underworld3.analytic.cylindrical.kramer` module owns coefficients,
-symbolic fields and cached numerical evaluators. `analytic.kramer` preserves
-legacy imports without a second implementation.
+symbolic fields and cached numerical evaluators. Import its helpers from
+`analytic.cylindrical.kramer`; there is no flat compatibility module.
 
 `uw.analytic.KramerCylindricalStokes` supplies native symbolic velocity, pressure,
 strain rate and total/radial/shear stress, without requiring `assess`. Named-field
@@ -132,10 +134,10 @@ implementation is shared rather than copied into each benchmark. Spherical
 normalised response coefficients are distinct from physical potential values.
 
 ```{eval-rst}
-.. automodule:: underworld3.analytic.cylindrical_gravity
+.. automodule:: underworld3.analytic.cylindrical.gravity
    :members:
 
-.. automodule:: underworld3.analytic.spherical_gravity
+.. automodule:: underworld3.analytic.spherical.gravity
    :members:
 ```
 
@@ -151,7 +153,7 @@ Real spherical-harmonic conventions and batched evaluators are available in
 
 ## Physical spherical responses and restricted trace support
 
-`analytic.spherical_gravity.spherical_physical_shell_response` returns physical
+`analytic.spherical.gravity.spherical_physical_shell_response` returns physical
 potential and geoid with explicit G, densities and inner/outer gravity. It
 supports sheet/volume forcing and linear interface feedback, recording matrix
 conditioning and residuals. This API is distinct from the normalized Zhong

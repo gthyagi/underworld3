@@ -4,7 +4,7 @@ Stokes reference: Kramer, Davies and Wilson (2021), Analytical solutions for
 mantle flow in cylindrical and spherical shells.
 https://doi.org/10.5194/gmd-14-1899-2021
 Gravity and interface feedback are UW3 extensions using the documented kernels
-in cylindrical_gravity/spherical_gravity, not published Kramer geoid results.
+in cylindrical.gravity/spherical.gravity, not published Kramer geoid results.
 """
 
 from dataclasses import asdict
@@ -98,7 +98,7 @@ class KramerGeoidMixin:
         sheet = source_density_coefficient if self.density == "delta" else 0.0
         volume = source_density_coefficient if self.density == "smooth" else 0.0
         if self.geometry == "spherical":
-            from .spherical_gravity import spherical_physical_shell_response
+            from .spherical.gravity import spherical_physical_shell_response
 
             return spherical_physical_shell_response(
                 radius_inner=self.r_inner,
@@ -117,7 +117,7 @@ class KramerGeoidMixin:
                 density_power=self.k,
                 include_self_gravity=include_self_gravity,
             )
-        from .cylindrical_gravity import (
+        from .cylindrical.gravity import (
             cylindrical_annulus_geoid_response,
             cylindrical_annulus_self_gravity_response,
         )

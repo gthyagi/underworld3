@@ -20,7 +20,7 @@ import sympy as sp
 import underworld3 as uw
 
 from .._base import AnalyticSolution, free_slip, prescribed_velocity
-from .._shell_response import KramerGeoidMixin
+from .._kramer_geoid import KramerGeoidMixin
 
 
 def coefficients_cylinder_delta_fs(Rp, Rm, rp, n, g, nu, sign):

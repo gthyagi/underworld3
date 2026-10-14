@@ -456,7 +456,7 @@ def test_zhong_oracle_is_public_but_not_a_symbolic_mesh_solution():
 
 def test_only_yearless_names_and_module_are_available():
     import importlib.util
-    from underworld3.analytic import zhong
+    from underworld3.analytic.spherical import zhong
 
     assert zhong.__all__ == ["Zhong", "ZhongResponse"]
     assert zhong.Zhong is uw.analytic.Zhong

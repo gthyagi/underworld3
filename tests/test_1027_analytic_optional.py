@@ -27,7 +27,7 @@ import sys
 import numpy as np
 import underworld3 as uw
 
-from underworld3.analytic.kramer import assess_available
+from underworld3.analytic.cylindrical.kramer import assess_available
 
 _real_find_spec = importlib.util.find_spec
 
@@ -39,7 +39,7 @@ needs_assess = pytest.mark.skipif(
 def test_importing_underworld_does_not_need_the_optional_package():
     """The whole point of a lazy import: absence must cost nothing at import."""
 
-    import underworld3.analytic.kramer  # noqa: F401
+    import underworld3.analytic.cylindrical.kramer  # noqa: F401
 
     assert uw.analytic.AssessCylindricalStokes is not None
 
@@ -107,7 +107,7 @@ def test_the_absence_simulation_actually_blocks(without_assess):
     package, and would look like coverage of a path they never touched.
     """
 
-    from underworld3.analytic import kramer
+    from underworld3.analytic.cylindrical import kramer
 
     assert not uw.analytic.is_available("AssessCylindricalStokes")
     with pytest.raises(ImportError):

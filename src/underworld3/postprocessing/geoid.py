@@ -122,7 +122,7 @@ def _spherical_shell_geoid_operator(
     internal_load_coefficient: float,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Return the canonical analytical sheet operator and fixed-load vector."""
-    from underworld3.analytic.spherical_gravity import spherical_shell_potential_operator
+    from underworld3.analytic.spherical.gravity import spherical_shell_potential_operator
 
     return spherical_shell_potential_operator(
         radius_inner=radius_inner,
@@ -233,7 +233,7 @@ def spherical_shell_self_gravity_response(
 
 # Import after defining the spherical response API: analytic.Zhong uses
 # that API while the analytic namespace is initialising.
-from underworld3.analytic.cylindrical_gravity import (
+from underworld3.analytic.cylindrical.gravity import (
     CylindricalGravityResponse,
     CylindricalSelfGravityResponse,
     cylindrical_sheet_potential_coefficient,

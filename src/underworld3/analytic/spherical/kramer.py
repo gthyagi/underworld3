@@ -219,7 +219,7 @@ import numpy as np
 from numbers import Integral
 
 from .._base import AnalyticSolution, free_slip, prescribed_velocity
-from .._shell_response import KramerGeoidMixin
+from .._kramer_geoid import KramerGeoidMixin
 from underworld3.maths.spherical_harmonics import (
     AXISYMMETRIC_UNNORMALIZED, solid_harmonic_sympy, validate_harmonic,
 )

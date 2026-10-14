@@ -47,36 +47,36 @@ def test_geometry_package_owns_each_case(geometry, case, name):
 
 
 @pytest.mark.parametrize(
-    "old,current",
+    "old",
     [
-        ("kramer_cylindrical", "cylindrical.kramer"),
-        ("kramer_spherical", "spherical.kramer"),
-        ("zhong", "spherical.zhong"),
+        "kramer", "kramer_cylindrical", "kramer_spherical", "thieulot", "zhong",
+        "cylindrical_gravity", "spherical_gravity", "_shell_fields", "_shell_response",
     ],
 )
-def test_flat_modules_only_reexport_canonical_objects(old, current):
+def test_flat_case_gravity_and_generic_helper_modules_are_removed(old):
+    import importlib.util
+
+    assert importlib.util.find_spec(f"underworld3.analytic.{old}") is None
+
+
+@pytest.mark.parametrize("geometry", ["cylindrical", "spherical"])
+def test_gravity_module_is_owned_by_its_geometry(geometry):
     import importlib
 
-    previous = importlib.import_module(f"underworld3.analytic.{old}")
-    canonical = importlib.import_module(f"underworld3.analytic.{current}")
-    for name in previous.__all__:
-        assert getattr(previous, name) is getattr(canonical, name)
+    module = importlib.import_module(f"underworld3.analytic.{geometry}.gravity")
+    assert module is getattr(uw.analytic, geometry).gravity
+    assert module.__file__.endswith(f"/analytic/{geometry}/gravity.py")
 
 
-def test_shared_shell_field_helper_and_flat_imports():
-    from underworld3.analytic import thieulot
-    from underworld3.analytic._shell_fields import _PrescribedShellStokes
+def test_shared_thieulot_field_base():
+    from underworld3.analytic._thieulot_fields import _ThieulotStokesBase
+    from underworld3.analytic.cylindrical.thieulot import ThieulotCylindricalStokes
+    from underworld3.analytic.spherical.thieulot import ThieulotSphericalStokes
 
-    assert (
-        thieulot.ThieulotCylindricalStokes
-        is uw.analytic.cylindrical.ThieulotCylindricalStokes
-    )
-    assert (
-        thieulot.ThieulotSphericalStokes
-        is uw.analytic.spherical.ThieulotSphericalStokes
-    )
-    assert issubclass(thieulot.ThieulotCylindricalStokes, _PrescribedShellStokes)
-    assert issubclass(thieulot.ThieulotSphericalStokes, _PrescribedShellStokes)
+    assert ThieulotCylindricalStokes is uw.analytic.ThieulotCylindricalStokes
+    assert ThieulotSphericalStokes is uw.analytic.ThieulotSphericalStokes
+    assert issubclass(ThieulotCylindricalStokes, _ThieulotStokesBase)
+    assert issubclass(ThieulotSphericalStokes, _ThieulotStokesBase)
 
 
 @pytest.mark.parametrize(
@@ -123,7 +123,7 @@ def test_kramer_compatibility(geometry, dim, cls):
         ("kramer", "thieulot") if dim == 2 else ("kramer", "thieulot", "zhong")
     )
     assert uw.analytic.stokes_cases(geometry) == expected_cases
-    from underworld3.analytic.kramer import CylindricalStokes
+    from underworld3.analytic.cylindrical.kramer import CylindricalStokes
 
     assert uw.analytic.CylindricalStokes is CylindricalStokes
 

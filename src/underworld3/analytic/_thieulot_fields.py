@@ -1,4 +1,4 @@
-"""Shared Cartesian field assembly and evaluation for prescribed shell flows.
+"""Shared Thieulot stress assembly, prescribed forcing and cached field evaluation.
 
 Geometry-specific radial formulas live in cylindrical/thieulot.py and
 spherical/thieulot.py. Thieulot uses this helper for its two geometries. Kramer owns its branched
@@ -16,7 +16,7 @@ import sympy as sp
 from ._base import AnalyticSolution, prescribed_velocity
 
 
-class _PrescribedShellStokes(AnalyticSolution):
+class _ThieulotStokesBase(AnalyticSolution):
     boundaries = ("Upper", "Lower")
     evaluation_cse = True
     _fields = dict(

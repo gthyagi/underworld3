@@ -6,7 +6,7 @@ import sympy as sp
 import underworld3 as uw
 from underworld3.postprocessing.geoid import spherical_boundary_reaction_coefficient
 from underworld3.maths.spherical_harmonics import real_harmonic_values
-from underworld3.analytic.spherical_gravity import spherical_physical_shell_response
+from underworld3.analytic.spherical.gravity import spherical_physical_shell_response
 
 pytestmark=[pytest.mark.level_1,pytest.mark.tier_a]
 

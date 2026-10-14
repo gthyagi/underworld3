@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from underworld3.analytic.cylindrical_gravity import (
+from underworld3.analytic.cylindrical.gravity import (
     cylindrical_annulus_geoid_response,
     cylindrical_annulus_potential_operator,
     cylindrical_annulus_self_gravity_response,

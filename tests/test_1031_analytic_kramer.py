@@ -7,7 +7,7 @@ import pytest
 import sympy as sp
 import underworld3 as uw
 from underworld3.analytic import _validation
-from underworld3.analytic.kramer import assess_available
+from underworld3.analytic.cylindrical.kramer import assess_available
 
 pytestmark = [pytest.mark.level_1, pytest.mark.tier_a]
 

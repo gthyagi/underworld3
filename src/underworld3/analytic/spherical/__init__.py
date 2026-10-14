@@ -9,7 +9,7 @@ shell using CitcomS: https://doi.org/10.1029/2008GC002048
 Zhong exposes response coefficients; Kramer/Thieulot expose symbolic fields.
 """
 
-from . import kramer, thieulot, zhong
+from . import gravity, kramer, thieulot, zhong
 from .kramer import KramerSphericalStokes
 from .thieulot import ThieulotSphericalStokes
 from .zhong import Zhong, ZhongResponse
@@ -18,6 +18,7 @@ from .zhong import Zhong, ZhongResponse
 SphericalStokes = KramerSphericalStokes
 
 __all__ = [
+    "gravity",
     "kramer",
     "thieulot",
     "zhong",

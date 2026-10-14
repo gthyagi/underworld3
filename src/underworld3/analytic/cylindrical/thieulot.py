@@ -5,7 +5,7 @@ C. Thieulot, E. G. Puckett and R. Gassmoeller:
 https://aspect-documentation.readthedocs.io/en/latest/user/benchmarks/benchmarks/annulus/doc/annulus.html
 This is the documented static manufactured solution; no separate paper is
 claimed. Exact wall velocity is prescribed. Shared Cartesian stress/array
-evaluation machinery lives in the private analytic._shell_fields module.
+evaluation machinery lives in the private analytic._thieulot_fields module.
 """
 
 from numbers import Integral
@@ -13,10 +13,10 @@ from numbers import Integral
 import numpy as np
 import sympy as sp
 
-from .._shell_fields import _PrescribedShellStokes
+from .._thieulot_fields import _ThieulotStokesBase
 
 
-class ThieulotCylindricalStokes(_PrescribedShellStokes):
+class ThieulotCylindricalStokes(_ThieulotStokesBase):
     """Thieulot's isoviscous annulus, with prescribed tangential wall velocity.
 
     ``k`` is the nonnegative Fourier mode; ``amplitude`` is the integration

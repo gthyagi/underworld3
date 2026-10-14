@@ -153,32 +153,32 @@ Source ownership follows geometry packages:
 analytic/
 ├── cylindrical/
 │   ├── __init__.py
+│   ├── gravity.py
 │   ├── kramer.py
 │   └── thieulot.py
 ├── spherical/
 │   ├── __init__.py
+│   ├── gravity.py
 │   ├── kramer.py
 │   ├── thieulot.py
 │   └── zhong.py
 ├── _base.py
-├── _shell_fields.py
-├── _shell_response.py
-├── stokes.py
-├── cylindrical_gravity.py
-└── spherical_gravity.py
+├── _thieulot_fields.py
+├── _kramer_geoid.py
+└── stokes.py
 ```
 
 Case modules own their radial formulas and solution/evaluation classes. The
-private `_shell_fields.py` helper shares Cartesian stress assembly and cached NumPy
+private `_thieulot_fields.py` helper shares Cartesian stress assembly and cached NumPy
 evaluation between Thieulot's two geometries without duplicating radial
 formulas. `stokes.py` owns selection and coefficient reporting, `_base.py` the
-field/error contract, and `_shell_response.py` the Kramer response adapter.
+field/error contract, and `_kramer_geoid.py` the Kramer response adapter.
 Gravity kernels retain their existing shared owners. All five case classes
 are exported from their geometry package and the root namespace as the same
 objects. The optional `AssessKramerCylindricalStokes` oracle stays with cylindrical
-Kramer. Flat `kramer_cylindrical.py`, `kramer_spherical.py`, `thieulot.py`,
-`zhong.py` and `kramer.py` retain only compatibility imports; they contain no
-maintained formulas. This does not restore the removed Zhong year aliases.
+Kramer. Flat case wrappers and flat gravity modules have been removed;
+import case helpers and gravity kernels through their geometry packages.
+This does not restore the removed Zhong year aliases.
 
 Field class names follow `<Case><Geometry>Stokes` uniformly:
 `KramerCylindricalStokes`, `ThieulotCylindricalStokes`,
@@ -188,10 +188,12 @@ same-object aliases for existing imports and lookup calls, while `available()`
 lists only canonical names. `StokesSolution` dispatches directly to the named
 case classes. Zhong retains its distinct response API name.
 
-`_shell_fields.py` implements private prescribed-flow field assembly and
-evaluation; currently Thieulot uses it. Kramer builds branched density solutions
-and evaluates them inside its geometry modules, so no `_kramer.py` helper is
-needed. The private helper contains no geometry-specific radial formulas.
+`_thieulot_fields.py` implements private prescribed-flow field assembly and
+evaluation shared by the two Thieulot classes. Kramer builds and evaluates
+branched density solutions inside its geometry modules, while `_kramer_geoid.py`
+shares stress-to-topography/geoid conversion. Geometry-specific gravity kernels
+live in `cylindrical.gravity` and `spherical.gravity`. Neither private helper
+contains geometry-specific radial formulas.
 
 ### Symbolic field representation
 

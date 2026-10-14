@@ -7,7 +7,7 @@ import sympy as sp
 from petsc4py import PETSc
 import underworld3 as uw
 from underworld3.maths.spherical_harmonics import real_harmonic_cartesian_sympy, solid_harmonic_sympy, validate_harmonic
-from underworld3.analytic.spherical_gravity import spherical_sheet_potential_coefficient, spherical_volume_density_potential_coefficient
+from underworld3.analytic.spherical.gravity import spherical_sheet_potential_coefficient, spherical_volume_density_potential_coefficient
 from .spherical_interface_load import assemble_spherical_harmonic_sheet_load, project_spherical_harmonic_trace_coefficient
 
 

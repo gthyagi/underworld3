@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 import sympy as sp
 
-from underworld3.analytic import spherical_gravity as gravity
+from underworld3.analytic.spherical import gravity
 from underworld3.maths import spherical_harmonics as harmonics
 
 
