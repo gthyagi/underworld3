@@ -448,7 +448,62 @@ def test_invalid_parameters_are_rejected(options, error, message):
 
 
 def test_zhong_oracle_is_public_but_not_a_symbolic_mesh_solution():
+    assert "Zhong" in uw.analytic.__all__
+    assert "ZhongResponse" in uw.analytic.__all__
+    assert "Zhong" not in uw.analytic.available()
     assert "Zhong2008" in uw.analytic.__all__
     assert "Zhong2008Response" in uw.analytic.__all__
     assert "Zhong2008" not in uw.analytic.available()
     assert "Zhong et al. (2008)" in uw.analytic.Zhong2008.reference
+
+
+def test_yearless_names_and_historical_imports_are_identical():
+    from underworld3.analytic import zhong, zhong2008
+
+    assert uw.analytic.Zhong is uw.analytic.Zhong2008
+    assert uw.analytic.ZhongResponse is uw.analytic.Zhong2008Response
+    for module in (zhong, zhong2008):
+        assert module.Zhong is module.Zhong2008 is uw.analytic.Zhong
+        assert (
+            module.ZhongResponse
+            is module.Zhong2008Response
+            is uw.analytic.ZhongResponse
+        )
+    assert uw.analytic.Zhong.__module__ == "underworld3.analytic.zhong"
+    assert isinstance(zhong2008.Zhong2008().response(), uw.analytic.ZhongResponse)
+
+
+@pytest.mark.parametrize("degree", [2, 5])
+@pytest.mark.parametrize("viscosities", [(1.0, 1.0), (1.0, 1.0e4)])
+def test_common_selector_preserves_zhong_parameters_and_response(degree, viscosities):
+    options = dict(
+        harmonic_degree=degree,
+        internal_load_radius=0.73,
+        internal_load_coefficient=0.61,
+        viscosity_interfaces=(0.971875,),
+        viscosities=viscosities,
+    )
+    selected = uw.analytic.StokesSolution(geometry="spherical", case="zhong", **options)
+    assert type(selected) is uw.analytic.Zhong
+    assert selected.geometry == "spherical" and selected.case == "zhong"
+    assert selected.symbolic is False
+    assert selected.response() == uw.analytic.Zhong(**options).response()
+    assert not hasattr(selected, "fn_velocity")
+
+
+def test_selector_mesh_handling_and_supported_geometry():
+    from types import SimpleNamespace
+
+    # A mesh is optional for the propagator; it supplies no physical parameters.
+    selected = uw.analytic.StokesSolution(
+        SimpleNamespace(dim=3), geometry="spherical", case="zhong"
+    )
+    assert selected.response() == uw.analytic.Zhong().response()
+    with pytest.raises(ValueError, match="3D"):
+        uw.analytic.StokesSolution(
+            SimpleNamespace(dim=2), geometry="spherical", case="zhong"
+        )
+    with pytest.raises(ValueError, match="unsupported"):
+        uw.analytic.StokesSolution(geometry="cylindrical", case="zhong")
+    with pytest.raises(ValueError, match="requires a mesh"):
+        uw.analytic.StokesSolution(geometry="spherical", case="kramer")

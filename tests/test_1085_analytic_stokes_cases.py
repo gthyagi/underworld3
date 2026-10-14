@@ -30,7 +30,10 @@ def test_kramer_compatibility(geometry, dim, cls):
     sol = uw.analytic.StokesSolution(mesh(dim), geometry=geometry)
     assert type(sol) is cls
     assert sol.geometry == geometry and sol.case == "kramer"
-    assert uw.analytic.stokes_cases(geometry) == ("kramer", "thieulot")
+    expected_cases = (
+        ("kramer", "thieulot") if dim == 2 else ("kramer", "thieulot", "zhong")
+    )
+    assert uw.analytic.stokes_cases(geometry) == expected_cases
     from underworld3.analytic.kramer import CylindricalStokes
 
     assert uw.analytic.CylindricalStokes is CylindricalStokes

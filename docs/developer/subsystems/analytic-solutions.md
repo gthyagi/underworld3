@@ -22,7 +22,7 @@ module*, which is why the suite could not grow there: the name is owned by a
 
 ### Cylindrical and spherical Stokes cases
 
-Use one geometry/case selector for the native shell solutions:
+Use one geometry/case selector for the native shell solutions and references:
 
 ```python
 sol = uw.analytic.StokesSolution(
@@ -40,10 +40,17 @@ sol = uw.analytic.StokesSolution(
     mesh, geometry="spherical", case="thieulot", m=3,
     r_inner=0.5, r_outer=1.0, mu_0=1.0,
 )
+# Zhong's layered response reference does not need a mesh:
+reference = uw.analytic.StokesSolution(
+    geometry="spherical", case="zhong", harmonic_degree=5,
+    viscosity_interfaces=(0.971875,), viscosities=(1.0, 1.0e4),
+)
+response = reference.response()
 ```
 
 `stokes_cases(geometry)` lists supported cases. The factory returns the concrete
-`AnalyticSolution`; it does not wrap fields or duplicate formulas. Existing
+field solution or response reference; it does not wrap or duplicate formulas.
+Existing
 `CylindricalStokes` and `SphericalStokes` names remain the same Kramer classes,
 including their old import paths and constructor defaults.
 
@@ -53,6 +60,7 @@ including their old import paths and constructor defaults.
 | spherical / kramer | ell degree, m order, component, normalization, k density power; delta/smooth, free/zero slip | same slip choices | free-slip cases |
 | cylindrical / thieulot | k Fourier mode >=0, C=`amplitude`, constant `viscosity`, optional `rho_0` | prescribed exact wall velocity | not supplied |
 | spherical / thieulot | m viscosity exponent parameter, gamma, mu_0; eta=mu_0*r**(m+1) | prescribed exact wall velocity | not supplied |
+| spherical / zhong | harmonic_degree, load radius/amplitude, viscosity_interfaces and viscosities | impermeable free slip in the radial propagator | response(), including self-gravity |
 
 Parameters retain their published case meanings: Thieulot spherical `m` is not
 Kramer harmonic order. Its m=-1 case has constant viscosity, m=3 is a commonly
@@ -130,8 +138,15 @@ units. Comparing an RMS magnitude against a signed reference is invalid.
 
 Thieulot's manufactured fields support velocity/pressure/stress validation;
 their density profiles and driven-wall conditions do not yet have this geoid
-response adapter. Zhong remains `Zhong2008(...).response()`: a mesh-free layered
-propagator returning response coefficients rather than a symbolic field object.
+response adapter. Zhong uses `Zhong(...).response()` or the common selector with
+`case="zhong"`: a mesh-free layered propagator returning response coefficients
+rather than a symbolic field object. It has `symbolic=False`, no `fn_*` fields
+or field-error methods. An optional supplied mesh is checked for dimension only;
+radii and physical parameters are never inferred from it. Its normalized
+response coefficients retain their existing units and conventions. The year
+belongs in the citation, not the canonical API name; `Zhong2008` and
+`Zhong2008Response` remain identical compatibility aliases for `Zhong` and
+`ZhongResponse`.
 
 Source ownership is `stokes.py` (selection and coefficient reporting), `_base.py`
 (shared field/error contract), `kramer_cylindrical.py`, `kramer_spherical.py` and
@@ -139,6 +154,7 @@ Source ownership is `stokes.py` (selection and coefficient reporting), `_base.py
 `_shell_response.py` (Kramer stress-to-response adapter), and the existing
 `cylindrical_gravity.py`/`spherical_gravity.py` kernels. `kramer.py` retains
 compatibility imports; `AssessCylindricalStokes` is an optional numeric oracle.
+`zhong.py` owns the propagator; `zhong2008.py` retains compatibility imports.
 
 ### Symbolic field representation
 
@@ -1042,7 +1058,7 @@ by `available()` because it cannot satisfy that class's symbolic mesh-field
 contract.
 
 ```python
-reference = uw.analytic.Zhong2008(
+reference = uw.analytic.Zhong(
     harmonic_degree=2,
     radius_inner=0.55,
     radius_outer=1.0,
@@ -1108,7 +1124,7 @@ The topography coefficients then pass through the generic
 `spherical_shell_self_gravity_response()` functions. The propagator module does
 not carry a second geoid implementation.
 
-`Zhong2008Response.surface_topography` and `.surface_geoid` are the
+`ZhongResponse.surface_topography` and `.surface_geoid` are the
 no-self-gravity quantities. The corresponding Table 2 or Table 3 quantities
 are under `.self_gravity`. Velocity is unchanged by that postprocessing.
 
