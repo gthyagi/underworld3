@@ -19,6 +19,10 @@ whichever one you use.
 
 ## Kramer cylindrical fields
 
+The single `underworld3.analytic.kramer_cylindrical` module owns coefficients,
+symbolic fields and cached numerical evaluators. `analytic.kramer` preserves
+legacy imports without a second implementation.
+
 `uw.analytic.CylindricalStokes` supplies native symbolic velocity, pressure,
 strain rate and total/radial/shear stress, without requiring `assess`. Named-field
 evaluation uses cached vectorised NumPy evaluators with CSE; symbolic expressions
