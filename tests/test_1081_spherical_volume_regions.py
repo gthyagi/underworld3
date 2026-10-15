@@ -6,7 +6,7 @@ import pytest
 import sympy as sp
 from petsc4py import PETSc
 import underworld3 as uw
-from underworld3.postprocessing.spherical_potential import _volume_region_indicator
+from underworld3.utilities._spherical_potential import _volume_region_indicator
 
 pytestmark=[pytest.mark.level_1,pytest.mark.tier_a]
 

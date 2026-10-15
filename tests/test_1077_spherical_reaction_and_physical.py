@@ -59,7 +59,7 @@ def test_physical_load_operator_and_feedback(ell):
 
 
 def test_trace_quadrature_preserves_constant_and_linear_moments():
-    from underworld3.postprocessing.spherical_interface_load import _triangle_p2_load
+    from underworld3.utilities._spherical_interface_load import _triangle_p2_load
     vertices=np.array([[1.,0,0],[0,1.,0],[0,0,1.]])
     b=_triangle_p2_load(vertices,harmonic_degree=0,harmonic_order=0,harmonic_component='cos',
         harmonic_normalization='axisymmetric_unnormalized',source_amplitude=1.,quadrature_points=8)

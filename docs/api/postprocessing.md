@@ -44,13 +44,15 @@ discrete mean source. The Stokes sheet installer returns a callback-owned
 linear equation is $Jx=-b_{\mathrm{sheet}}$. These signs and ownership rules
 are part of the API contract.
 
-Despite its current module path, `install_linear_spherical_stokes_sheet_load`
-is **solver setup**: call it before `stokes.solve()`. It installs a conforming
-internal-interface forcing term rather than deriving a quantity from a completed
-solution. Its placement alongside the potential trace integrators is an
-ownership issue; a future solver API should expose this load through a Stokes
-method, with assembly support under solver utilities. The current path remains
-available while that separate API change is reviewed.
+The canonical Stokes entry point is
+`stokes.install_linear_spherical_sheet_load(...)`, called before `stokes.solve()`.
+The old free-function installer delegates to that method. Both use one private
+utility implementation and preserve the callback-owned residual vector.
+
+The spherical potential workflow delegates the base solve and sheet correction
+to `poisson.solve_linear_spherical_sheet_sources(...)`. Private utilities own
+facet assembly, communicator checks, KSP/DM work vectors and volume-region support.
+Trace projection and potential/geoid recovery remain postprocessing operations.
 
 ```{eval-rst}
 .. automodule:: underworld3.postprocessing.spherical_interface_load

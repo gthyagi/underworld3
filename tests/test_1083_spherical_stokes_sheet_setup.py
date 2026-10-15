@@ -7,7 +7,9 @@ import pytest
 from scipy.integrate import dblquad
 from petsc4py import PETSc
 import underworld3 as uw
-from underworld3.postprocessing.spherical_interface_load import install_linear_spherical_stokes_sheet_load
+
+
+pytestmark = [pytest.mark.level_1, pytest.mark.tier_b]
 
 
 @pytest.mark.parametrize('viscosity_case', ('uniform', 'smooth_spatial', 'layered_spatial'))
@@ -44,8 +46,8 @@ def test_sheet_adapter_sets_up_lazy_snes_and_releases_rhs(viscosity_case):
             J.mult(vector,linear);linear.axpy(-1.,native)
             assert linear.norm()<1e-12*max(native.norm(),1.)
     # Top is z=2 for this box. No solve/nullspace setup can hide lazy matrices.
-    arguments=dict(stokes=stokes,interface='Top',harmonic_degree=1,density_coefficient=1.)
-    rhs=install_linear_spherical_stokes_sheet_load(**arguments)
+    arguments=dict(interface='Top',harmonic_degree=1,density_coefficient=1.)
+    rhs=stokes.install_linear_spherical_sheet_load(**arguments)
     assert bool(stokes.snes.getJacobian()[0]) and rhs.norm()>0.
     iset,subdm=stokes._subdict['velocity']
     sub=rhs.getSubVector(iset)
@@ -74,14 +76,14 @@ def test_sheet_adapter_sets_up_lazy_snes_and_releases_rhs(viscosity_case):
                 subdm.localToGlobal(local,global_,addv=PETSc.InsertMode.INSERT_VALUES)
                 assert abs(float(sub.dot(global_)))<1e-12*max(rhs.norm(),1.)
     finally:rhs.restoreSubVector(iset,sub)
-    second=install_linear_spherical_stokes_sheet_load(**(arguments|{'density_coefficient':-.7}))
+    second=stokes.install_linear_spherical_sheet_load(**(arguments|{'density_coefficient':-.7}))
     assert not bool(rhs) and second.norm()>0.
     # A full DM rebuild must also release the callback's old layout/vector.
     stokes.is_setup=False
     stokes._needs_dm_rebuild=True
     stokes._build(False,False,None)
     assert not bool(second) and stokes._linear_spherical_sheet_rhs is None
-    third=install_linear_spherical_stokes_sheet_load(**arguments)
+    third=stokes.install_linear_spherical_sheet_load(**arguments)
     stokes._reset()
     assert not bool(third)
 
@@ -100,5 +102,5 @@ def test_sheet_adapter_rejects_unknown_dependent_viscosity(dependence):
     stokes.constitutive_model.Parameters.shear_viscosity_0=1+coefficient**2
     stokes.bodyforce=sp.zeros(1,3)
     with pytest.raises(ValueError,match='solution-independent viscosity'):
-        install_linear_spherical_stokes_sheet_load(stokes=stokes,interface='Top',
+        stokes.install_linear_spherical_sheet_load(interface='Top',
             harmonic_degree=1,density_coefficient=1.)

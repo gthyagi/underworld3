@@ -571,6 +571,80 @@ class SNES_Poisson(_ConstitutiveModelStateMixin, SNES_Scalar):
 
         self._constitutive_model = None
 
+    def solve_linear_spherical_sheet_sources(self, *, load_variable,
+            harmonic_degree, sheet_densities=None, harmonic_order=0,
+            harmonic_component="cos", harmonic_normalization="axisymmetric_unnormalized",
+            sheet_modes=(), gravitational_constant=1., solver_options=None, tolerance=None):
+        r"""Solve a configured linear gravity Poisson system with spherical sheet sources.
+
+        Parameters
+        ----------
+        load_variable : underworld3.discretisation.MeshVariable
+            Caller-created continuous scalar P2 assembly field on this mesh, distinct
+            from the solution. Create it before configuring/building the solver.
+        harmonic_degree : int
+            Positive spherical-harmonic degree shared by all sheet modes.
+        sheet_densities : mapping or None, default=None
+            Interface names mapped to signed surface-density coefficients for the
+            primary harmonic; None supplies no primary sheets.
+        harmonic_order : int, default=0
+            Harmonic order between zero and harmonic_degree.
+        harmonic_component : {"cos", "sin"}, default="cos"
+            Real angular component; order zero requires cos.
+        harmonic_normalization : str, default="axisymmetric_unnormalized"
+            Angular basis used by every source. Use real_orthonormal for nonzero order.
+        sheet_modes : sequence of dict, default=()
+            Additional same-degree modes with sheet_densities and optional harmonic
+            degree/order/component/normalization, matching the potential workflow.
+        gravitational_constant : float, default=1
+            Finite positive G in units consistent with density and mesh lengths.
+        solver_options : mapping or None, default=None
+            Correction KSP options: ksp_type defaults to gmres, pc_type to gamg.
+            Base-solver options are already configured on this Poisson object.
+        tolerance : float or None, default=None
+            Positive relative correction tolerance; None uses self.tolerance.
+            Absolute tolerance stays 1e-12 and the iteration cap stays 1000.
+
+        Returns
+        -------
+        dict
+            solver_reason and load_diagnostics. The caller's solution field contains
+            the base volume/boundary solution plus the sheet correction. Diagnostic
+            keys are interface names or mode<index>:<interface> for additional modes.
+
+        Raises
+        ------
+        TypeError
+            Harmonic inputs have invalid types or an unsupported constitutive model is used.
+        ValueError
+            Mesh, field, density, diffusivity, tolerance or mode configuration is invalid.
+        KeyError
+            An additional mode lacks sheet_densities.
+        RuntimeError
+            The base or correction solve fails or a P2 trace cannot be mapped.
+
+        Notes
+        -----
+        Call collectively. Restricted to a three-dimensional scalar continuous-P2
+        Poisson gravity system with DiffusionModel and unit diffusivity; it is not a
+        general nonlinear source hook. Volume forcing and exterior boundary data must
+        already be configured. The base solve runs first, then uniquely owned facet
+        loads are assembled with their discrete uniform mean removed. Degree zero is
+        unsupported. This uses the existing native Jacobian and preserves a copy of
+        the base solution before borrowing DM work vectors. The base solve_report
+        continues to describe the base solve; solver_reason records the correction.
+        """
+        from underworld3.utilities._spherical_potential import (
+            _solve_linear_spherical_sheet_sources,
+        )
+        return _solve_linear_spherical_sheet_sources(
+            self, load_variable=load_variable, harmonic_degree=harmonic_degree,
+            sheet_densities=sheet_densities, harmonic_order=harmonic_order,
+            harmonic_component=harmonic_component,
+            harmonic_normalization=harmonic_normalization,
+            sheet_modes=sheet_modes, gravitational_constant=gravitational_constant,
+            solver_options=solver_options, tolerance=tolerance)
+
     # =========================================================================
     # PETSc Residual Templates
     # For the Poisson equation: -∇·(k∇u) = f
@@ -1464,6 +1538,82 @@ class SNES_Stokes(_ConstitutiveModelStateMixin, SNES_Stokes_SaddlePt):
 
 
     instances = 0
+
+    def install_linear_spherical_sheet_load(self, *, interface, harmonic_degree,
+            density_coefficient, harmonic_order=0, harmonic_component="cos",
+            harmonic_normalization="axisymmetric_unnormalized", quadrature_points=8,
+            modes=None):
+        r"""Install a radial-sheet residual in a linear continuous-P2 Stokes system.
+
+        Configure this solver with continuous P2 velocity, fixed solution-independent
+        viscosity, zero bulk force and homogeneous walls before installation.
+        The adapter supports ViscousFlowModel on 3D straight triangular facets.
+
+        Parameters
+        ----------
+        interface : str
+            Member name in ``stokes.mesh.boundaries`` for the straight triangular facets.
+        harmonic_degree : int
+            Spherical-harmonic degree, at least 1.
+        harmonic_order : int, default=0
+            Order satisfying ``0 <= harmonic_order <= harmonic_degree``.
+        harmonic_component : {"cos", "sin"}, default="cos"
+            Real angular component. Order zero requires ``"cos"``.
+        harmonic_normalization : {"axisymmetric_unnormalized", "real_orthonormal"}, default="axisymmetric_unnormalized"
+            Angular normalization used by both sources and projections. The default
+            is ``P_l(cos(theta))`` and is restricted to order zero. Use
+            ``"real_orthonormal"`` for non-axisymmetric modes.
+        density_coefficient : float
+            Finite signed amplitude of the radial sheet term in Stokes residual units.
+            No ``4*pi*G`` factor is applied. It is added to the residual as
+            ``density_coefficient*Y*e_r``; see the residual sign convention below.
+        quadrature_points : int, default=8
+            At least two Gauss points per transformed triangle coordinate.
+        modes : sequence of dict or None, default=None
+            Optional nonempty multi-mode specification replacing the single mode.
+            Each mapping requires ``harmonic_degree`` and ``density_coefficient``;
+            ``harmonic_order``, ``harmonic_component`` and ``harmonic_normalization``
+            default to 0, ``"cos"`` and the function's normalization respectively.
+            Different degrees may share one Stokes operator. The single-mode arguments
+            remain required by the signature but are ignored when ``modes`` is supplied.
+
+        Returns
+        -------
+        petsc4py.PETSc.Vec
+            Coupled global vector ``b_sheet`` with sheet entries in the velocity block
+            and zeros in the pressure block. The Stokes callback owns this vector:
+            callers may inspect it but must not mutate or destroy it. Reinstallation,
+            reset or a DM rebuild releases the previous vector.
+
+        Raises
+        ------
+        TypeError
+            Harmonic degree or order has an invalid type, or a mode has malformed types.
+        KeyError
+            A mode specification lacks a required entry.
+        ValueError
+            Mesh, field, modes, interface, quadrature, viscosity, body force or boundary
+            data do not satisfy the restricted linear-adapter contract.
+
+        Notes
+        -----
+        Call collectively, instead of adding the same internal sheet as a natural BC.
+        The native Jacobian is retained and the callback evaluates
+        ``F(x)=J*x+b_sheet``; the algebraic equation is therefore ``J*x=-b_sheet``.
+        The vector is a residual load, not a separately sign-reversed force RHS.
+        Consistent facet coordinates and radial directions give zero work against
+        rigid rotations. Empty local interface strata are allowed, empty mesh charts
+        and proper subcommunicators are not. Reinstall after model/mesh setup changes.
+        """
+        from underworld3.utilities._spherical_interface_load import (
+            _install_linear_spherical_stokes_sheet_load,
+        )
+        return _install_linear_spherical_stokes_sheet_load(
+            stokes=self, interface=interface, harmonic_degree=harmonic_degree,
+            density_coefficient=density_coefficient, harmonic_order=harmonic_order,
+            harmonic_component=harmonic_component,
+            harmonic_normalization=harmonic_normalization,
+            quadrature_points=quadrature_points, modes=modes)
 
     def __init__(
         self,

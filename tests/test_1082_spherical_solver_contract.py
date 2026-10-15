@@ -4,9 +4,11 @@ from mpi4py import MPI
 from petsc4py import PETSc
 import pytest
 import underworld3 as uw
-from underworld3.postprocessing._spherical_solver_contract import require_native_solver_mesh
+from underworld3.utilities._spherical_solver_contract import require_native_solver_mesh
 from underworld3.postprocessing.spherical_potential import solve_spherical_potential
 
+
+pytestmark = [pytest.mark.level_1, pytest.mark.tier_b]
 
 def test_world_mesh_with_one_empty_chart_is_rejected_collectively():
     dm=PETSc.DMPlex().create(comm=uw.mpi.comm)

@@ -1,11 +1,16 @@
 """A DM work-vector alias must not overwrite the base Poisson solution."""
 from types import SimpleNamespace
+import pytest
 import numpy as np
 import sympy as sp
 from underworld3.postprocessing import spherical_potential as module
 
 
-def test_sheet_correction_preserves_volume_solution_when_dm_reuses_snes_storage(monkeypatch):
+pytestmark = [pytest.mark.level_1, pytest.mark.tier_a]
+
+
+@pytest.mark.parametrize("sheet_enabled", (True, False))
+def test_sheet_correction_preserves_volume_solution_when_dm_reuses_snes_storage(monkeypatch, sheet_enabled):
     class Vec:
         def __init__(self,value=0.):self.array=np.array([value],dtype=float)
         def set(self,value):self.array[:]=value
@@ -26,21 +31,33 @@ def test_sheet_correction_preserves_volume_solution_when_dm_reuses_snes_storage(
         def restoreLocalVec(self,vec):pass
         def restoreGlobalVec(self,vec):pass
         def localToGlobal(self,local,global_,addv):global_.array[:]=local.array
-    from underworld3.postprocessing import _spherical_solver_contract
+    from underworld3.utilities import _spherical_solver_contract
+    from underworld3.utilities import _spherical_potential as implementation
+    method = module.uw.systems.Poisson.solve_linear_spherical_sheet_sources
     monkeypatch.setattr(_spherical_solver_contract, "require_native_solver_mesh", lambda mesh: None)
+    monkeypatch.setattr(implementation, "require_native_solver_mesh", lambda mesh: None)
     dm=DM()
     variables=[]
     def variable(*args,**kwargs):
         local=Vec()
-        value=SimpleNamespace(sym=[sp.Symbol('phi')],field_id=0,_gvec=Vec(),vec=local,_lvec=local,value=0.,_sync_lvec_to_gvec=lambda:None)
+        value=SimpleNamespace(mesh=args[1], degree=2, continuous=True, num_components=1, sym=[sp.Symbol('phi')],field_id=len(variables),_gvec=Vec(),vec=local,_lvec=local,value=0.,_sync_lvec_to_gvec=lambda:None)
         variables.append(value);return value
+    class DiffusionModel:
+        Parameters = SimpleNamespace(diffusivity=1.)
     class Poisson:
+        solve_linear_spherical_sheet_sources = method
         def __init__(self,mesh,u_Field,**kwargs):
-            self.dm=dm;self.field=u_Field;self.petsc_options={}
+            self.dm=dm;self.mesh=mesh;self.u=u_Field;self.field=u_Field;self.petsc_options={}
+            self.constitutive_model = DiffusionModel()
             self.snes=SimpleNamespace(getSolution=lambda:dm.base,getJacobian=lambda:(object(),))
             self.solve_report=SimpleNamespace(converged=True,reason=1)
+        @property
+        def constitutive_model(self): return self._constitutive_model
+        @constitutive_model.setter
+        def constitutive_model(self, value):
+            self._constitutive_model = value() if isinstance(value, type) else value
         def add_natural_bc(self,*args):pass
-        def solve(self):pass
+        def solve(self):self.field.value=float(dm.base.array[0])
         def _scatter_global_to_fields(self,solution):self.field.value=float(solution.array[0])
     class KSP:
         def create(self,comm):return self
@@ -53,16 +70,16 @@ def test_sheet_correction_preserves_volume_solution_when_dm_reuses_snes_storage(
         def destroy(self):pass
     monkeypatch.setattr(module.uw.discretisation,'MeshVariable',variable)
     monkeypatch.setattr(module.uw.systems,'Poisson',Poisson)
-    monkeypatch.setattr(module.uw.constitutive_models,'DiffusionModel',SimpleNamespace(Parameters=SimpleNamespace(diffusivity=1.)))
-    monkeypatch.setattr(module,'PETSc',SimpleNamespace(KSP=KSP,InsertMode=SimpleNamespace(INSERT_VALUES=1)))
-    monkeypatch.setattr(module,'assemble_spherical_harmonic_sheet_load',lambda **kwargs:(Vec(3.),{}))
+    monkeypatch.setattr(module.uw.constitutive_models,'DiffusionModel',DiffusionModel)
+    monkeypatch.setattr(implementation,'PETSc',SimpleNamespace(KSP=KSP,InsertMode=SimpleNamespace(INSERT_VALUES=1)))
+    monkeypatch.setattr(implementation,'_assemble_spherical_harmonic_sheet_load',lambda **kwargs:(Vec(3.),{}))
     monkeypatch.setattr(module,'project_spherical_harmonic_trace_coefficient',lambda **kwargs:kwargs['variable'].value)
     xyz=sp.symbols('x y z',real=True)
     mesh=SimpleNamespace(dim=3,X=sp.Matrix([xyz]),dm=dm,_coords=np.array([[0.,0.,0.]]))
     result=module.solve_spherical_potential(mesh=mesh,field_name='Phi',harmonic_degree=2,
         radius_inner=.55,radius_outer=1.,radius_exterior=1.5,gravitational_constant=.01,
-        sheet_densities={'Internal':1.},volume_density=1.)
+        sheet_densities={'Internal':1.} if sheet_enabled else None,volume_density=1.)
     # The independent base (5) plus the sheet correction (3) is 8. Using the
     # borrowed SNES vector after the KSP overwrites it would instead give 6.
-    assert result['outer_potential']==8.
-    assert result['inner_potential']==8.
+    assert result['outer_potential']==(8. if sheet_enabled else 5.)
+    assert result['inner_potential']==(8. if sheet_enabled else 5.)

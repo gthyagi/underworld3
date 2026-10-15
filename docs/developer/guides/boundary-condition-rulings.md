@@ -87,3 +87,26 @@ given as `None` (or `sympy.oo`) are left free. Three things to know:
 - A boundary condition on a field that is not the solver's unknown (a
   pressure datum on a Stokes solver) is accepted by the solver but not by
   the adjoint, which refuses rather than drop it.
+
+## Restricted spherical sheet forcing
+
+For linear spherical benchmarks, configure homogeneous walls and fixed viscosity,
+then use `stokes.install_linear_spherical_sheet_load(...)` before `stokes.solve()`.
+The adapter supports 3D straight triangular facets and continuous P2 velocity,
+zero bulk force and solution-independent `ViscousFlowModel` viscosity. Install it
+instead of adding the same sheet as a natural condition. Its retained vector is
+`b_sheet` in `F(x)=J*x+b_sheet`; the algebraic RHS is `-b_sheet`. Callers may inspect
+the borrowed vector, but must not mutate/destroy it or use it after reset,
+reinstallation or DM rebuilding. The existing compiled cleanup hooks own release.
+
+For a configured gravity Poisson system, use
+`poisson.solve_linear_spherical_sheet_sources(...)`. Create the distinct scalar
+P2 load field before building the solver and configure volume/exterior data first.
+The method supports linear unit-diffusivity `DiffusionModel`; it performs the base
+solve and mean-corrected sheet correction. It is not a general nonlinear source
+hook. The potential workflows retain scientific orchestration and trace recovery.
+
+These methods lazily import private utility implementations. The old Stokes
+free-function entry point delegates to the method during migration. See the
+[postprocessing API](../../api/postprocessing.md) for source conventions and
+[solver API](../../api/solvers.md) for method parameter contracts.

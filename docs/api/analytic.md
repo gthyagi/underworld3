@@ -218,17 +218,21 @@ traces on straight triangular facets of 3D meshes. Facets contribute on their
 owning rank and shared DOFs are added collectively on the mesh communicator.
 Temporary PETSc objects are released on exceptions.
 
-The restricted `install_linear_spherical_stokes_sheet_load` applies radial
+The restricted `Stokes.install_linear_spherical_sheet_load` method applies radial
 sheet forcing to linear ViscousFlowModel/P2 velocity systems with fixed constant or spatial viscosity after
 homogeneous wall conditions and solver policy have been configured. It uses the
 native assembled Jacobian and an explicit owned-facet weak RHS, whose moment
 against rigid rotations is zero. It rejects nonlinear models, other natural
 loads and nonzero essential data. Reinstall after any model/mesh setup change;
 it is not a general nonlinear residual hook. This is pre-solve load installation;
-its current postprocessing module location is an ownership issue for a separate
-Stokes API change. The generic natural-load route
+its implementation lives in `utilities/_spherical_interface_load.py`. The old
+postprocessing free-function path delegates to the solver method. The generic natural-load route
 remains available for diagnostics, but the benchmark records a same-mesh MPI
 compatibility discrepancy for that route.
+
+`Poisson.solve_linear_spherical_sheet_sources` owns the base solve and correction
+for a configured linear unit-diffusivity P2 gravity system. Its private utility
+retains a base-solution copy before borrowing DM work vectors.
 
 `postprocessing.spherical_potential.solve_spherical_potential` keeps geometry,
 labels and solver options caller-owned. Its full-ball continuation defaults to
