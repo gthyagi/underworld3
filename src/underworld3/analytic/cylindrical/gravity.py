@@ -27,7 +27,16 @@ import numpy as np
 
 @dataclass(frozen=True)
 class CylindricalGravityResponse:
-    """Potential and geoid coefficients at the outer and inner boundaries."""
+    r"""Cylindrical potential and geoid coefficients without interface feedback.
+
+    Attributes
+    ----------
+    outer_potential, inner_potential : float
+        Signed coefficients of ``cos(n*theta)`` at the annulus boundaries, in
+        potential units (length^2/time^2 for consistent physical inputs).
+    outer_geoid, inner_geoid : float
+        Potential divided by the corresponding reference gravity. Units are length
+        for physical inputs, or the caller's consistently nondimensional units."""
 
     outer_potential: float
     inner_potential: float
@@ -37,7 +46,26 @@ class CylindricalGravityResponse:
 
 @dataclass(frozen=True)
 class CylindricalSelfGravityResponse:
-    """Self-gravity-corrected cylindrical response coefficients."""
+    r"""Cylindrical interface response after potential-displacement feedback.
+
+    Attributes
+    ----------
+    outer_topography, inner_topography : float
+        Corrected signed outward-displacement cosine coefficients, in length units.
+    outer_potential, inner_potential : float
+        Corrected potential cosine coefficients, in potential units.
+    outer_geoid, inner_geoid : float
+        Corrected potential divided by each boundary's reference gravity.
+    q_outer, q_inner : float
+        Feedback factors converting potential to displacement, normally ``1/g``.
+    matrix_residual_norm : float
+        Euclidean norm of the two-interface displacement-equation residual.
+        This is not a spatial field error or an accuracy acceptance test.
+
+    Notes
+    -----
+    The same attributes may use consistent nondimensional units when all inputs
+    are nondimensional. Gravity represents an axially invariant cylindrical source."""
 
     outer_topography: float
     inner_topography: float
@@ -139,7 +167,22 @@ def cylindrical_sheet_potential_coefficient(
     -------
     float
         Potential coefficient at ``target_radius``.
-    """
+
+    Raises
+    ------
+    TypeError
+        Wavenumber is not an integer or numeric inputs cannot be converted.
+    ValueError
+        Geometry, mode, finite coefficients, source or positive-constant restrictions fail.
+
+    Notes
+    -----
+    Use one consistent physical or nondimensional unit system; no conversion is
+    performed. Radii and topography have length units, surface-density coefficients
+    have mass/area units, volume densities/contrasts have mass/volume units,
+    G has length^3/(mass*time^2), and potential has length^2/time^2. Geoid
+    coefficients, where returned, are potential divided by positive reference gravity.
+    The unnormalized cosine basis is shared by every source and response."""
 
     source_radius = _positive_float(source_radius, "source_radius")
     target_radius = _positive_float(target_radius, "target_radius")
@@ -191,7 +234,23 @@ def cylindrical_sheet_radial_derivative_coefficient(
     -------
     float
         Radial derivative coefficient at ``target_radius``.
-    """
+
+    Raises
+    ------
+    TypeError
+        Wavenumber is not an integer or numeric inputs cannot be converted.
+    ValueError
+        Geometry, mode, finite coefficients, source or positive-constant restrictions fail.
+
+    Notes
+    -----
+    Use one consistent physical or nondimensional unit system; no conversion is
+    performed. Radii and topography have length units, surface-density coefficients
+    have mass/area units, volume densities/contrasts have mass/volume units,
+    G has length^3/(mass*time^2), and potential has length^2/time^2. Geoid
+    coefficients, where returned, are potential divided by positive reference gravity.
+    The unnormalized cosine basis is shared by every source and response.
+    Radial derivative coefficients have potential/length units."""
 
     source_radius = _positive_float(source_radius, "source_radius")
     target_radius = _positive_float(target_radius, "target_radius")
@@ -248,7 +307,22 @@ def cylindrical_annulus_potential_operator(
     numpy.ndarray
         Two-by-two potential operator with targets in rows and sources in
         columns, both ordered ``[outer, inner]``.
-    """
+
+    Raises
+    ------
+    TypeError
+        Wavenumber is not an integer or numeric inputs cannot be converted.
+    ValueError
+        Geometry, mode, finite coefficients, source or positive-constant restrictions fail.
+
+    Notes
+    -----
+    Use one consistent physical or nondimensional unit system; no conversion is
+    performed. Radii and topography have length units, surface-density coefficients
+    have mass/area units, volume densities/contrasts have mass/volume units,
+    G has length^3/(mass*time^2), and potential has length^2/time^2. Geoid
+    coefficients, where returned, are potential divided by positive reference gravity.
+    The unnormalized cosine basis is shared by every source and response."""
 
     radius_inner, radius_outer, mode = _validate_cylindrical_annulus(
         radius_inner,
@@ -365,6 +439,11 @@ def cylindrical_annulus_geoid_response(
         Radius of an internal sheet, strictly inside the annulus.
     internal_surface_density_coefficient : real, default=0
         Density coefficient of the optional internal sheet.
+    volume_density_radial_exponent : real or None, default=None
+        Finite power in ``rho(r)=volume_density_coefficient*(r/radius_outer)**k``.
+        Required for nonzero volume density; source support is the annulus.
+    volume_density_coefficient : real, default=0
+        Finite signed volume-density amplitude at the outer source radius.
     gravitational_constant : real, default=1
         Positive gravitational constant in the selected unit system.
 
@@ -372,7 +451,22 @@ def cylindrical_annulus_geoid_response(
     -------
     CylindricalGravityResponse
         Outer and inner potential and geoid coefficients.
-    """
+
+    Raises
+    ------
+    TypeError
+        Wavenumber is not an integer or numeric inputs cannot be converted.
+    ValueError
+        Geometry, mode, finite coefficients, source or positive-constant restrictions fail.
+
+    Notes
+    -----
+    Use one consistent physical or nondimensional unit system; no conversion is
+    performed. Radii and topography have length units, surface-density coefficients
+    have mass/area units, volume densities/contrasts have mass/volume units,
+    G has length^3/(mass*time^2), and potential has length^2/time^2. Geoid
+    coefficients, where returned, are potential divided by positive reference gravity.
+    The unnormalized cosine basis is shared by every source and response."""
 
     radius_inner, radius_outer, mode = _validate_cylindrical_annulus(
         radius_inner,
@@ -491,6 +585,11 @@ def cylindrical_annulus_self_gravity_response(
         Radius of an internal sheet, strictly inside the annulus.
     internal_surface_density_coefficient : real, default=0
         Density coefficient of the optional internal sheet.
+    volume_density_radial_exponent : real or None, default=None
+        Finite power in ``rho(r)=volume_density_coefficient*(r/radius_outer)**k``.
+        Required for nonzero volume density; source support is the annulus.
+    volume_density_coefficient : real, default=0
+        Finite signed volume-density amplitude at the outer source radius.
     gravitational_constant : real, default=1
         Positive gravitational constant in the selected unit system.
     outer_feedback_factor, inner_feedback_factor : real, optional
@@ -501,7 +600,23 @@ def cylindrical_annulus_self_gravity_response(
     -------
     CylindricalSelfGravityResponse
         Corrected topography, potential, geoid, feedback, and residual values.
-    """
+
+    Raises
+    ------
+    TypeError
+        Wavenumber is not an integer or numeric inputs cannot be converted.
+    ValueError
+        Geometry, mode, finite coefficients, source or positive-constant restrictions fail.
+
+    Notes
+    -----
+    Use one consistent physical or nondimensional unit system; no conversion is
+    performed. Radii and topography have length units, surface-density coefficients
+    have mass/area units, volume densities/contrasts have mass/volume units,
+    G has length^3/(mass*time^2), and potential has length^2/time^2. Geoid
+    coefficients, where returned, are potential divided by positive reference gravity.
+    The unnormalized cosine basis is shared by every source and response.
+    A singular feedback matrix raises ValueError; default feedback factors are 1/g."""
 
     radius_inner, radius_outer, mode = _validate_cylindrical_annulus(
         radius_inner,
@@ -633,21 +748,45 @@ def cylindrical_power_law_volume_potential_coefficient(
     density_coefficient: float = 1.0,
     gravitational_constant: float = 1.0,
 ) -> float:
-    r"""Return ``Phi_n`` for Kramer's smooth cylindrical density load.
+    r"""Return cylindrical potential for a compact power-law volume-density source.
 
-    The volume-density coefficient is
+    Parameters
+    ----------
+    radius_inner, radius_outer : float
+        Positive source-support radii in consistent length units, ordered inner < outer.
+    target_radius : float
+        Positive evaluation radius; it may be inside, within or outside the source annulus.
+    wavenumber : int
+        Positive Fourier mode ``n >= 1`` for the unnormalized ``cos(n*theta)`` basis.
+    radial_exponent : float
+        Finite real power ``k`` in ``rho_n(s)=density_coefficient*(s/radius_outer)**k``.
+    density_coefficient : float, default=1
+        Finite signed volume-density amplitude at ``radius_outer``; physical units
+        are mass per volume for the axially invariant source.
+    gravitational_constant : float, default=1
+        Finite positive G in units consistent with radii and density.
 
-    ``rho_n(s) = density_coefficient * (s / radius_outer)**radial_exponent``
+    Returns
+    -------
+    float
+        Potential cosine coefficient at ``target_radius``. For physical inputs its
+        units are length^2/time^2; positive density produces positive potential
+        under ``laplacian(Phi)=-4*pi*G*rho``.
 
-    on ``radius_inner <= s <= radius_outer``. Superposing the cylindrical
-    sheet kernel gives
+    Raises
+    ------
+    TypeError
+        Mode has an invalid type or other parameters cannot be converted to numbers.
+    ValueError
+        Radius ordering, positive mode/G or finite coefficient/exponent checks fail.
 
-    ``Phi_n(r) = (2*pi*G/n) * integral(s*rho_n(s)*K_n(r,s), ds)``,
-
-    where ``K_n=(s/r)**n`` for ``s < r`` and ``K_n=(r/s)**n`` for
-    ``s > r``. The closed form below is valid inside and outside the annulus
-    and includes the logarithmic ``radial_exponent - n + 2 = 0`` case.
-    """
+    Notes
+    -----
+    Superposition of sheets gives
+    ``Phi_n(r)=(2*pi*G/n)*integral(s*rho_n(s)*K_n(r,s), ds)`` with
+    ``K_n=(s/r)**n`` for ``s<r`` and ``(r/s)**n`` for ``s>r``.
+    The closed form includes logarithmic exponent limits. No mesh, MPI operation
+    or physical/nondimensional unit conversion is involved."""
 
     radius_inner, radius_outer, mode = _validate_cylindrical_annulus(
         radius_inner, radius_outer, wavenumber

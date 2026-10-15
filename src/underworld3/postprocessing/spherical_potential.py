@@ -76,32 +76,101 @@ def solve_spherical_potential(*, mesh, field_name, harmonic_degree,
         radius_inner, radius_outer, radius_exterior,
         inner_boundary='CMB', outer_boundary='Surface', exterior_boundary='OuterBoundary',
         gravitational_constant, solver_options=None, tolerance=1e-10):
-    """Solve -laplacian(Phi)=4*pi*G*rho for a real harmonic degree on a full ball.
+    r"""Solve physical modal potential on a caller-owned full-ball P2 mesh.
 
-    sheet_densities maps caller-specified interface labels to density
-    coefficients. Sheets use uniquely owned triangular P2 trace loads.
-    sheet_modes adds same-degree angular modes, each a dictionary containing
-    sheet_densities and optional harmonic_order/component/normalization. The
-    primary mode still selects volume forcing and returned trace coefficients.
-    All angular modes of one degree share the exact exterior Robin coefficient;
-    mixed-degree Robin continuation requires separate solves, not one local
-    Robin coefficient. Solver adapters require the world communicator and
-    nonempty mesh charts on every rank.
-    Volume density is rho0*(r/r_outer)**k in radius_inner<=r<=radius_outer.
-    volume_regions optionally maps caller-supplied volume labels to integer
-    values. It confines that radial profile to their union of complete mesh
-    cells using DG0 support, consistently with conforming faceted interfaces.
-    With no regions supplied, the historical radial Piecewise cutoff is used;
-    on straight facets it cuts cells and may need additional integration control.
-    Region support approximates the same spherical mantle by its discrete
-    labelled geometry; it does not rescale the source to match an oracle.
-    The default exterior Robin term (ell+1)*Phi/r_exterior represents exact
-    single-mode decaying continuation. exterior_condition=dirichlet_exact is
-    an optional comparison using the analytical exterior value; that comparison
-    checks the interior solve rather than independently testing the radial kernel. The origin is included, with regularity inherent
-    in the continuous Cartesian P2 space. The caller selects solver policy.
-    Returned potential coefficients use explicit interface trace integrals.
-    """
+    Parameters
+    ----------
+    mesh : underworld3.discretisation.Mesh
+        Three-dimensional simplicial full-ball mesh including the origin and
+        straight conforming triangular sheet facets. Its communicator must be
+        congruent to UW3's world communicator, with nonempty charts on every rank.
+    field_name : str
+        Base name for the continuous scalar P2 potential and weak-load variables.
+    harmonic_degree : int
+        Spherical-harmonic degree, at least 1.
+    harmonic_order : int, default=0
+        Order satisfying ``0 <= harmonic_order <= harmonic_degree``.
+    harmonic_component : {"cos", "sin"}, default="cos"
+        Real angular component. Order zero requires ``"cos"``.
+    harmonic_normalization : {"axisymmetric_unnormalized", "real_orthonormal"}, default="axisymmetric_unnormalized"
+        Angular normalization used by both sources and projections. The default
+        is ``P_l(cos(theta))`` and is restricted to order zero. Use
+        ``"real_orthonormal"`` for non-axisymmetric modes.
+    sheet_densities : mapping or None, default=None
+        Interface label -> finite signed surface-density coefficient for the primary
+        mode. Physical coefficients have mass/area units. ``None`` means no sheets.
+    sheet_radii : mapping or None, default=None
+        Interface label -> physical source radius in mesh units. Required for every
+        sheet only with ``exterior_condition="dirichlet_exact"``; Robin assembly
+        uses the actual caller mesh facets.
+    sheet_modes : sequence of dict, default=()
+        Additional same-degree modes. Each requires ``sheet_densities`` and may
+        set ``harmonic_degree`` (which must match), ``harmonic_order`` (default 0),
+        ``harmonic_component`` (default ``"cos"``) and ``harmonic_normalization``
+        (defaulting to the function argument). Volume forcing and returned
+        projections use only the primary mode.
+    volume_density : float, default=0
+        Finite signed volume-density amplitude at ``radius_outer``. Physical units
+        are mass/volume; zero disables the volume source.
+    density_power : int, default=2
+        Integer ``k`` in ``rho(r)=volume_density*(r/radius_outer)**k`` times the
+        primary harmonic. The source is confined to the specified mantle support.
+    volume_regions : mapping or None, default=None
+        Mesh volume-label name -> integer stratum value. Their union selects
+        complete DG0-supported cells for nonzero volume density. Every requested
+        label/stratum must have cells globally; empty local source strata are allowed.
+        ``None`` uses the radial cutoff ``radius_inner <= r <= radius_outer``.
+    exterior_condition : {"robin", "dirichlet_exact"}, default="robin"
+        Robin uses exact single-degree decaying continuation. ``"dirichlet_exact"``
+        supplies the analytical exterior potential as a comparison boundary value.
+    radius_inner, radius_outer, radius_exterior : float
+        Positive core/mantle, mantle/surface and outer truncation radii in mesh units,
+        ordered strictly inner < outer < exterior. They must match interface geometry.
+    inner_boundary, outer_boundary, exterior_boundary : str
+        Labels for inner/outer projection and exterior boundary treatment;
+        defaults are ``"CMB"``, ``"Surface"`` and ``"OuterBoundary"``.
+    gravitational_constant : float
+        Finite positive ``G`` in a unit system consistent with radii and densities.
+        No physical/nondimensional unit conversion is performed.
+    solver_options : mapping or None, default=None
+        PETSc options for the base Poisson system. A sheet correction KSP also uses
+        ``ksp_type`` (default ``"gmres"``) and ``pc_type`` (default ``"gamg"``).
+    tolerance : float, default=1e-10
+        Finite positive base-system tolerance and relative sheet-correction tolerance.
+        The correction also uses absolute tolerance 1e-12 and a 1000-iteration cap.
+
+    Returns
+    -------
+    dict
+        ``potential_field`` and ``poisson_system`` hold the P2 field and base system.
+        ``outer_potential``/``inner_potential`` are primary-mode trace coefficients
+        in potential units, not geoid heights. ``solver_reason`` is the sheet KSP
+        reason when sheets exist, otherwise the base solve reason.
+        ``load_diagnostics`` maps sheet labels (additional modes use
+        ``"mode<index>:<label>"``) to :class:`InterfaceLoadDiagnostics`.
+        ``volume_source_support`` is ``"regions"``, ``"radial_cutoff"`` or ``"none"``;
+        ``volume_region_diagnostics`` reports labels and owned-cell counts, or is empty.
+
+    Raises
+    ------
+    TypeError
+        Harmonic or density-power types, or volume-region entries, are invalid.
+    ValueError
+        Mesh, source, radii, harmonic, exterior condition or region support is invalid.
+    KeyError
+        An additional sheet mode lacks ``sheet_densities``.
+    RuntimeError
+        Base or sheet correction solve fails or a P2 trace cannot be mapped.
+
+    Notes
+    -----
+    Call collectively. The convention is ``-laplacian(Phi)=4*pi*G*rho``; regularity
+    at the origin is represented by the Cartesian P2 space. Robin datum is
+    ``(l+1)*Phi/radius_exterior``. Different orders of one degree may share it;
+    mixed degrees require separate solves. Sheet assembly removes its discrete
+    mean. Radial cutoffs can cut straight cells; explicit conforming regions avoid
+    that integration ambiguity without rescaling the source. Exact Dirichlet
+    comparison does not independently validate the analytical exterior kernel."""
     ell,m,component,normalization=validate_harmonic(harmonic_degree,harmonic_order,
                                                  harmonic_component,harmonic_normalization)
     from ._spherical_solver_contract import require_native_solver_mesh

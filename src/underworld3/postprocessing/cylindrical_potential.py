@@ -17,7 +17,19 @@ __all__ = ["PhysicalPotentialSolve", "solve_cylindrical_sheet_potential"]
 
 @dataclass
 class PhysicalPotentialSolve:
-    """One physical-space Poisson solution and its interface coefficients."""
+    r"""Physical cylindrical Poisson solution and sampled interface coefficients.
+
+    Attributes
+    ----------
+    potential_field : underworld3.discretisation.MeshVariable
+        Scalar potential field on the caller's gravity mesh.
+    poisson_system : underworld3.systems.Poisson
+        System used to compute ``potential_field``.
+    outer_potential, inner_potential : float
+        Coefficients of ``cos(n*theta)`` at the outer and inner mantle radii.
+        Units match the potential field; they are not geoid heights.
+    outer_mean, inner_mean : float
+        Degree-zero means of the sampled interface potential in the same units."""
 
     potential_field: object
     poisson_system: object
@@ -58,18 +70,70 @@ def solve_cylindrical_sheet_potential(
     interior_boundary="Interior",
     solver_options=None,
 ):
-    r"""Solve for three conforming cylindrical sheets without regularisation.
+    r"""Solve physical potential for three conforming cylindrical density sheets.
 
-    UW solves ``-laplacian(Phi)=f`` and its natural datum is
-    ``-grad(Phi).n=g``.  For the benchmark convention
-    ``laplacian(Phi)=-4*pi*G*rho``, each interface sheet is therefore supplied
-    as ``g=-4*pi*G*sigma*cos(n*theta)``.  The exterior condition is the exact
-    single-mode Robin continuation ``dPhi/dr+n*Phi/r=0``.  When
-    ``radius_interior`` is supplied, regular continuation toward the omitted
-    origin is imposed as ``dPhi/dr-n*Phi/r=0`` on ``Interior``.
-    Boundary labels are explicit keyword inputs. Solver options are supplied by
-    the caller; this helper does not select a benchmark/HPC preconditioner.
-    """
+    Parameters
+    ----------
+    gravity_mesh : underworld3.discretisation.Mesh
+        Two-dimensional gravity parent mesh containing the three conforming sheet
+        interfaces and an exterior truncation. Call collectively on solver ranks.
+    field_name : str
+        Name of the scalar potential MeshVariable created on ``gravity_mesh``.
+    radius_inner, radius_internal, radius_outer : float
+        Positive mantle/sheet radii in mesh units, ordered strictly inner <
+        internal < outer. They must match the caller's interface geometry.
+    radius_exterior : float
+        Exterior truncation radius, strictly larger than ``radius_outer``.
+    radius_interior : float or None, default=None
+        Optional inner truncation satisfying ``0 < radius_interior < radius_inner``.
+        ``None`` omits the inner Robin datum; the caller supplies a suitable mesh
+        containing the origin or its intended interior treatment.
+    wavenumber : int
+        Azimuthal mode ``n >= 2`` multiplying the unnormalized ``cos(n*theta)`` basis.
+    inner_sheet_density, internal_sheet_density, outer_sheet_density : float, default=0
+        Signed surface-mass density coefficients at the three radii. In physical
+        units these are mass per area for the axially invariant cylindrical model.
+    gravitational_constant : float, default=1
+        Gravitational constant in a unit system consistent with radii and densities.
+        The convention is ``laplacian(Phi)=-4*pi*G*rho``; no unit conversion is done.
+    potential_degree : int, default=2
+        Polynomial degree of the continuous scalar potential field.
+    tolerance : float, default=1e-10
+        Tolerance assigned to the Poisson system.
+    boundary_samples : int, default=2048
+        At least 16 equally spaced angular samples per circle for returned cosine
+        coefficients and means. This controls diagnostic sampling, not mesh resolution.
+    inner_boundary, internal_boundary, outer_boundary : str
+        Sheet labels, defaulting to ``"Lower"``, ``"Internal"`` and ``"Upper"``.
+    exterior_boundary : str, default="Exterior"
+        Label for the exterior Robin condition.
+    interior_boundary : str, default="Interior"
+        Label for the inner Robin condition, used only with ``radius_interior``.
+    solver_options : mapping or None, default=None
+        PETSc option names/values passed to the Poisson system. No benchmark-specific
+        preconditioner is selected by this helper.
+
+    Returns
+    -------
+    PhysicalPotentialSolve
+        Potential field, Poisson system, interface cosine coefficients and means.
+        For consistent physical units, potential has units length squared/time squared;
+        geoid height requires a separate division by reference gravity.
+
+    Raises
+    ------
+    TypeError
+        ``wavenumber`` is not an integer.
+    ValueError
+        Mode, sample count, mesh dimension or radius ordering is invalid.
+
+    Notes
+    -----
+    UW solves ``-laplacian(Phi)=f`` with natural datum ``-grad(Phi).n=g``.
+    Each sheet uses ``g=-4*pi*G*sigma*cos(n*theta)``. Exterior continuation is
+    ``dPhi/dr+n*Phi/r=0``; optional interior continuation is
+    ``dPhi/dr-n*Phi/r=0``. Samples use global field evaluation. The returned
+    system remains available for callers to inspect its solve report."""
 
     if isinstance(wavenumber, bool) or not isinstance(wavenumber, Integral):
         raise TypeError("wavenumber must be an integer.")

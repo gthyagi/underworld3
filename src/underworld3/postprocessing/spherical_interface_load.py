@@ -27,6 +27,41 @@ from underworld3.maths.spherical_harmonics import (
 
 @dataclass(frozen=True)
 class InterfaceLoadDiagnostics:
+    r"""Diagnostics for an assembled, mean-corrected spherical sheet source.
+
+    Attributes
+    ----------
+    interface : str
+        Mesh interface label used for assembly.
+    harmonic_degree, harmonic_order : int
+        Degree and order of the real spherical harmonic.
+    harmonic_component, harmonic_normalization : str
+        Real angular component and normalization used for assembly.
+    density_coefficient : float
+        Input surface-density coefficient, before multiplication by ``4*pi*G``.
+    source_factor : float
+        Poisson source factor ``4*pi*gravitational_constant``.
+    owned_facets : int
+        Global number of uniquely owned contributing triangular facets.
+    ghost_facets : int
+        Sum of ghost facet entries over ranks; replicated facets may appear more
+        than once in this diagnostic count.
+    global_nonzero_dofs : int
+        Number of unique nodal load values above the diagnostic zero threshold.
+    global_l2_norm : float
+        PETSc Euclidean norm of the assembled global vector, not a field L2 integral.
+    uncorrected_integrated_source : float
+        Sum of the global weak-load entries before mean removal.
+    removed_mean_density : float
+        Removed uniform source amplitude per unit discrete interface area.
+        Despite the historical name, this includes the ``4*pi*G`` source factor.
+    integrated_source : float
+        Sum of unique nodal weak-load values after mean correction.
+    harmonic_moment : float
+        Corrected nodal weak-load contraction with the input harmonic.
+    coordinate_value_sha256 : str
+        Digest of sorted nonzero nodal coordinates and load values rounded to
+        14 decimal places for partition-comparison diagnostics."""
     interface: str
     harmonic_degree: int
     harmonic_order: int
@@ -234,7 +269,63 @@ def assemble_spherical_harmonic_sheet_load(
     gravitational_constant: float = 1.0 / (4.0 * np.pi),
     quadrature_points: int = 8,
 ) -> tuple[PETSc.Vec, InterfaceLoadDiagnostics]:
-    """Assemble one real spherical-harmonic density-sheet load vector."""
+    r"""Assemble a scalar spherical sheet source on uniquely owned P2 facets.
+
+    Parameters
+    ----------
+    mesh : underworld3.discretisation.Mesh
+        Three-dimensional simplicial mesh with straight triangular interface
+        facets. Assembly is collective on its communicator.
+    load_variable : underworld3.discretisation.MeshVariable
+        Continuous scalar P2 variable on ``mesh``. Its local/global vectors are
+        overwritten with weak-load entries, not pointwise density samples.
+    interface : str
+        Member name in ``mesh.boundaries`` identifying the sheet facets.
+    harmonic_degree : int
+        Spherical-harmonic degree, at least 1.
+    harmonic_order : int, default=0
+        Order satisfying ``0 <= harmonic_order <= harmonic_degree``.
+    harmonic_component : {"cos", "sin"}, default="cos"
+        Real angular component. Order zero requires ``"cos"``.
+    harmonic_normalization : {"axisymmetric_unnormalized", "real_orthonormal"}, default="axisymmetric_unnormalized"
+        Angular normalization used by both sources and projections. The default
+        is ``P_l(cos(theta))`` and is restricted to order zero. Use
+        ``"real_orthonormal"`` for non-axisymmetric modes.
+    density_coefficient : float
+        Finite signed surface-density coefficient multiplying the chosen harmonic.
+        In physical units this is mass per area; use consistent mesh/G units.
+    gravitational_constant : float, default=1/(4*pi)
+        Finite source scaling constant. The weak source is ``4*pi*G*sigma*Y``;
+        the default makes ``4*pi*G=1``. No unit conversion is performed.
+    quadrature_points : int, default=8
+        At least two Gauss points per transformed triangle coordinate; each facet
+        uses ``quadrature_points**2`` evaluations.
+
+    Returns
+    -------
+    vector : petsc4py.PETSc.Vec
+        Independent copy of the global scalar weak-load vector in the variable's
+        sub-DM layout. The caller owns it and must call ``destroy()`` when finished.
+    diagnostics : InterfaceLoadDiagnostics
+        Global source, ownership, norm and mean-correction diagnostics.
+
+    Raises
+    ------
+    TypeError
+        Harmonic degree or order has an invalid type.
+    ValueError
+        Geometry, harmonic, field, interface, source or quadrature inputs are invalid.
+    RuntimeError
+        P2 facet nodes cannot be mapped or the global interface area is nonpositive.
+    AssertionError
+        Copies of a shared nodal load disagree beyond the diagnostic tolerance.
+
+    Notes
+    -----
+    The sign is for ``-laplacian(Phi)=4*pi*G*rho``. The discrete uniform mean
+    of the assembled source is removed, including quadrature/geometry leakage
+    of a nonzero-degree harmonic. This is not a degree-zero mass-sheet API.
+    Owned facets contribute once; empty local interface strata are supported."""
 
     if mesh.dim != 3:
         raise ValueError("Spherical trace operations require a 3D mesh.")
@@ -395,13 +486,56 @@ def project_spherical_harmonic_trace_coefficient(
     harmonic_norm_value: float | None = None,
     quadrature_points: int = 8,
 ) -> float:
-    """Project a parent P2 trace with explicit, uniquely owned facets.
+    r"""Project a continuous scalar P2 trace using uniquely owned interface facets.
 
-    UW3's generic boundary-integral path is retained elsewhere as a useful
-    diagnostic, but this routine gives the interface-sheet benchmark an
-    explicitly partition-independent coefficient recovery path matching the
-    ownership rule used by :func:`assemble_axisymmetric_sheet_load`.
-    """
+    Parameters
+    ----------
+    mesh : underworld3.discretisation.Mesh
+        Three-dimensional simplicial mesh with straight triangular interface facets.
+    variable : underworld3.discretisation.MeshVariable
+        Continuous scalar P2 field on ``mesh`` whose trace is projected.
+    interface : str
+        Member name in ``mesh.boundaries`` identifying the integration facets.
+    interface_radius : float
+        Positive reference radius, in mesh coordinate units. Its square converts
+        the supplied unit-sphere angular norm to a spherical surface norm.
+    harmonic_degree : int
+        Spherical-harmonic degree, at least 1.
+    harmonic_order : int, default=0
+        Order satisfying ``0 <= harmonic_order <= harmonic_degree``.
+    harmonic_component : {"cos", "sin"}, default="cos"
+        Real angular component. Order zero requires ``"cos"``.
+    harmonic_normalization : {"axisymmetric_unnormalized", "real_orthonormal"}, default="axisymmetric_unnormalized"
+        Angular normalization used by both sources and projections. The default
+        is ``P_l(cos(theta))`` and is restricted to order zero. Use
+        ``"real_orthonormal"`` for non-axisymmetric modes.
+    harmonic_norm_value : float or None, default=None
+        Positive unit-sphere integral of ``Y**2``. ``None`` obtains it from the
+        selected harmonic normalization; an explicit value overrides that norm.
+    quadrature_points : int, default=8
+        Number of Gauss points in each transformed triangle coordinate.
+
+    Returns
+    -------
+    float
+        ``integral(variable*Y dS)/(interface_radius**2*harmonic_norm_value)``,
+        reduced on the mesh communicator and returned on every rank. Its units
+        match the input scalar field.
+
+    Raises
+    ------
+    TypeError
+        Harmonic degree or order has an invalid type.
+    ValueError
+        Field, geometry, harmonic, radius, norm or interface inputs are invalid.
+    RuntimeError
+        A facet's P2 trace nodes cannot be mapped to the field.
+
+    Notes
+    -----
+    Call collectively on the mesh communicator. Empty local interface strata
+    are allowed. Integration uses discrete facets, while normalization uses the
+    specified spherical radius and angular norm; the field mean is not removed."""
 
     if variable.degree != 2 or not variable.continuous:
         raise ValueError("variable must use continuous P2 elements.")
@@ -469,7 +603,38 @@ def project_spherical_harmonic_trace_coefficient(
 
 
 def assemble_axisymmetric_sheet_load(**kwargs):
-    """Backward-compatible wrapper for the legacy unnormalised zonal basis."""
+    r"""Assemble a sheet using the unnormalized zonal basis ``P_l(cos(theta))``.
+
+    Parameters
+    ----------
+    **kwargs : dict
+        Keyword arguments for :func:`assemble_spherical_harmonic_sheet_load`:
+        ``mesh``, ``load_variable``, ``interface``, ``harmonic_degree`` and
+        ``density_coefficient`` are required. ``gravitational_constant`` defaults
+        to ``1/(4*pi)`` and ``quadrature_points`` to 8. Their types, units and
+        restrictions are described by that function. Do not supply
+        ``harmonic_order``, ``harmonic_component`` or ``harmonic_normalization``;
+        this wrapper fixes them to 0, ``"cos"`` and ``"axisymmetric_unnormalized"``.
+
+    Returns
+    -------
+    vector : petsc4py.PETSc.Vec
+        Caller-owned weak-load vector; destroy it when finished.
+    diagnostics : InterfaceLoadDiagnostics
+        Source and mean-correction diagnostics.
+
+    Raises
+    ------
+    TypeError
+        Required keywords are missing, fixed harmonic keywords are duplicated,
+        or degree has an invalid type.
+    ValueError, RuntimeError, AssertionError
+        See :func:`assemble_spherical_harmonic_sheet_load` for input/assembly errors.
+
+    Notes
+    -----
+    This collective compatibility wrapper performs the same discrete mean removal
+    and owned-facet assembly as the general real-harmonic routine."""
 
     return assemble_spherical_harmonic_sheet_load(
         **kwargs,
@@ -480,7 +645,32 @@ def assemble_axisymmetric_sheet_load(**kwargs):
 
 
 def project_axisymmetric_trace_coefficient(*, harmonic_norm: float, **kwargs):
-    """Backward-compatible wrapper for the legacy unnormalised zonal basis."""
+    r"""Project a P2 trace onto the unnormalized zonal spherical harmonic.
+
+    Parameters
+    ----------
+    harmonic_norm : float
+        Positive unit-sphere angular norm, normally ``4*pi/(2*l+1)``.
+    **kwargs : dict
+        Keyword arguments for :func:`project_spherical_harmonic_trace_coefficient`:
+        ``mesh``, ``variable``, ``interface``, ``interface_radius`` and
+        ``harmonic_degree`` are required; ``quadrature_points`` defaults to 8.
+        See that function for types and units. Do not supply its
+        ``harmonic_order``, ``harmonic_component``, ``harmonic_normalization`` or
+        ``harmonic_norm_value`` arguments, which this wrapper fixes explicitly.
+
+    Returns
+    -------
+    float
+        Collective modal coefficient with the same units as the scalar field.
+
+    Raises
+    ------
+    TypeError
+        Required keywords are missing, fixed keywords are duplicated, or degree
+        has an invalid type.
+    ValueError, RuntimeError
+        See :func:`project_spherical_harmonic_trace_coefficient` for input/trace errors."""
 
     return project_spherical_harmonic_trace_coefficient(
         **kwargs,
@@ -506,24 +696,70 @@ def install_linear_spherical_stokes_sheet_load(
     harmonic_normalization=AXISYMMETRIC_UNNORMALIZED, quadrature_points=8,
     modes=None,
 ):
-    """Install a radial sheet load in a linear P2 Stokes system.
+    r"""Install a radial-sheet residual in a linear continuous-P2 Stokes system.
 
-    Call after viscosity, wall conditions and solver policy are configured,
-    instead of adding the same sheet as a natural BC. Only straight triangular
-    facets, continuous P2 velocity, zero bulk force and solution-independent
-    viscosity (including fixed spatial/layered viscosity) are supported. Viscosity
-    that depends on velocity, pressure or their derivatives is rejected. The
-    exact linear residual uses the native assembled Jacobian
-    plus the owned-facet P2 weak load, avoiding generic facet-trace interpolation.
-    Each facet load has exactly zero moment against all rigid rotations.
-    Reinstall after any model/mesh setup change. The SNES callback owns its RHS
-    vector for the lifetime of this solve setup; reinstalling releases its old
-    RHS. ``modes`` optionally replaces the single mode with a nonempty sequence
-    of dictionaries containing harmonic_degree, density_coefficient and the
-    optional harmonic_order/component/normalization keys. Different degrees
-    can share this Stokes operator. Native solver adapters currently require
-    the world communicator and nonempty mesh charts on every rank.
-    """
+    Parameters
+    ----------
+    stokes : underworld3.systems.Stokes
+        Configured three-dimensional Stokes system with continuous P2 velocity,
+        ``ViscousFlowModel``, zero bulk body force and solution-independent
+        viscosity. Fixed spatial/layered viscosity is allowed. Configure walls,
+        viscosity and solver policy before calling; no natural BCs and only
+        homogeneous essential data are accepted. The mesh must use a communicator
+        congruent to UW3's world communicator and have a nonempty chart on every rank.
+    interface : str
+        Member name in ``stokes.mesh.boundaries`` for the straight triangular facets.
+    harmonic_degree : int
+        Spherical-harmonic degree, at least 1.
+    harmonic_order : int, default=0
+        Order satisfying ``0 <= harmonic_order <= harmonic_degree``.
+    harmonic_component : {"cos", "sin"}, default="cos"
+        Real angular component. Order zero requires ``"cos"``.
+    harmonic_normalization : {"axisymmetric_unnormalized", "real_orthonormal"}, default="axisymmetric_unnormalized"
+        Angular normalization used by both sources and projections. The default
+        is ``P_l(cos(theta))`` and is restricted to order zero. Use
+        ``"real_orthonormal"`` for non-axisymmetric modes.
+    density_coefficient : float
+        Finite signed amplitude of the radial sheet term in Stokes residual units.
+        No ``4*pi*G`` factor is applied. It is added to the residual as
+        ``density_coefficient*Y*e_r``; see the residual sign convention below.
+    quadrature_points : int, default=8
+        At least two Gauss points per transformed triangle coordinate.
+    modes : sequence of dict or None, default=None
+        Optional nonempty multi-mode specification replacing the single mode.
+        Each mapping requires ``harmonic_degree`` and ``density_coefficient``;
+        ``harmonic_order``, ``harmonic_component`` and ``harmonic_normalization``
+        default to 0, ``"cos"`` and the function's normalization respectively.
+        Different degrees may share one Stokes operator. The single-mode arguments
+        remain required by the signature but are ignored when ``modes`` is supplied.
+
+    Returns
+    -------
+    petsc4py.PETSc.Vec
+        Coupled global vector ``b_sheet`` with sheet entries in the velocity block
+        and zeros in the pressure block. The Stokes callback owns this vector:
+        callers may inspect it but must not mutate or destroy it. Reinstallation,
+        reset or a DM rebuild releases the previous vector.
+
+    Raises
+    ------
+    TypeError
+        Harmonic degree or order has an invalid type, or a mode has malformed types.
+    KeyError
+        A mode specification lacks a required entry.
+    ValueError
+        Mesh, field, modes, interface, quadrature, viscosity, body force or boundary
+        data do not satisfy the restricted linear-adapter contract.
+
+    Notes
+    -----
+    Call collectively, instead of adding the same internal sheet as a natural BC.
+    The native Jacobian is retained and the callback evaluates
+    ``F(x)=J*x+b_sheet``; the algebraic equation is therefore ``J*x=-b_sheet``.
+    The vector is a residual load, not a separately sign-reversed force RHS.
+    Consistent facet coordinates and radial directions give zero work against
+    rigid rotations. Empty local interface strata are allowed, empty mesh charts
+    and proper subcommunicators are not. Reinstall after model/mesh setup changes."""
     import sympy as sp
     from underworld3.function.expressions import mesh_vars_in_expression, unwrap
     from ._spherical_solver_contract import require_native_solver_mesh

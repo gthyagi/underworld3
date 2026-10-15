@@ -53,7 +53,19 @@ __all__ = [
 
 @dataclass(frozen=True)
 class SphericalShellResponse:
-    """Spherical-shell topography and corresponding geoid coefficients."""
+    r"""Normalized spherical-shell hydrodynamic topography and geoid coefficients.
+
+    Attributes
+    ----------
+    surface_topography, cmb_topography : float
+        Signed nondimensional coefficients recovered from the two wall reactions
+        using the caller's buoyancy scales and the adapter's boundary signs.
+    surface_geoid, cmb_geoid : float
+        Geoid coefficients without feedback, in the normalized spherical response
+        convention that factors out ``4*pi*G/g``.
+    self_gravity : SelfGravityResponse or None
+        Separate corrected topography/geoid payload when requested; otherwise None.
+        The preceding four attributes retain the uncorrected values."""
 
     surface_topography: float
     cmb_topography: float
@@ -64,7 +76,25 @@ class SphericalShellResponse:
 
 @dataclass(frozen=True)
 class CylindricalAnnulusResponse:
-    """Rotated-Stokes topography and cylindrical gravity coefficients."""
+    r"""Cylindrical wall reactions and their topography, potential and geoid response.
+
+    Attributes
+    ----------
+    outer_reaction, inner_reaction : float
+        Mean-removed cosine coefficients of the assembled wall normal reaction,
+        in the Stokes traction units.
+    outer_reaction_mean, inner_reaction_mean : float
+        Boundary-averaged reactions before mean removal, in the same units.
+    outer_topography, inner_topography : float
+        Signed hydrodynamic coefficients ``-reaction/buoyancy_scale``.
+    outer_potential, inner_potential : float
+        Physical or consistently nondimensional cylindrical potential coefficients.
+    outer_geoid, inner_geoid : float
+        Potential divided by the corresponding reference gravity, with length units
+        when physical inputs are used.
+    self_gravity : CylindricalSelfGravityResponse or None
+        Separate corrected response when requested; the other attributes retain
+        their uncorrected values. All coefficients use ``cos(n*theta)``."""
 
     outer_reaction: float
     inner_reaction: float
@@ -205,12 +235,45 @@ def spherical_boundary_reaction_coefficient(
     stokes, boundary, *, harmonic_degree, harmonic_order=0,
     harmonic_component="cos", harmonic_normalization="axisymmetric_unnormalized",
 ):
-    """Project wall reaction with a real harmonic and the matching FE norm.
+    r"""Project an assembled wall reaction onto a real spherical harmonic.
 
-    The assembled reaction mean is removed before contraction. Return the
-    modal coefficient, whose sign is reaction_nn=-fluid_sigma_rr. Angular
-    basis values use a Cartesian solid harmonic and remain defined at poles.
-    """
+    Parameters
+    ----------
+    stokes : underworld3.systems.Stokes
+        Completed three-dimensional Stokes solve with reaction recovery available
+        on the requested rotated wall. Call collectively on the solver ranks.
+    boundary : str
+        Mesh boundary label for the reaction integral and matching FE harmonic norm.
+    harmonic_degree : int
+        Spherical-harmonic degree, at least 1.
+    harmonic_order : int, default=0
+        Order satisfying ``0 <= harmonic_order <= harmonic_degree``.
+    harmonic_component : {"cos", "sin"}, default="cos"
+        Real angular component. Order zero requires ``"cos"``.
+    harmonic_normalization : {"axisymmetric_unnormalized", "real_orthonormal"}, default="axisymmetric_unnormalized"
+        Angular normalization used by both sources and projections. The default
+        is ``P_l(cos(theta))`` and is restricted to order zero. Use
+        ``"real_orthonormal"`` for non-axisymmetric modes.
+
+    Returns
+    -------
+    float
+        Mean-removed wall-reaction coefficient, in Stokes traction units. The
+        convention is ``reaction_nn=-fluid_sigma_rr``. Numerator and denominator
+        use the same finite-element boundary measure.
+
+    Raises
+    ------
+    TypeError
+        Harmonic degree or order has an invalid type.
+    ValueError
+        Mesh dimension/harmonic is invalid or the projection has nonfinite data
+        or a nonpositive FE norm.
+
+    Notes
+    -----
+    Cartesian harmonic expressions remain defined at poles. Mean removal excludes
+    the degree-zero pressure gauge; this adapter accepts degree at least one."""
     from underworld3.maths import BdIntegral
     from underworld3.maths.spherical_harmonics import real_harmonic_cartesian_sympy
     if stokes.mesh.dim != 3:
@@ -315,17 +378,80 @@ def spherical_shell_response_from_rotated_stokes(
     harmonic_component: str = "cos",
     harmonic_normalization: str = "axisymmetric_unnormalized",
 ) -> SphericalShellResponse:
-    r"""Compute spherical-shell response from a rotated-free-slip Stokes solve.
+    r"""Recover normalized spherical-shell topography and geoid from wall reactions.
 
-    ``projection="centroid"`` (default) recovers pointwise traction and fits it
-    over a triangulation of the boundary samples. ``projection="reaction"``
-    contracts the assembled nodal reaction directly with the harmonic test
-    function. The latter is a distributed weak/integral quantity that avoids
-    consuming slowly converging P2 vertex values on curved boundaries (issue
-    #414). Explicit order, component and normalization support non-axisymmetric
-    real harmonics while preserving the zonal defaults. Density contrasts, planet radius,
-    and gravity are required when ``include_self_gravity`` is true.
-    """
+    Parameters
+    ----------
+    stokes : underworld3.systems.Stokes
+        Completed spherical rotated-free-slip solve. Its traction and buoyancy
+        scales must produce nondimensional topography compatible with the kernel.
+    radius_inner, radius_outer : float
+        Positive nondimensional shell radii, ordered inner < outer, matching the
+        boundary geometry. The planetary reference radius is normally scaled to 1.
+    harmonic_degree : int
+        Spherical-harmonic degree, at least 1.
+    harmonic_order : int, default=0
+        Order satisfying ``0 <= harmonic_order <= harmonic_degree``.
+    harmonic_component : {"cos", "sin"}, default="cos"
+        Real angular component. Order zero requires ``"cos"``.
+    harmonic_normalization : {"axisymmetric_unnormalized", "real_orthonormal"}, default="axisymmetric_unnormalized"
+        Angular normalization used by both sources and projections. The default
+        is ``P_l(cos(theta))`` and is restricted to order zero. Use
+        ``"real_orthonormal"`` for non-axisymmetric modes.
+    internal_load_radius : float or None, default=None
+        Nondimensional internal sheet radius, strictly between shell radii when
+        supplied. Required for a nonzero ``internal_load_coefficient``.
+    internal_load_coefficient : float, default=0
+        Finite signed normalized outward-load coefficient in the same harmonic
+        basis; it enters the normalized potential with the opposite sheet sign.
+    surface_boundary, cmb_boundary : str
+        Reaction boundary labels, default ``"Upper"`` and ``"Lower"``.
+    surface_buoyancy_scale, cmb_buoyancy_scale : float, default=1
+        Finite nonzero signed traction-to-topography scales. The reaction route
+        gives ``h_surface=-reaction_surface/surface_buoyancy_scale`` and
+        ``h_cmb=+reaction_cmb/cmb_buoyancy_scale``. Supply scales consistent with
+        the caller's nondimensionalization rather than assuming physical units.
+    include_self_gravity : bool, default=False
+        Compute a separate interface-feedback response when True.
+    surface_density_contrast, cmb_density_contrast : float or None, default=None
+        Finite signed density contrasts in kg/m^3, required for self-gravity.
+    planet_radius : float or None, default=None
+        Positive physical reference radius in metres, required for self-gravity.
+    gravity : float or None, default=None
+        Positive reference gravity in m/s^2, required for self-gravity.
+    gravitational_constant : float, default=6.67430e-11
+        Positive SI gravitational constant for the optional feedback calculation.
+    projection : {"centroid", "reaction"}, default="centroid"
+        ``"centroid"`` fits recovered traction over triangulated boundary samples.
+        ``"reaction"`` contracts assembled reactions with the FE harmonic test
+        function and avoids pointwise vertex traction recovery.
+
+    Returns
+    -------
+    SphericalShellResponse
+        Hydrodynamic topography and normalized geoid, plus a separate
+        ``self_gravity`` payload when requested. This is not an automatic SI geoid
+        conversion; radii and returned coefficients retain the normalized convention.
+
+    Raises
+    ------
+    TypeError
+        Harmonic degree/order or ``include_self_gravity`` has an invalid type.
+    ValueError
+        Geometry, harmonic, projection, buoyancy scales, load or feedback inputs
+        are invalid, including missing self-gravity constants.
+    RuntimeError
+        Gathered centroid projection cannot be constructed.
+    numpy.linalg.LinAlgError
+        The optional two-interface feedback matrix is singular.
+
+    Notes
+    -----
+    Call collectively. The centroid route gathers on UW3's world communicator;
+    use a compatible distributed solve. Reaction projection is the distributed
+    weak quantity used by the production benchmarks. The radial geoid kernel
+    depends on degree only, so consistently normalized real non-axisymmetric
+    coefficients can also be supplied. Feedback changes no velocity field."""
 
     ri, ro, degree = _validate_geometry(
         radius_inner,
@@ -423,11 +549,38 @@ def gather_unique_boundary_samples(
     values,
     dimension: int,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Gather diagnostic boundary samples; production reactions use FE integrals.
+    r"""Gather and deduplicate scalar boundary samples for replicated diagnostics.
 
-    This replicated sample utility is intended for plotting and pointwise stress
-    diagnostics, not for fitting production reaction/topography coefficients.
-    """
+    Parameters
+    ----------
+    coords : array-like, shape (n_local, dimension)
+        Cartesian coordinates in mesh units. An empty local array is allowed.
+    values : array-like, shape (n_local,)
+        One scalar value per local coordinate, in the caller's field units.
+    dimension : int
+        Number of coordinate columns, normally 2 or 3. Arrays must match this
+        dimension; it selects the coordinate/value columns during merging.
+
+    Returns
+    -------
+    global_coords : numpy.ndarray, shape (n_unique, dimension)
+        Coordinates retained for unique keys rounded to 12 decimal places.
+    global_values : numpy.ndarray, shape (n_unique,)
+        Arithmetic means of samples sharing a rounded coordinate key. Both arrays
+        are replicated on every rank; input coordinate/value units are retained.
+
+    Raises
+    ------
+    ValueError
+        Local coordinate and value arrays cannot be stacked consistently.
+    RuntimeError
+        No rank supplies any boundary samples.
+
+    Notes
+    -----
+    Call on every rank of UW3's world communicator. This sample-gather utility
+    is for plotting and pointwise diagnostics; production reaction coefficients
+    use distributed FE integrals instead. Coordinate rounding is in supplied units."""
 
     local_rows = np.column_stack((np.asarray(coords, dtype=float), np.asarray(values, dtype=float)))
     gathered_rows = MPI.COMM_WORLD.allgather(local_rows)
@@ -460,30 +613,38 @@ def cylindrical_cosine_boundary_coefficient(
     values,
     wavenumber: int,
 ) -> tuple[float, float]:
-    r"""Project sampled circular data onto :math:`\cos(n\theta)` and the mean.
-
-    ``coords`` must contain at least three two-dimensional Cartesian boundary
-    points. The samples may begin at any angle and need not include a duplicate
-    endpoint; this function sorts and closes the periodic interval. This helper
-    is intended for external sampled data. Finite-element reaction loads use
-    :meth:`Stokes.boundary_normal_traction_integral` instead, so their projection
-    follows the actual boundary facets without a global gather or reconstructed
-    angular ordering.
+    r"""Project sampled circular data onto the cosine Fourier mode and the mean.
 
     Parameters
     ----------
     coords : array-like, shape (n, 2)
-        Cartesian circular-boundary coordinates.
+        At least three finite Cartesian boundary points on a circle centered at
+        the origin, in any consistent length unit. Samples may start at any angle.
     values : array-like, shape (n,)
-        Scalar values at ``coords``.
+        Finite scalar samples matching ``coords``. A duplicate endpoint is not needed.
     wavenumber : int
-        Positive azimuthal Fourier wavenumber.
+        Positive azimuthal Fourier mode ``n >= 1`` for ``cos(n*theta)``.
 
     Returns
     -------
-    coefficient, mean : tuple of float
-        Cosine-mode coefficient and degree-zero mean.
-    """
+    coefficient : float
+        ``integral(values*cos(n*theta) dtheta)/pi``, in the input value units.
+    mean : float
+        ``integral(values dtheta)/(2*pi)``, in the same units.
+
+    Raises
+    ------
+    TypeError
+        Wavenumber is not an integer.
+    ValueError
+        Mode, array shapes, number of samples or finite-value requirements fail.
+
+    Notes
+    -----
+    The samples are angularly sorted and the periodic interval closed before
+    trapezoidal integration. This is a local sampled-data operation; gather
+    distributed data separately if needed. No FE boundary measure or reaction
+    recovery is performed. Degree zero requires a potential gauge and is excluded."""
 
     mode = _validate_cylindrical_mode(wavenumber)
     coords = np.asarray(coords, dtype=float)
@@ -591,60 +752,77 @@ def cylindrical_annulus_response_from_rotated_stokes(
     outer_feedback_factor: float | None = None,
     inner_feedback_factor: float | None = None,
 ) -> CylindricalAnnulusResponse:
-    r"""Compute a cylindrical response from rotated-free-slip wall reactions.
-
-    :meth:`Stokes.boundary_normal_traction_integral` contracts the assembled
-    wall reaction directly with a boundary test function. This adapter uses
-
-    .. math::
-
-       h=-reaction_{nn}/signed\_buoyancy\_scale
-
-    The scales are caller-supplied sign conventions. If the recovered reaction
-    is ``-sigma_rr`` and h is positive radially outward, hydrostatic balance
-    requires outer scale ``-Delta_rho*g`` and inner scale ``+Delta_rho*g``.
-    Historical defaults are retained for compatibility; density-coupled
-    benchmarks pass their physical signed scales explicitly.
-
-    and projects each boundary onto the unnormalised real basis
-    :math:`\cos(n\theta)`. The numerator and harmonic norm use the same finite-
-    element boundary measure. Owned reaction degrees of freedom are reduced on
-    the mesh communicator; no pointwise traction recovery, angular sorting, or
-    rank-zero boundary gather is performed.
+    r"""Recover cylindrical topography, potential and geoid from rotated wall reactions.
 
     Parameters
     ----------
     stokes : underworld3.systems.Stokes
-        Completed two-dimensional rotated-free-slip Stokes solve.
+        Completed two-dimensional rotated-free-slip solve with assembled boundary
+        reaction recovery. Call collectively on the mesh communicator.
     radius_inner, radius_outer : float
-        Positive annulus radii ordered from inner to outer.
+        Positive annulus radii in the chosen length units, ordered inner < outer.
     wavenumber : int
-        Positive azimuthal Fourier wavenumber.
+        Positive Fourier mode ``n >= 1`` for the unnormalized ``cos(n*theta)`` basis.
     outer_density_contrast, inner_density_contrast : float
-        Signed density contrasts at the two boundaries.
+        Finite signed volume-density contrasts: smaller-radius-side density minus
+        larger-radius-side density, so outward displacement gives sheet density
+        ``Delta_rho*h``. Use units consistent with lengths and G.
     outer_reference_gravity, inner_reference_gravity : float
-        Positive gravity magnitudes used to convert potential to geoid.
-    internal_load_radius : float, optional
-        Radius of an internal sheet, strictly inside the annulus.
+        Finite positive gravity magnitudes converting potential to geoid height.
+    internal_load_radius : float or None, default=None
+        Sheet radius strictly inside the annulus. Required for a nonzero sheet load.
     internal_surface_density_coefficient : float, default=0
-        Density coefficient of the optional internal sheet.
+        Finite signed surface-mass density coefficient of the internal cosine sheet.
+    volume_density_radial_exponent : float or None, default=None
+        Finite exponent ``k`` for the optional volume source
+        ``rho(r)=volume_density_coefficient*(r/radius_outer)**k``.
+        Required when its coefficient is nonzero.
+    volume_density_coefficient : float, default=0
+        Finite signed volume-density amplitude at ``radius_outer``; zero disables
+        this source, which is confined between the annulus radii.
     outer_boundary, inner_boundary : str
-        Mesh boundary labels used for reaction recovery.
-    outer_buoyancy_scale, inner_buoyancy_scale : float
-        Signed scales converting wall reaction to dynamic topography.
+        Reaction labels, default ``"Upper"`` and ``"Lower"``.
+    outer_buoyancy_scale : float, default=1
+        Finite nonzero signed reaction-to-topography scale for the outer wall.
+    inner_buoyancy_scale : float, default=-1
+        Corresponding signed scale for the inner wall. These historical defaults
+        are not inferred from density contrasts or reference gravity.
     gravitational_constant : float, default=1
-        Positive gravitational constant in the selected unit system.
+        Finite positive G in the same physical or nondimensional unit system.
     include_self_gravity : bool, default=False
-        Return the self-gravity-corrected response when true.
-    outer_feedback_factor, inner_feedback_factor : float, optional
-        Explicit self-gravity feedback factors.
+        Compute separate corrected interface-response coefficients when True.
+    outer_feedback_factor, inner_feedback_factor : float or None, default=None
+        Optional finite diagonal factors converting potential to additional
+        displacement. Each defaults to the reciprocal reference gravity when
+        feedback is enabled; both are unused when feedback is disabled.
 
     Returns
     -------
     CylindricalAnnulusResponse
-        Recovered reactions, topography, gravity response, and optional
-        self-gravity correction, identical on every MPI rank.
-    """
+        Reactions, hydrodynamic topography, potential, geoid and optional separate
+        feedback response. With consistent physical inputs, reaction has stress
+        units, topography/geoid have length units and potential has length^2/time^2.
+
+    Raises
+    ------
+    TypeError
+        Wavenumber or ``include_self_gravity`` has an invalid type.
+    ValueError
+        Geometry, mode, buoyancy scale, density, load, gravity or feedback inputs
+        are invalid, or the optional feedback matrix is singular.
+    RuntimeError
+        Reaction projection yields nonfinite data or nonpositive boundary norms.
+
+    Notes
+    -----
+    The modal reaction and its norm use the same FE boundary measure; its mean
+    is removed for the modal contraction and reported separately. No pointwise
+    traction or boundary sample gather is needed. Topography is
+    ``h=-reaction_nn/signed_buoyancy_scale``. With ``reaction_nn=-sigma_rr`` and
+    outward-positive displacement, physical scales are ``-Delta_rho*g`` at the
+    outer wall and ``+Delta_rho*g`` at the inner wall. Pass them explicitly for
+    density-coupled models. Cylindrical gravity represents an axially invariant
+    source, rather than a three-dimensional planetary geoid."""
 
     radius_inner, radius_outer, mode = _validate_cylindrical_annulus(
         radius_inner,

@@ -4,12 +4,29 @@ import underworld3 as uw
 
 
 def require_native_solver_mesh(mesh):
-    """Fail before native world-communicator solver construction or empty charts.
+    r"""Check collective communicator and local-chart restrictions for native adapters.
 
-    The trace integrators themselves use the mesh communicator. Native UW3
-    solver setup still constructs SNES on COMM_WORLD, and mesh/field setup is
-    not empty-chart safe. Do not imply wider support from local integrators.
-    """
+    Parameters
+    ----------
+    mesh : underworld3.discretisation.Mesh
+        Mesh whose communicator and local DM charts are checked collectively.
+
+    Returns
+    -------
+    None
+        Successful return means the native solver setup restrictions are satisfied.
+
+    Raises
+    ------
+    ValueError
+        The communicator is not congruent to UW3's world communicator, or any rank
+        has an empty DM chart.
+
+    Notes
+    -----
+    Trace integrators themselves use the mesh communicator. Native SNES setup
+    uses COMM_WORLD and is not empty-chart safe. Empty local interface/source
+    strata on nonempty meshes remain supported."""
     comm = mesh.dm.getComm().tompi4py()
     if MPI.Comm.Compare(comm, uw.mpi.comm) not in (MPI.IDENT, MPI.CONGRUENT):
         raise ValueError('Native spherical solver adapters require a mesh communicator congruent to UW3 COMM_WORLD.')
