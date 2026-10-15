@@ -104,7 +104,10 @@ For a configured gravity Poisson system, use
 P2 load field before building the solver and configure volume/exterior data first.
 The method supports linear unit-diffusivity `DiffusionModel`; it performs the base
 solve and mean-corrected sheet correction. It is not a general nonlinear source
-hook. The potential workflows retain scientific orchestration and trace recovery.
+hook. A homogeneous base may converge at zero SNES iterations; the method then
+assembles the configured Jacobian before applying the sheet correction, without
+changing the caller's SNES type. The potential workflows retain scientific
+orchestration and trace recovery.
 
 These methods lazily import private utility implementations. The old Stokes
 free-function entry point delegates to the method during migration. See the

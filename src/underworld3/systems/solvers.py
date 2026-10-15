@@ -631,7 +631,9 @@ class SNES_Poisson(_ConstitutiveModelStateMixin, SNES_Scalar):
         already be configured. The base solve runs first, then uniquely owned facet
         loads are assembled with their discrete uniform mean removed. Degree zero is
         unsupported. This uses the existing native Jacobian and preserves a copy of
-        the base solution before borrowing DM work vectors. The base solve_report
+        the base solution before borrowing DM work vectors. A zero-iteration base
+        solve assembles that Jacobian explicitly before the sheet correction.
+        The base solve_report
         continues to describe the base solve; solver_reason records the correction.
         """
         from underworld3.utilities._spherical_potential import (

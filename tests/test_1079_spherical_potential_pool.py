@@ -10,7 +10,8 @@ pytestmark = [pytest.mark.level_1, pytest.mark.tier_a]
 
 
 @pytest.mark.parametrize("sheet_enabled", (True, False))
-def test_sheet_correction_preserves_volume_solution_when_dm_reuses_snes_storage(monkeypatch, sheet_enabled):
+@pytest.mark.parametrize("zero_base_iterations", (True, False))
+def test_sheet_correction_preserves_volume_solution_when_dm_reuses_snes_storage(monkeypatch, sheet_enabled, zero_base_iterations):
     class Vec:
         def __init__(self,value=0.):self.array=np.array([value],dtype=float)
         def set(self,value):self.array[:]=value
@@ -38,6 +39,7 @@ def test_sheet_correction_preserves_volume_solution_when_dm_reuses_snes_storage(
     monkeypatch.setattr(implementation, "require_native_solver_mesh", lambda mesh: None)
     dm=DM()
     variables=[]
+    jacobian_calls=[]
     def variable(*args,**kwargs):
         local=Vec()
         value=SimpleNamespace(mesh=args[1], degree=2, continuous=True, num_components=1, sym=[sp.Symbol('phi')],field_id=len(variables),_gvec=Vec(),vec=local,_lvec=local,value=0.,_sync_lvec_to_gvec=lambda:None)
@@ -49,7 +51,16 @@ def test_sheet_correction_preserves_volume_solution_when_dm_reuses_snes_storage(
         def __init__(self,mesh,u_Field,**kwargs):
             self.dm=dm;self.mesh=mesh;self.u=u_Field;self.field=u_Field;self.petsc_options={}
             self.constitutive_model = DiffusionModel()
-            self.snes=SimpleNamespace(getSolution=lambda:dm.base,getJacobian=lambda:(object(),))
+            operator,preconditioner=object(),object()
+            def compute_jacobian(solution,jacobian,preconditioning_matrix):
+                assert solution is not dm.base
+                assert solution.array[0]==5.
+                assert jacobian is operator and preconditioning_matrix is preconditioner
+                jacobian_calls.append(True)
+            self.snes=SimpleNamespace(getSolution=lambda:dm.base,
+                getJacobian=lambda:(operator,preconditioner,None),
+                getIterationNumber=lambda:0 if zero_base_iterations else 1,
+                computeJacobian=compute_jacobian)
             self.solve_report=SimpleNamespace(converged=True,reason=1)
         @property
         def constitutive_model(self): return self._constitutive_model
@@ -83,3 +94,4 @@ def test_sheet_correction_preserves_volume_solution_when_dm_reuses_snes_storage(
     # borrowed SNES vector after the KSP overwrites it would instead give 6.
     assert result['outer_potential']==(8. if sheet_enabled else 5.)
     assert result['inner_potential']==(8. if sheet_enabled else 5.)
+    assert len(jacobian_calls)==int(sheet_enabled and zero_base_iterations)

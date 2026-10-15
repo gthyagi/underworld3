@@ -133,6 +133,11 @@ def _solve_linear_spherical_sheet_sources(poisson, *, load_variable,
                     combined=vector.copy();cleanup.callback(combined.destroy)
                 else:combined.axpy(1.,vector)
         if combined is not None:
+            operator, preconditioner, _ = poisson.snes.getJacobian()
+            if poisson.snes.getIterationNumber() == 0:
+                # A homogeneous base can converge before SNES evaluates its
+                # Jacobian; the sheet correction still needs the linear operator.
+                poisson.snes.computeJacobian(base_solution, operator, preconditioner)
             iset,subdm=mesh.dm.createSubDM(load.field_id)
             cleanup.callback(iset.destroy);cleanup.callback(subdm.destroy)
             load._gvec.array[:]=combined.array[:]
@@ -142,7 +147,6 @@ def _solve_linear_spherical_sheet_sources(poisson, *, load_variable,
             solution=poisson.dm.getGlobalVec();cleanup.callback(poisson.dm.restoreGlobalVec,solution)
             local.array[:]=load._lvec.array[:]
             rhs.set(0.);poisson.dm.localToGlobal(local,rhs,addv=PETSc.InsertMode.INSERT_VALUES)
-            operator=poisson.snes.getJacobian()[0]
             ksp=PETSc.KSP().create(mesh.dm.getComm());cleanup.callback(ksp.destroy)
             ksp.setOperators(operator)
             ksp.setType(options.get('ksp_type','gmres'))
