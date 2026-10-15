@@ -66,14 +66,69 @@ class _ThieulotStokesBase(AnalyticSolution):
         self._evaluators = {}
 
     def apply_forcing(self, solver):
-        """Set the smooth radial body force; no internal sheet is present."""
+        r"""Set the smooth radial body force; no internal sheet is present.
+
+        Parameters
+        ----------
+        solver : underworld3.systems.Stokes
+            Solver on the reference mesh whose bodyforce is configured before solving.
+
+        Returns
+        -------
+        None
+            Mutates solver forcing; it does not run the solver.
+
+        Notes
+        -----
+        Call separately from applying the prescribed wall velocities. Thieulot has no internal
+        sheet; the smooth body force follows the manufactured density and unit inward gravity.
+        """
         solver.bodyforce = self.fn_bodyforce
 
     def apply_boundary_conditions(self, solver):
+        r"""Apply boundary conditions.
+
+        Parameters
+        ----------
+        solver : underworld3.systems.Stokes
+            Solver receiving the reference wall data on Upper and Lower before solving.
+
+        Returns
+        -------
+        None
+            Mutates wall conditions and enables the pressure nullspace.
+
+        Notes
+        -----
+        Prescribe the exact manufactured velocity on both walls. This performs no solve.
+        """
         prescribed_velocity(solver, self.boundaries, self.fn_velocity)
         solver.petsc_use_pressure_nullspace = True
 
     def compile_evaluators(self, *fields):
+        r"""Compile evaluators.
+
+        Parameters
+        ----------
+        *fields : str
+            Names of fields to prepare; use the same names accepted by evaluate.
+            An empty argument list compiles nothing.
+
+        Returns
+        -------
+        None
+            Cached evaluators are prepared without sampling points or solving a PDE.
+
+        Raises
+        ------
+        ValueError
+            A requested field is unknown.
+
+        Notes
+        -----
+        The cache includes evaluation_cse; toggling it selects separately compiled
+        common-subexpression-elimination evaluators.
+        """
         for field in fields:
             if field not in self._expressions:
                 raise ValueError(f"Unknown analytical field {field!r}.")
@@ -94,6 +149,36 @@ class _ThieulotStokesBase(AnalyticSolution):
                 )
 
     def evaluate(self, field, coords):
+        r"""Evaluate the analytical reference field.
+
+        Parameters
+        ----------
+        field : str or sympy expression
+            Named field or symbolic expression. Native names include velocity,
+            pressure, viscosity, bodyforce, strainrate, stress and radial_normal_stress;
+            Thieulot also provides density.
+        coords : array-like, shape (N, dim)
+            Finite Cartesian coordinates in the reference scaling; the origin is
+            excluded. Shell membership is the caller's responsibility.
+
+        Returns
+        -------
+        numpy.ndarray
+            One value per point: scalar (N,), vector (N, dim), or tensor
+            (N, dim, dim). Arbitrary expressions use the UW3
+            evaluator's expression shape. Empty arrays retain the corresponding shape.
+
+        Raises
+        ------
+        ValueError
+            Coordinates or the requested field are invalid.
+
+        Notes
+        -----
+        Named fields use cached vectorized NumPy evaluators; symbolic expressions delegate to the
+        shared JIT evaluator. This performs no Stokes solve. Cartesian spherical evaluators are
+        finite at both poles.
+        """
         if not isinstance(field, str):
             return super().evaluate(field, coords)
         points = np.asarray(coords, dtype=float)
@@ -118,6 +203,22 @@ class _ThieulotStokesBase(AnalyticSolution):
         ).reshape((len(points), *shape))
 
     def sample_points(self, count=12):
+        r"""Sample points.
+
+        Parameters
+        ----------
+        count : int, default=12
+            Requested number of interior diagnostic points; use a positive count.
+
+        Returns
+        -------
+        numpy.ndarray, shape (count, dim)
+            Deterministic Cartesian points strictly between the two reference radii.
+
+        Notes
+        -----
+        This samples the continuous reference independently of mesh nodes.
+        """
         radii = (
             self.r_inner
             + (self.r_outer - self.r_inner) * (np.arange(count) + 0.37) / count

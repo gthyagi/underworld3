@@ -830,11 +830,51 @@ def cylindrical_power_law_volume_radial_derivative_coefficient(
     target_radius: float,
     gravitational_constant: float = 1.0,
 ) -> float:
-    """Return the radial derivative of the continuous power-law volume potential.
+    r"""Return the radial derivative of the continuous power-law volume potential.
 
     Differentiate the split radial integrals analytically. The moving-endpoint
     terms cancel, including at both density-domain boundaries. Resonant power
     integrals retain their logarithmic limits.
+
+    Parameters
+    ----------
+    radius_inner : real
+        Finite positive inner source/shell radius in consistent length units.
+    radius_outer : real
+        Finite positive outer source/shell radius, strictly larger than radius_inner.
+    wavenumber : int
+        Positive cylindrical Fourier mode n >= 1 in the unnormalized cosine basis.
+    radial_exponent : real
+        Finite real power k of compact cylindrical density coefficient*(r/radius_outer)**k.
+    density_coefficient : real
+        Finite signed cylindrical volume-density amplitude at radius_outer; physical units
+        are mass/volume.
+    target_radius : real
+        Finite positive evaluation radius, inside or outside the source support.
+    gravitational_constant : real, default=1.0
+        Finite positive G in units consistent with radii and densities. No unit conversion
+        is performed.
+
+    Returns
+    -------
+    float
+        Radial potential derivative coefficient in potential/length units. Compact
+        volume-source derivatives are continuous at the source-support boundaries.
+
+    Raises
+    ------
+    TypeError
+        The harmonic degree/mode or density power has an invalid type, or a real input
+        cannot be converted.
+    ValueError
+        A numeric input is nonfinite, a required positive value is nonpositive, or the
+        harmonic degree/mode, radius ordering or source support is invalid.
+
+    Notes
+    -----
+    The convention is laplacian(Phi)=-4*pi*G*rho. All density coefficients and returned coefficients
+    share the selected angular basis/normalization. No mesh, MPI operation or PDE solve is
+    performed.
     """
     ri, ro, mode = _validate_cylindrical_annulus(radius_inner, radius_outer, wavenumber)
     target = _positive_float(target_radius, "target_radius")

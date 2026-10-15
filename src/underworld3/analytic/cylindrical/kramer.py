@@ -5,8 +5,8 @@ validated independently against assess and the Stokes equations. Coefficients,
 symbolic expressions and cached numerical evaluators have one implementation
 here. Only the optional AssessKramerCylindricalStokes oracle requires assess.
 
-Reference
----------
+Cylindrical Kramer reference
+----------------------------
 Kramer, S. C., Davies, D. R. and Wilson, C. R. (2021), Analytical solutions
 for mantle flow in cylindrical and spherical shells, Geoscientific Model
 Development 14, 1899-1919. https://doi.org/10.5194/gmd-14-1899-2021
@@ -43,6 +43,36 @@ from .._kramer_geoid import _KramerGeoidMixin
 
 
 def coefficients_cylinder_delta_fs(Rp, Rm, rp, n, g, nu, sign):
+    r"""Construct the cylindrical Kramer free-slip radial coefficients.
+
+    Parameters
+    ----------
+    Rp : real
+        Positive outer radius in the chosen length scaling; ``Rm < Rp``.
+    Rm : real
+        Positive inner radius in the same scaling as ``Rp``.
+    rp : real
+        Delta-sheet radius strictly between ``Rm`` and ``Rp``.
+    n : int
+        Cylindrical Fourier wavenumber, at least 2; basis ``cos(n*theta)``.
+    g : real
+        Signed normal-stress jump coefficient ``g*Y``; the physical sheet force is ``-g*Y*e_r``.
+    nu : real
+        Positive constant dynamic viscosity in the same scaling as the forcing.
+    sign : {-1, 1}
+        Select the inner (-1) or outer (+1) branch relative to the delta sheet.
+
+    Returns
+    -------
+    tuple of real or sympy expressions
+        Radial coefficients ``(A, B, C, D)`` in the published radial-power ordering.
+
+    Notes
+    -----
+    These low-level helpers assume validated radii, modes and nonsingular powers. Use the public
+    Stokes class for input validation. No mesh, PDE solve or unit conversion is performed; the
+    angular coefficient normalization is supplied by the caller.
+    """
     alpha_pm, alpha_mp = [Rp / rp, Rm / rp][:: int(sign)]
     pm = sign
 
@@ -83,6 +113,36 @@ def coefficients_cylinder_delta_fs(Rp, Rm, rp, n, g, nu, sign):
 
 
 def coefficients_cylinder_delta_ns(Rp, Rm, rp, n, g, nu, sign):
+    r"""Construct the cylindrical Kramer zero-slip radial coefficients.
+
+    Parameters
+    ----------
+    Rp : real
+        Positive outer radius in the chosen length scaling; ``Rm < Rp``.
+    Rm : real
+        Positive inner radius in the same scaling as ``Rp``.
+    rp : real
+        Delta-sheet radius strictly between ``Rm`` and ``Rp``.
+    n : int
+        Cylindrical Fourier wavenumber, at least 2; basis ``cos(n*theta)``.
+    g : real
+        Signed normal-stress jump coefficient ``g*Y``; the physical sheet force is ``-g*Y*e_r``.
+    nu : real
+        Positive constant dynamic viscosity in the same scaling as the forcing.
+    sign : {-1, 1}
+        Select the inner (-1) or outer (+1) branch relative to the delta sheet.
+
+    Returns
+    -------
+    tuple of real or sympy expressions
+        Radial coefficients ``(A, B, C, D)`` in the published radial-power ordering.
+
+    Notes
+    -----
+    These low-level helpers assume validated radii, modes and nonsingular powers. Use the public
+    Stokes class for input validation. No mesh, PDE solve or unit conversion is performed; the
+    angular coefficient normalization is supplied by the caller.
+    """
     alpha_p, alpha_m = [Rp / rp, Rm / rp]
     pm, mp = sign, -sign
 
@@ -181,6 +241,35 @@ def coefficients_cylinder_delta_ns(Rp, Rm, rp, n, g, nu, sign):
 
 
 def coefficients_cylinder_smooth_fs(Rp, Rm, k, n, g, nu):
+    r"""Construct the cylindrical Kramer free-slip radial coefficients.
+
+    Parameters
+    ----------
+    Rp : real
+        Positive outer radius in the chosen length scaling; ``Rm < Rp``.
+    Rm : real
+        Positive inner radius in the same scaling as ``Rp``.
+    k : int
+        Radial exponent of smooth density ``(r/Rp)**k``. Resonant powers require a
+        logarithmic family and are excluded.
+    n : int
+        Cylindrical Fourier wavenumber, at least 2; basis ``cos(n*theta)``.
+    g : real
+        Signed coefficient of the smooth radial body force ``-g*(r/Rp)**k*Y*e_r``.
+    nu : real
+        Positive constant dynamic viscosity in the same scaling as the forcing.
+
+    Returns
+    -------
+    tuple of real or sympy expressions
+        Radial coefficients ``(A, B, C, D, E)`` in the published radial-power ordering.
+
+    Notes
+    -----
+    These low-level helpers assume validated radii, modes and nonsingular powers. Use the public
+    Stokes class for input validation. No mesh, PDE solve or unit conversion is performed; the
+    angular coefficient normalization is supplied by the caller.
+    """
     alpha = Rm / Rp
     A = (
         -0.25
@@ -215,6 +304,35 @@ def coefficients_cylinder_smooth_fs(Rp, Rm, k, n, g, nu):
 
 
 def coefficients_cylinder_smooth_ns(Rp, Rm, k, n, g, nu):
+    r"""Construct the cylindrical Kramer zero-slip radial coefficients.
+
+    Parameters
+    ----------
+    Rp : real
+        Positive outer radius in the chosen length scaling; ``Rm < Rp``.
+    Rm : real
+        Positive inner radius in the same scaling as ``Rp``.
+    k : int
+        Radial exponent of smooth density ``(r/Rp)**k``. Resonant powers require a
+        logarithmic family and are excluded.
+    n : int
+        Cylindrical Fourier wavenumber, at least 2; basis ``cos(n*theta)``.
+    g : real
+        Signed coefficient of the smooth radial body force ``-g*(r/Rp)**k*Y*e_r``.
+    nu : real
+        Positive constant dynamic viscosity in the same scaling as the forcing.
+
+    Returns
+    -------
+    tuple of real or sympy expressions
+        Radial coefficients ``(A, B, C, D, E)`` in the published radial-power ordering.
+
+    Notes
+    -----
+    These low-level helpers assume validated radii, modes and nonsingular powers. Use the public
+    Stokes class for input validation. No mesh, PDE solve or unit conversion is performed; the
+    angular coefficient normalization is supplied by the caller.
+    """
     alpha = Rm / Rp
     denom = (
         ((alpha ** (n + 1) - alpha ** (n - 1)) ** 2 * n**2 - (alpha ** (2 * n) - 1) ** 2)
@@ -275,6 +393,40 @@ def coefficients_cylinder_smooth_ns(Rp, Rm, k, n, g, nu):
 
 
 def build_delta_solution(Rp, Rm, rp, n, g, nu, sign, no_slip):
+    r"""Construct the cylindrical Kramer selected-wall radial coefficients.
+
+    Parameters
+    ----------
+    Rp : real
+        Positive outer radius in the chosen length scaling; ``Rm < Rp``.
+    Rm : real
+        Positive inner radius in the same scaling as ``Rp``.
+    rp : real
+        Delta-sheet radius strictly between ``Rm`` and ``Rp``.
+    n : int
+        Cylindrical Fourier wavenumber, at least 2; basis ``cos(n*theta)``.
+    g : real
+        Signed Kramer forcing coefficient. Delta normal-stress jump is ``g*Y`` and its
+        physical sheet force is ``-g*Y*e_r``; smooth body force is ``-g*(r/Rp)**k*Y*e_r``.
+    nu : real
+        Positive constant dynamic viscosity in the same scaling as the forcing.
+    sign : {-1, 1}
+        Select the inner (-1) or outer (+1) branch relative to the delta sheet.
+    no_slip : bool
+        True selects zero wall velocity; False selects impermeable free slip at both radii.
+
+    Returns
+    -------
+    types.SimpleNamespace
+        Branch coefficients ``ABCD`` (delta) or ``ABCDE`` (smooth), mode/viscosity/forcing
+        metadata and pressure coefficients for the symbolic field builders.
+
+    Notes
+    -----
+    These low-level helpers assume validated radii, modes and nonsingular powers. Use the public
+    Stokes class for input validation. No mesh, PDE solve or unit conversion is performed; the
+    angular coefficient normalization is supplied by the caller.
+    """
     if no_slip:
         ABCD = coefficients_cylinder_delta_ns(Rp, Rm, rp, n, g, nu, sign)
     else:
@@ -291,6 +443,44 @@ def build_delta_solution(Rp, Rm, rp, n, g, nu, sign, no_slip):
 
 
 def build_smooth_solution(Rp, Rm, k, n, g, nu, no_slip):
+    r"""Construct the cylindrical Kramer selected-wall radial coefficients.
+
+    Parameters
+    ----------
+    Rp : real
+        Positive outer radius in the chosen length scaling; ``Rm < Rp``.
+    Rm : real
+        Positive inner radius in the same scaling as ``Rp``.
+    k : int
+        Radial exponent of smooth density ``(r/Rp)**k``. Resonant powers require a
+        logarithmic family and are excluded.
+    n : int
+        Cylindrical Fourier wavenumber, at least 2; basis ``cos(n*theta)``.
+    g : real
+        Signed Kramer forcing coefficient. Delta normal-stress jump is ``g*Y`` and its
+        physical sheet force is ``-g*Y*e_r``; smooth body force is ``-g*(r/Rp)**k*Y*e_r``.
+    nu : real
+        Positive constant dynamic viscosity in the same scaling as the forcing.
+    no_slip : bool
+        True selects zero wall velocity; False selects impermeable free slip at both radii.
+
+    Returns
+    -------
+    types.SimpleNamespace
+        Branch coefficients ``ABCD`` (delta) or ``ABCDE`` (smooth), mode/viscosity/forcing
+        metadata and pressure coefficients for the symbolic field builders.
+
+    Raises
+    ------
+    NotImplementedError
+        A smooth builder is asked for a resonant radial power.
+
+    Notes
+    -----
+    These low-level helpers assume validated radii, modes and nonsingular powers. Use the public
+    Stokes class for input validation. No mesh, PDE solve or unit conversion is performed; the
+    angular coefficient normalization is supplied by the caller.
+    """
     if abs(k + 3) == n or abs(k + 1) == n:
         raise NotImplementedError(f"Smooth solution not implemented for k={k}, n={n}")
     if no_slip:
@@ -312,7 +502,32 @@ def build_smooth_solution(Rp, Rm, k, n, g, nu, no_slip):
 
 
 def analytical_velocity_cartesian_sympy(soln, r_sym, th_sym, rrotN):
-    """Build a symbolic Cartesian velocity from analytical cylindrical coefficients."""
+    r"""Build a symbolic Cartesian velocity from analytical cylindrical coefficients.
+
+    Parameters
+    ----------
+    soln : types.SimpleNamespace
+        Branch returned by ``build_delta_solution`` or ``build_smooth_solution`` with its
+        radial and pressure coefficients.
+    r_sym : sympy.Symbol
+        Positive symbolic radial coordinate; the shell formulas exclude the origin.
+    th_sym : sympy expression
+        Azimuthal polar angle in radians.
+    rrotN : sympy.Matrix
+        Cartesian-to-polar/spherical rotation matrix; its transpose maps the local velocity
+        components back to Cartesian coordinates.
+
+    Returns
+    -------
+    sympy.Matrix
+        Cartesian velocity column with two components (cylindrical) or three (spherical), in
+        the input velocity scaling.
+
+    Notes
+    -----
+    The expressions use the unnormalized cosine/sine Fourier basis of the branch. No point
+    evaluation or PDE solve is performed.
+    """
     n_sol = int(soln.n)
 
     if hasattr(soln, "ABCD"):
@@ -355,7 +570,29 @@ def analytical_velocity_cartesian_sympy(soln, r_sym, th_sym, rrotN):
 
 
 def analytical_pressure_sympy(soln, r_sym, th_sym):
-    """Build a symbolic pressure expression from analytical cylindrical coefficients."""
+    r"""Build a symbolic pressure expression from analytical cylindrical coefficients.
+
+    Parameters
+    ----------
+    soln : types.SimpleNamespace
+        Branch returned by ``build_delta_solution`` or ``build_smooth_solution`` with its
+        radial and pressure coefficients.
+    r_sym : sympy.Symbol
+        Positive symbolic radial coordinate; the shell formulas exclude the origin.
+    th_sym : sympy expression
+        Azimuthal polar angle in radians.
+
+    Returns
+    -------
+    sympy expression
+        Symbolic pressure, radial stress or radial poloidal scalar in the branch scaling;
+        total normal stress is ``tau_rr-p``.
+
+    Notes
+    -----
+    The expressions use the unnormalized cosine/sine Fourier basis of the branch. No point
+    evaluation or PDE solve is performed.
+    """
     n_sol = int(soln.n)
     p_expr = (soln.G * r_sym**n_sol + soln.H * r_sym ** (-n_sol)) * sp.cos(n_sol * th_sym)
     if hasattr(soln, "F"):
@@ -374,6 +611,27 @@ def analytical_radial_deviatoric_stress_sympy(soln, r_sym, th_sym):
 
        \tau_{rr} = 2\eta n\cos(n\theta)
        \left(\frac{\psi_r}{r^2}-\frac{1}{r}\frac{d\psi_r}{dr}\right).
+
+    Parameters
+    ----------
+    soln : types.SimpleNamespace
+        Branch returned by ``build_delta_solution`` or ``build_smooth_solution`` with its
+        radial and pressure coefficients.
+    r_sym : sympy.Symbol
+        Positive symbolic radial coordinate; the shell formulas exclude the origin.
+    th_sym : sympy expression
+        Azimuthal polar angle in radians.
+
+    Returns
+    -------
+    sympy expression
+        Symbolic pressure, radial stress or radial poloidal scalar in the branch scaling;
+        total normal stress is ``tau_rr-p``.
+
+    Notes
+    -----
+    The expressions use the unnormalized cosine/sine Fourier basis of the branch. No point
+    evaluation or PDE solve is performed.
     """
 
     n_sol = int(soln.n)
@@ -417,7 +675,29 @@ def analytical_radial_deviatoric_stress_sympy(soln, r_sym, th_sym):
 
 
 def analytical_radial_normal_stress_sympy(soln, r_sym, th_sym):
-    r"""Return total radial normal stress :math:`\sigma_{rr}=\tau_{rr}-p`."""
+    r"""Return total radial normal stress :math:`\sigma_{rr}=\tau_{rr}-p`.
+
+    Parameters
+    ----------
+    soln : types.SimpleNamespace
+        Branch returned by ``build_delta_solution`` or ``build_smooth_solution`` with its
+        radial and pressure coefficients.
+    r_sym : sympy.Symbol
+        Positive symbolic radial coordinate; the shell formulas exclude the origin.
+    th_sym : sympy expression
+        Azimuthal polar angle in radians.
+
+    Returns
+    -------
+    sympy expression
+        Symbolic pressure, radial stress or radial poloidal scalar in the branch scaling;
+        total normal stress is ``tau_rr-p``.
+
+    Notes
+    -----
+    The expressions use the unnormalized cosine/sine Fourier basis of the branch. No point
+    evaluation or PDE solve is performed.
+    """
 
     tau_rr = analytical_radial_deviatoric_stress_sympy(soln, r_sym, th_sym)
     pressure = analytical_pressure_sympy(soln, r_sym, th_sym)
@@ -434,6 +714,27 @@ def analytical_radial_shear_stress_sympy(soln, r_sym, th_sym):
 
        \tau_{r\theta} = \eta\sin(n\theta)\left(
        \psi_r'' - \frac{\psi_r'}{r} + \frac{n^2\psi_r}{r^2}\right).
+
+    Parameters
+    ----------
+    soln : types.SimpleNamespace
+        Branch returned by ``build_delta_solution`` or ``build_smooth_solution`` with its
+        radial and pressure coefficients.
+    r_sym : sympy.Symbol
+        Positive symbolic radial coordinate; the shell formulas exclude the origin.
+    th_sym : sympy expression
+        Azimuthal polar angle in radians.
+
+    Returns
+    -------
+    sympy expression
+        Symbolic pressure, radial stress or radial poloidal scalar in the branch scaling;
+        total normal stress is ``tau_rr-p``.
+
+    Notes
+    -----
+    The expressions use the unnormalized cosine/sine Fourier basis of the branch. No point
+    evaluation or PDE solve is performed.
     """
 
     n_sol = int(soln.n)
@@ -527,7 +828,7 @@ class _KramerCylindricalBase(AnalyticSolution):
         return above, ~above
 
     def apply_boundary_conditions(self, solver):
-        """Free-slip or zero-slip on both arcs, as the case declares.
+        r"""Free-slip or zero-slip on both arcs, as the case declares.
 
         The two boundaries are curved, and the constraint uses the solver's own
         geometric normal rather than the analytic radial one. That is deliberate:
@@ -537,6 +838,21 @@ class _KramerCylindricalBase(AnalyticSolution):
         with facet non-uniformity. Reach for ``normal=`` only when the constraint
         must follow the true circle rather than the mesh — see the "Which normal
         to use" section of ``docs/developer/subsystems/rotated-freeslip.md``.
+
+        Parameters
+        ----------
+        solver : underworld3.systems.Stokes
+            Solver configured with this annulus mesh and Upper/Lower boundary labels.
+
+        Returns
+        -------
+        None
+            Installs homogeneous free/zero slip and enables the pressure nullspace.
+
+        Notes
+        -----
+        Call before solving. Free-slip constraints use the solver geometric normal; the physical
+        load is configured separately.
         """
 
         # The pressure nullspace belongs to the DOMAIN, not to the wall type.
@@ -555,45 +871,40 @@ class _KramerCylindricalBase(AnalyticSolution):
 
 
 class AssessKramerCylindricalStokes(_KramerCylindricalBase):
-    r"""Stokes flow in a cylindrical annulus, after Kramer et al. (2021).
-
-    Four cases, chosen by *density* and *boundary*:
-
-    ==========  ===========  ====================================================
-    ``density`` ``boundary`` anomaly
-    ==========  ===========  ====================================================
-    ``"delta"`` ``"free"``   a delta-function density shell at radius ``r_int``
-    ``"delta"`` ``"zero"``   the same, with zero-slip walls
-    ``"smooth"`` ``"free"``  :math:`r^k` radial dependence, wavenumber ``n``
-    ``"smooth"`` ``"zero"``  the same, with zero-slip walls
-    ==========  ===========  ====================================================
-
-    The delta cases are solved as two solutions, above and below the anomaly, and
-    :meth:`evaluate` selects between them by radius — that discontinuity is the
-    point of the benchmark, and flattening it would remove what is being tested.
+    r"""Optional assess numerical oracle for Kramer annular Stokes flow.
 
     Parameters
     ----------
-    mesh : Mesh
-        A 2D annulus mesh.
-    n : int
-        Azimuthal wavenumber.
-    k : int
-        Radial wavenumber. Used by the smooth cases only.
+    mesh : underworld3.discretisation.Mesh
+        Two-dimensional annulus mesh supplying coordinates and boundary labels.
+    n : int, default=2
+        Azimuthal Fourier mode; supported families/ranges follow assess.
+    k : int, default=2
+        Radial power for smooth density; unused for delta density.
     r_inner, r_outer : float
-        Shell radii.
-    r_int : float
-        Radius of the delta-function anomaly. Delta cases only.
-    density : {"delta", "smooth"}
-    boundary : {"free", "zero"}
+        Positive annulus radii in one scaling, default 0.5 and 1.0.
+    r_int : float, default=0.8
+        Internal sheet radius for delta density; unused for smooth density.
+    density : {"delta", "smooth"}, default="delta"
+        Internal delta sheet or smooth radial power-law volume anomaly.
+    boundary : {"free", "zero"}, default="free"
+        Impermeable free slip or zero-slip walls at both annulus radii.
+
+    Raises
+    ------
+    ImportError
+        The optional assess dependency is unavailable.
+    ValueError
+        Mesh dimension or density/wall choice is invalid.
 
     Notes
     -----
-    Built on the `assess` calls the curved-geometry benchmark scripts in
-    ``docs/examples/`` already make — ``CylindricalStokesSolution*(n, sign,
-    Rp=, Rm=, rp=, nu=, g=)`` with ``.velocity_cartesian`` and
-    ``.pressure_cartesian``. The wrapper's own tests cover the missing-dependency
-    path; the working path is only as good as those signatures.
+    Viscosity is fixed to 1; the assess g parameter is -1 for delta and +1 for
+    smooth density. Delta points are split into inner/outer branches, with the
+    outer branch selected on the sheet. This oracle has no symbolic fields.
+    Reference: Kramer, Davies and Wilson (2021), doi:10.5194/gmd-14-1899-2021.
+    Construction does not enforce all native-class geometry/mode checks;
+    the selected assess family validates its own inputs.
     """
 
     nonlinear = False
@@ -647,11 +958,12 @@ class AssessKramerCylindricalStokes(_KramerCylindricalBase):
 
 
     def evaluate(self, field, coords):
-        """Exact *field* at *coords*, choosing the branch by radius.
+        r"""Exact *field* at *coords*, choosing the branch by radius.
 
         Parameters
         ----------
         field : {"velocity", "pressure"}
+            Exact assess field to evaluate in the wrapper's reference scaling.
         coords : array, shape (n, 2)
             Cartesian coordinates.
 
@@ -681,11 +993,35 @@ class AssessKramerCylindricalStokes(_KramerCylindricalBase):
         return values if width == 2 else values[:, 0]
 
     def error(self, field, meshvar, norm="l2"):
-        """Relative error of *meshvar* against the exact *field*.
+        r"""Relative error of *meshvar* against the exact *field*.
 
         The mesh-variable coordinates are used directly, so this is the discrete
-        :math:`\\ell_2` norm over nodes rather than an integral — `assess` gives
+        :math:`\ell_2` norm over nodes rather than an integral — `assess` gives
         no symbolic form to integrate.
+
+        Parameters
+        ----------
+        field : {"velocity", "pressure"}
+            External assess reference field.
+        meshvar : underworld3.discretisation.MeshVariable
+            Compatible computed field at its own mesh-variable coordinates/scaling.
+        norm : {"l2"}, default="l2"
+            Only unweighted distributed nodal Euclidean error is supported.
+
+        Returns
+        -------
+        float
+            Relative nodal error as a fraction, not a percentage.
+
+        Raises
+        ------
+        ValueError
+            Field or norm is unsupported.
+
+        Notes
+        -----
+        Call collectively on UW3 ranks; shared/ghost nodal copies are included in the sums. Pressure
+        gauges must match. Zero reference norm is undefined.
         """
 
         if norm != "l2":
@@ -716,34 +1052,51 @@ class KramerCylindricalStokes(_KramerGeoidMixin, _KramerCylindricalBase):
     ``assess`` is needed only by the separate :class:`AssessKramerCylindricalStokes`
     oracle, not by this solution.
 
+
     Parameters
     ----------
-    mesh : Mesh
-        A two-dimensional mesh. The solution domain is the specified annulus.
-    n, k : int
-        Fourier mode (n>=2) and radial power for smooth density.
-    r_inner, r_outer, r_int : float
-        Annulus and internal-sheet radii. The sheet must be strictly inside.
-    density : {"delta", "smooth"}
-        Delta sheet or volume density proportional to ``(r/r_outer)**k``.
-    boundary : {"free", "zero"}
-        Free-slip or zero-slip on both bounding arcs.
-    viscosity : float
-        Positive constant viscosity.
-    forcing : float, optional
-        Kramer coefficient g: default -1 for delta and +1 for smooth. The
-        smooth bulk force is ``-g*(r/r_outer)**k*cos(n*theta)*e_r``.
+    mesh : underworld3.discretisation.Mesh
+        Mesh with the solution's dimension and coordinate symbols. Construction
+        builds expressions/evaluators; it does not solve a PDE or create a mesh.
+    n : int, default=2
+        Fourier wavenumber n >= 2; n=0/1 Stokes families are not implemented.
+    k : int, default=2
+        Smooth density exponent; ignored for delta density. Resonant powers
+        ``abs(k+1)==n`` or ``abs(k+3)==n`` are not implemented.
+    r_inner, r_outer : float
+        Finite positive annulus radii, default 0.5 and 1.0, ordered inner < outer.
+    r_int : float, default=0.8
+        Finite sheet radius strictly inside the annulus for delta density;
+        unused for the smooth case.
+    density : {"delta", "smooth"}, default="delta"
+        Conforming density sheet or smooth volume density proportional to
+        ``(r/r_outer)**k`` times the selected harmonic.
+    boundary : {"free", "zero"}, default="free"
+        Impermeable free slip or zero wall velocity on both bounding interfaces.
+    viscosity : float, default=1
+        Finite positive constant viscosity in the chosen scaling.
+    forcing : float or None, default=None
+        Finite signed Kramer coefficient g. None selects -1 for delta density
+        and +1 for smooth density; it is not converted automatically to mass density.
+
+    Raises
+    ------
+    TypeError
+        The radial power (or spherical degree/order) has an invalid type.
+    ValueError
+        Mesh dimension, mode, geometry, density/wall choice, viscosity or forcing
+        violates the constructor contract.
+    NotImplementedError
+        The selected smooth power belongs to a resonant logarithmic family.
 
     Notes
     -----
-    Delta bulk forcing is zero. Its sheet is encoded by the jump of the two
-    branches, not by differentiating a smoothed density. The outward normal
-    stress jump is ``g*cos(n*theta)``; in ``div(sigma)+f=0`` the sheet force is
-    its negative. At the sheet radius
-    point evaluation selects the outer branch. Bulk residual checks must sample
-    away from the interface; interface jump checks are separate.
-    ``evaluation_cse`` controls common-subexpression elimination before a cached
-    evaluator is first generated. It does not change the symbolic fields.
+    Use one consistent coordinate, viscosity and force scaling; no conversion
+    is performed. Delta bulk force is zero and the outward normal-stress jump
+    is ``g*Y``, so its physical sheet force in ``div(sigma)+f=0`` is ``-g*Y*e_r``.
+    Smooth body force is ``-g*(r/r_outer)**k*Y*e_r``. At the delta radius numerical
+    evaluation selects the outer branch; check bulk equations away from the sheet.
+    ``evaluation_cse`` controls cached NumPy compilation and leaves fields unchanged.
     """
 
     symbolic = True
@@ -877,12 +1230,35 @@ class KramerCylindricalStokes(_KramerGeoidMixin, _KramerCylindricalBase):
         self._evaluators = {}
 
     def apply_forcing(self, solver, internal_boundary="Internal"):
-        """Apply bulk forcing and, for delta density, its conforming weak load.
+        r"""Apply bulk forcing and, for delta density, its conforming weak load.
 
         Call once, separately from apply_boundary_conditions. A delta case
         requires the labelled conforming internal interface. Its natural datum
         is the stress jump g*cos(n*theta)*e_r; in div(sigma)+f=0 the physical
         sheet force is its negative. No Gaussian regularisation is introduced.
+
+        Parameters
+        ----------
+        solver : underworld3.systems.Stokes
+            Solver on the reference mesh whose bodyforce is configured before solving.
+        internal_boundary : str, default="Internal"
+            Label for a conforming delta sheet, required only for delta density.
+
+        Returns
+        -------
+        None
+            Mutates solver forcing; it does not run the solver.
+
+        Raises
+        ------
+        ValueError
+            Kramer solver/reference meshes differ or a delta interface label is missing.
+
+        Notes
+        -----
+        Call once, separately from applying the wall conditions. Kramer delta cases add the natural
+        stress-jump datum g*Y*e_r with opposite physical-force sign; smooth cases set the bulk
+        force.
         """
         if solver.mesh is not self.mesh:
             raise ValueError("The solver and analytic solution must share the same mesh.")
@@ -895,7 +1271,37 @@ class KramerCylindricalStokes(_KramerGeoidMixin, _KramerCylindricalBase):
             solver.add_natural_bc(self.fn_interface_stress_jump * unit_r, internal_boundary)
 
     def evaluate(self, field, coords):
-        """Evaluate a named field in batches; arbitrary expressions use UW3 JIT."""
+        r"""Evaluate a named field in batches; arbitrary expressions use UW3 JIT.
+
+        Parameters
+        ----------
+        field : str or sympy expression
+            Named field or symbolic expression. Native names include velocity,
+            pressure, viscosity, bodyforce, strainrate, stress and radial_normal_stress;
+            Additional named traction field: radial_shear_stress.
+        coords : array-like, shape (N, 2)
+            Finite Cartesian coordinates in the reference scaling; the origin is
+            excluded. Shell membership is the caller's responsibility.
+
+        Returns
+        -------
+        numpy.ndarray
+            One value per point: scalar (N,), vector (N, 2), or tensor
+            (N, 2, 2). radial_shear_stress is the scalar radial/tangential shear
+            component. Arbitrary expressions use the UW3
+            evaluator's expression shape. Empty arrays retain the corresponding shape.
+
+        Raises
+        ------
+        ValueError
+            Coordinates or the requested field are invalid.
+
+        Notes
+        -----
+        Named fields use cached vectorized NumPy evaluators; symbolic expressions delegate to the
+        shared JIT evaluator. This performs no Stokes solve. Delta sheet points select the outer
+        branch; Cartesian spherical evaluators are finite at both poles.
+        """
         if not isinstance(field, str):
             return AnalyticSolution.evaluate(self, field, coords)
         if field not in self._polar_fields[0]:
@@ -942,7 +1348,29 @@ class KramerCylindricalStokes(_KramerGeoidMixin, _KramerCylindricalBase):
             )
 
     def compile_evaluators(self, *fields):
-        """Prepare named-field NumPy evaluators once, without evaluating points."""
+        r"""Prepare named-field NumPy evaluators once, without evaluating points.
+
+        Parameters
+        ----------
+        *fields : str
+            Names of fields to prepare; use the same names accepted by evaluate.
+            An empty argument list compiles nothing.
+
+        Returns
+        -------
+        None
+            Cached evaluators are prepared without sampling points or solving a PDE.
+
+        Raises
+        ------
+        ValueError
+            A requested field is unknown.
+
+        Notes
+        -----
+        The cache includes evaluation_cse; toggling it selects separately compiled
+        common-subexpression-elimination evaluators.
+        """
         for field in fields:
             if field not in self._polar_fields[0]:
                 raise ValueError(f"Unknown Kramer field {field!r}.")
@@ -950,7 +1378,34 @@ class KramerCylindricalStokes(_KramerGeoidMixin, _KramerCylindricalBase):
                 self._compile_evaluator(field, branch)
 
     def error(self, field, meshvar, norm="l2"):
-        """Use cached named-field nodal evaluation or the symbolic integral norm."""
+        r"""Use cached named-field nodal evaluation or the symbolic integral norm.
+
+        Parameters
+        ----------
+        field : str or sympy expression
+            Reference field selected by name or expression.
+        meshvar : underworld3.discretisation.MeshVariable
+            Computed field with compatible components/scaling on the reference mesh.
+        norm : {"l2", "integral"}, default="l2"
+            Unweighted nodal Euclidean ratio (including distributed nodal copies) or
+            continuous mesh-integral L2 ratio. Align the pressure gauge first.
+
+        Returns
+        -------
+        float
+            Relative error, as a fraction rather than a percentage.
+
+        Raises
+        ------
+        ValueError
+            Norm or field is unsupported.
+
+        Notes
+        -----
+        Named cylindrical Kramer fields use their cached nodal evaluator; other requests use the
+        shared symbolic error implementation. A zero reference norm does not define a relative
+        error; use error_report for explicit handling.
+        """
         if norm != "l2" or not isinstance(field, str):
             return AnalyticSolution.error(self, field, meshvar, norm)
         computed = np.asarray(meshvar.array).reshape(len(meshvar.coords), -1)
@@ -960,7 +1415,23 @@ class KramerCylindricalStokes(_KramerGeoidMixin, _KramerCylindricalBase):
         return float(np.sqrt(difference / magnitude))
 
     def sample_points(self, count=12):
-        """Deterministic bulk points on both sides, excluding the sheet itself."""
+        r"""Deterministic bulk points on both sides, excluding the sheet itself.
+
+        Parameters
+        ----------
+        count : int, default=12
+            Requested number of interior diagnostic points; use a positive count.
+
+        Returns
+        -------
+        numpy.ndarray, shape (count, 2)
+            Deterministic Cartesian points strictly between the two reference radii.
+
+        Notes
+        -----
+        This samples the continuous reference independently of mesh nodes. Kramer perturbs points
+        that would coincide with the internal sheet.
+        """
         radii = self.r_inner + (self.r_outer - self.r_inner) * (np.arange(count) + 0.37) / count
         radii[np.isclose(radii, self.r_int)] += 1e-4 * (self.r_outer - self.r_inner)
         theta = np.arange(count) * 2.399963229728653

@@ -38,6 +38,12 @@ class AnalyticSolution(uw_object):
         stokes.solve()
         rel = sol.error("velocity", stokes.u)
 
+    Parameters
+    ----------
+    mesh : underworld3.discretisation.Mesh
+        Coordinate/mesh owner for exact expressions. A concrete class with declared
+        dim rejects a mesh of a different dimension. Construction performs no solve.
+
     Attributes
     ----------
     dim : int
@@ -235,7 +241,10 @@ class AnalyticSolution(uw_object):
         ----------
         velocity, bodyforce : sequence
             ``dim`` components each.
-        pressure, viscosity : sympy expression
+        pressure : sympy expression
+            Scalar pressure in the reference stress scaling and pressure gauge.
+        viscosity : sympy expression
+            Dynamic viscosity in the same units as the stress/strain-rate relation.
         stress : sequence of sequences, optional
             ``dim x dim``. Read as the deviator or the total according to
             :attr:`stress_is_deviatoric`. Derived from the strain rate if
@@ -445,12 +454,37 @@ class AnalyticSolution(uw_object):
         return uw.function.evaluate(self._exact(field), np.asarray(coords))
 
     def error_report(self, field, meshvar, norm="l2"):
-        """Absolute and relative global L2 errors as a JSON-ready dictionary.
+        r"""Absolute and relative global L2 errors as a JSON-ready dictionary.
 
         ``l2`` sums squared nodal values across MPI ranks, following ``error``;
         ``integral`` uses the continuous mesh integral for convergence studies.
         A zero exact norm returns ``relative_l2=None``. Pressure must have the
         same additive gauge as the reference before comparison.
+
+        Parameters
+        ----------
+        field : str or sympy expression
+            Exact reference field, in the computed field's scaling and pressure gauge.
+        meshvar : underworld3.discretisation.MeshVariable
+            Computed scalar/vector/tensor with compatible components on the reference mesh.
+        norm : {"l2", "integral"}, default="l2"
+            Global unweighted nodal Euclidean or continuous mesh-integral L2 error.
+
+        Returns
+        -------
+        dict
+            norm, absolute_l2, reference_l2, relative_l2 and percentage_error.
+            Relative/percentage values are None if the exact norm is zero.
+
+        Raises
+        ------
+        ValueError
+            Field or norm is unsupported.
+
+        Notes
+        -----
+        Call collectively on UW3 ranks. Nodal sums include distributed shared copies; the integral
+        norm is appropriate for comparing different discretizations.
         """
         exact = self._exact(field)
         if norm == "integral":
@@ -574,7 +608,7 @@ class AnalyticSolution(uw_object):
         self.fn_capacity = sympy.sympify(capacity)
 
     def apply_boundary_conditions(self, solver):
-        """Impose the boundary conditions this solution is posed under.
+        r"""Impose the boundary conditions this solution is posed under.
 
         Every solution writes this itself, because the conditions are part of
         the problem it answers and are not always the same on every boundary.
@@ -582,6 +616,25 @@ class AnalyticSolution(uw_object):
         :func:`prescribed_scalar` are here to be composed inside it — each takes
         the boundaries it applies to, so a solution with a slipping wall and a
         driven one calls both.
+
+        Parameters
+        ----------
+        solver : underworld3.systems.Stokes or compatible solver
+            Solver that should receive the concrete reference's boundary conditions.
+
+        Returns
+        -------
+        None
+            Concrete subclasses configure the solver without solving it.
+
+        Raises
+        ------
+        NotImplementedError
+            The subclass has not declared its boundary conditions.
+
+        Notes
+        -----
+        This base method requires a subclass implementation; it does not infer a wall policy.
         """
 
         raise NotImplementedError(

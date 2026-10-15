@@ -51,6 +51,21 @@ class ZhongSphericalStokesResponse:
     grouped in ``self_gravity``.  This mirrors the separation in Zhong et al.
     (2008): self-gravity changes the topography/geoid interpretation but not the
     Stokes velocity.
+
+    Attributes
+    ----------
+    surface_topography, cmb_topography : float
+        Signed normalized hydrodynamic boundary-displacement coefficients.
+    surface_geoid, cmb_geoid : float
+        Normalized geoid coefficients without feedback, with 4*pi*G/g factored out.
+    surface_characteristic_velocity, cmb_characteristic_velocity : float
+        Signed tangential characteristic coefficients y_2 in the paper's basis;
+        these are not RMS velocity magnitudes or FE-sign-adjusted coefficients.
+    surface_velocity_divergence, cmb_velocity_divergence : float
+        Surface divergence coefficients -l*(l+1)*y_2/r in the same scaling.
+    self_gravity : SelfGravityResponse
+        Separate feedback-corrected topography/geoid payload; velocities remain
+        the original hydrodynamic values. All response coefficients are nondimensional.
     """
 
     surface_topography: float
@@ -69,29 +84,30 @@ class ZhongSphericalStokes:
 
     Parameters
     ----------
-    harmonic_degree : int
-        Spherical-harmonic degree :math:`l`.  The radial response is independent
+    harmonic_degree : int, default=2
+        Positive integer spherical-harmonic degree :math:`l >= 1`.  The radial response is independent
         of harmonic order :math:`m`.
     radius_inner, radius_outer : float
-        Nondimensional CMB and surface radii.
-    internal_load_radius : float
-        Radius of the radial delta-function load.
-    internal_load_coefficient : float
+        Finite positive nondimensional CMB and surface radii, defaults 0.55 and
+        1.0, with the load strictly between them.
+    internal_load_radius : float, default=0.775
+        Finite nondimensional radius of the radial delta load, strictly inside the shell.
+    internal_load_coefficient : float, default=1
         Coefficient of the outward load.  The Zhong benchmark uses one.
-    viscosity_interfaces : sequence of float
+    viscosity_interfaces : sequence of float, default=()
         Strictly increasing radii at which viscosity changes.  Omit for an
         isoviscous shell.
-    viscosities : sequence of float
+    viscosities : sequence of float, default=(1.0,)
         Positive dimensionless viscosities from the innermost to outermost
         layer.  Its length must be one greater than ``viscosity_interfaces``.
     surface_density_contrast, cmb_density_contrast : float
         Signed density contrasts used only for self-gravity postprocessing, in
-        kg/m^3.  Defaults reproduce Zhong et al. (2008).
-    planet_radius : float
+        kg/m^3. Defaults 3300 and 5400 reproduce Zhong et al. (2008).
+    planet_radius : float, default=6370000
         Dimensional planet radius in metres, used only for self-gravity.
-    gravity : float
+    gravity : float, default=9.8
         Surface gravitational acceleration in m/s^2.
-    gravitational_constant : float
+    gravitational_constant : float, default=6.67e-11
         Gravitational constant in SI units.  The default is the value used in
         Zhong et al. (2008), not the current CODATA value.
 
@@ -131,6 +147,14 @@ class ZhongSphericalStokes:
     ... ).response()
     >>> round(result.self_gravity.surface_geoid, 5)
     0.05789
+
+    Raises
+    ------
+    TypeError
+        Degree is not an integer.
+    ValueError
+        Degree, radius ordering, viscosity layering, finite load/contrasts or
+        positive physical constants violate the constructor contract.
     """
 
     geometry = "spherical"
@@ -301,7 +325,24 @@ class ZhongSphericalStokes:
         return cmb_state, surface_state
 
     def response(self) -> ZhongSphericalStokesResponse:
-        r"""Compute no-self-gravity and self-gravity response coefficients."""
+        r"""Compute no-self-gravity and self-gravity response coefficients.
+
+        Returns
+        -------
+        ZhongSphericalStokesResponse
+            Normalized hydrodynamic topography/geoid and signed characteristic
+            velocities/divergences, plus a separate self-gravity response.
+
+        Raises
+        ------
+        numpy.linalg.LinAlgError
+            A propagator boundary system or interface-feedback matrix is singular.
+
+        Notes
+        -----
+        This mesh-independent reference performs only small matrix propagation/solves;
+        it does not run a finite-element Stokes model or perform MPI communication.
+        """
 
         cmb_state, surface_state = self._boundary_states()
         degree = self.harmonic_degree

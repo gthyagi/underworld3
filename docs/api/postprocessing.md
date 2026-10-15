@@ -44,6 +44,14 @@ discrete mean source. The Stokes sheet installer returns a callback-owned
 linear equation is $Jx=-b_{\mathrm{sheet}}$. These signs and ownership rules
 are part of the API contract.
 
+Despite its current module path, `install_linear_spherical_stokes_sheet_load`
+is **solver setup**: call it before `stokes.solve()`. It installs a conforming
+internal-interface forcing term rather than deriving a quantity from a completed
+solution. Its placement alongside the potential trace integrators is an
+ownership issue; a future solver API should expose this load through a Stokes
+method, with assembly support under solver utilities. The current path remains
+available while that separate API change is reviewed.
+
 ```{eval-rst}
 .. automodule:: underworld3.postprocessing.spherical_interface_load
    :members:

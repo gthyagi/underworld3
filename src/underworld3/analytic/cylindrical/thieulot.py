@@ -22,11 +22,44 @@ from .._thieulot_fields import _ThieulotStokesBase
 
 
 class ThieulotCylindricalStokes(_ThieulotStokesBase):
-    """Thieulot's isoviscous annulus, with prescribed tangential wall velocity.
+    r"""Thieulot's isoviscous annulus, with prescribed tangential wall velocity.
 
     ``k`` is the nonnegative Fourier mode; ``amplitude`` is the integration
     constant C (default -1). ``rho_0`` adds hydrostatic background density.
     Pressure/density scale with ``viscosity`` for fixed manufactured velocity.
+
+    Parameters
+    ----------
+    mesh : underworld3.discretisation.Mesh
+        Mesh in the case's dimension. Only coordinate symbols are used to build
+        the reference; construction creates no mesh and performs no PDE solve.
+    k : int, default=2
+        Nonnegative Fourier mode of the static annulus manufactured solution.
+    r_inner, r_outer : float
+        Finite positive annulus radii, defaults 1 and 2, ordered inner < outer.
+    amplitude : float, default=-1
+        Finite integration constant C setting the manufactured velocity amplitude.
+    viscosity : float, default=1
+        Finite positive constant viscosity. Pressure and anomalous density scale
+        with viscosity when velocity is held fixed.
+    rho_0 : float, default=0
+        Finite background density coefficient; adds hydrostatic pressure
+        ``rho_0*(r_outer-r)`` and inward radial body force.
+
+    Raises
+    ------
+    ValueError
+        Mesh dimension, radii, exponent, amplitude or viscosity inputs are invalid.
+
+    Notes
+    -----
+    Use the reference's consistent nondimensional coordinate/force scaling,
+    including radial powers and logarithms; no unit conversion is performed.
+    The body force uses unit inward radial gravity. Both walls take the exact
+    manufactured velocity, which generally has nonzero tangential components;
+    this is prescribed velocity rather than homogeneous free slip. Cached
+    evaluators expose velocity, pressure, viscosity, density, bodyforce, stress,
+    strainrate and radial_normal_stress. Source citation is in the module docstring.
     """
 
     dim = 2

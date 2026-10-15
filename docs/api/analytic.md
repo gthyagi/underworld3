@@ -100,6 +100,16 @@ Their existing `uw.postprocessing.geoid` names re-export the same objects.
 Zhong depends directly on the pure gravity module; finite-element reaction
 adapters remain in postprocessing.
 
+## Parameter conventions
+
+The cylindrical and spherical case constructors, exported formula helpers,
+evaluators and gravity kernels describe their parameters and defaults in
+NumPy-style docstrings. Shared public methods carry their contracts at their
+owning base or mixin. Use one consistent physical or nondimensional scaling;
+these references do not convert units. In spherical Kramer, ``m`` is harmonic
+order; in spherical Thieulot, ``m`` sets the radial viscosity exponent.
+Signed stress, source density and load coefficients have distinct meanings.
+
 ## Kramer cylindrical fields
 
 The single `underworld3.analytic.cylindrical.kramer` module owns coefficients,
@@ -209,12 +219,14 @@ owning rank and shared DOFs are added collectively on the mesh communicator.
 Temporary PETSc objects are released on exceptions.
 
 The restricted `install_linear_spherical_stokes_sheet_load` applies radial
-sheet forcing to constant linear ViscousFlowModel/P2 velocity systems after
+sheet forcing to linear ViscousFlowModel/P2 velocity systems with fixed constant or spatial viscosity after
 homogeneous wall conditions and solver policy have been configured. It uses the
 native assembled Jacobian and an explicit owned-facet weak RHS, whose moment
 against rigid rotations is zero. It rejects nonlinear models, other natural
 loads and nonzero essential data. Reinstall after any model/mesh setup change;
-it is not a general nonlinear residual hook. The generic natural-load route
+it is not a general nonlinear residual hook. This is pre-solve load installation;
+its current postprocessing module location is an ownership issue for a separate
+Stokes API change. The generic natural-load route
 remains available for diagnostics, but the benchmark records a same-mesh MPI
 compatibility discrepancy for that route.
 

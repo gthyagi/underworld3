@@ -21,12 +21,44 @@ from .._thieulot_fields import _ThieulotStokesBase
 
 
 class ThieulotSphericalStokes(_ThieulotStokesBase):
-    """Thieulot (2017) shell with eta=mu_0*r**(m+1) and prescribed wall velocity.
+    r"""Thieulot (2017) shell with eta=mu_0*r**(m+1) and prescribed wall velocity.
 
     ``m=-1`` is constant viscosity; ``m=3`` is the common variable-viscosity
     case. ``m`` is NOT spherical-harmonic order. The poloidal and toroidal
     velocity components follow the published solution. Cartesian expressions
     avoid pole singularities. The degenerate m=-4 family is not implemented.
+
+    Parameters
+    ----------
+    mesh : underworld3.discretisation.Mesh
+        Mesh in the case's dimension. Only coordinate symbols are used to build
+        the reference; construction creates no mesh and performs no PDE solve.
+    m : int, default=-1
+        Radial viscosity exponent parameter in ``eta=mu_0*r**(m+1)``; this is
+        not spherical-harmonic order. -1 is isoviscous; -4 is unsupported.
+    r_inner, r_outer : float
+        Finite positive shell radii, defaults 0.5 and 1, ordered inner < outer.
+    gamma : float, default=1
+        Finite integration constant setting the manufactured velocity amplitude.
+    mu_0 : float, default=1
+        Finite positive radial-viscosity prefactor in the reference scaling.
+
+    Raises
+    ------
+    ValueError
+        Mesh dimension, radii, exponent, amplitude or viscosity inputs are invalid.
+    NotImplementedError
+        The m=-4 logarithmic family is requested.
+
+    Notes
+    -----
+    Use the reference's consistent nondimensional coordinate/force scaling,
+    including radial powers and logarithms; no unit conversion is performed.
+    The body force uses unit inward radial gravity. Both walls take the exact
+    manufactured velocity, which generally has nonzero tangential components;
+    this is prescribed velocity rather than homogeneous free slip. Cached
+    evaluators expose velocity, pressure, viscosity, density, bodyforce, stress,
+    strainrate and radial_normal_stress. Source citation is in the module docstring.
     """
 
     dim = 3

@@ -17,11 +17,18 @@ class _KramerGeoidMixin:
     case = "kramer"
 
     def boundary_stress_coefficients(self):
-        """Total sigma_rr coefficients in this solution's angular basis.
+        r"""Total sigma_rr coefficients in this solution's angular basis.
 
         Boundary ordering is outer/inner. Spherical coefficients multiply the
         selected real Y_lm, including its normalization; cylindrical ones
         multiply cos(n*theta). No surface sampling or harmonic division occurs.
+
+        Returns
+        -------
+        dict
+            outer_radial_normal_stress and inner_radial_normal_stress, in the
+            reference stress units and angular normalization. These are fluid sigma_rr,
+            not sign-reversed wall reactions.
         """
         r = sp.Symbol("_response_r", positive=True)
         if self.geometry == "cylindrical":
@@ -57,7 +64,7 @@ class _KramerGeoidMixin:
         source_density_coefficient,
         include_self_gravity=False,
     ):
-        """Analytical free-slip topography/potential/geoid coefficients.
+        r"""Analytical free-slip topography/potential/geoid coefficients.
 
         Required inputs use one consistent unit system with the Stokes stress
         and radii. Signed contrasts are density at smaller radius minus density
@@ -72,6 +79,44 @@ class _KramerGeoidMixin:
         With unit inward forcing gravity and consistent scales it equals g.
         N=Phi/g_reference, laplacian(Phi)=-4*pi*G*rho. Optional self-gravity is
         linear two-interface feedback after the Stokes solve, not a new solve.
+
+        Parameters
+        ----------
+        outer_density_contrast, inner_density_contrast : float
+            Finite nonzero signed contrasts, smaller-radius-side minus larger-radius-side
+            density, in mass/volume units consistent with the Stokes stress scaling.
+        outer_reference_gravity, inner_reference_gravity : float
+            Finite positive gravity magnitudes in the corresponding length/time^2 units.
+        gravitational_constant : float
+            Finite positive G in the same physical or nondimensional unit system.
+        source_density_coefficient : float
+            Explicit finite signed surface density for a delta sheet (mass/area), or
+            volume-density amplitude at r_outer for a smooth source (mass/volume).
+            The Stokes forcing amplitude is not automatically treated as this density.
+        include_self_gravity : bool, default=False
+            Add separate linear two-interface feedback quantities when True.
+
+        Returns
+        -------
+        dict
+            Outer/inner hydrodynamic topography, physical potential and geoid coefficients;
+            feedback adds corresponding ``*_self_gravity`` keys and matrix diagnostics.
+            The spherical result also includes its feedback condition number.
+
+        Raises
+        ------
+        TypeError
+            include_self_gravity is not boolean.
+        ValueError
+            Wall choice, contrasts, reference gravity or source inputs are invalid.
+        numpy.linalg.LinAlgError
+            The spherical interface-feedback system is singular or ill-conditioned.
+
+        Notes
+        -----
+        Call only for a free-slip Kramer solution. No FE solve, field sampling or unit conversion is
+        performed. All sources use this solution's angular normalization; cylindrical gravity
+        assumes axial invariance.
         """
         if self.boundary != "free":
             raise ValueError(

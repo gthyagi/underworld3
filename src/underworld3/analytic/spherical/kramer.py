@@ -3,8 +3,8 @@ r"""Native Kramer spherical Stokes coefficients, fields and batch evaluators.
 Radial formulas follow Kramer, Davies & Wilson (2021), GMD 14, 1899–1919.
 The Cartesian solid-harmonic representation avoids coordinate pole singularities.
 
-Reference
----------
+Spherical Kramer reference
+--------------------------
 Kramer, S. C., Davies, D. R. and Wilson, C. R. (2021), Analytical solutions
 for mantle flow in cylindrical and spherical shells, Geoscientific Model
 Development 14, 1899-1919. https://doi.org/10.5194/gmd-14-1899-2021
@@ -31,6 +31,36 @@ import sympy as sp
 
 
 def coefficients_sphere_delta_fs(Rp, Rm, rp, l, g, nu, sign):
+    r"""Construct the spherical Kramer free-slip radial coefficients.
+
+    Parameters
+    ----------
+    Rp : real
+        Positive outer radius in the chosen length scaling; ``Rm < Rp``.
+    Rm : real
+        Positive inner radius in the same scaling as ``Rp``.
+    rp : real
+        Delta-sheet radius strictly between ``Rm`` and ``Rp``.
+    l : int
+        Spherical-harmonic degree, at least 2.
+    g : real
+        Signed normal-stress jump coefficient ``g*Y``; the physical sheet force is ``-g*Y*e_r``.
+    nu : real
+        Positive constant dynamic viscosity in the same scaling as the forcing.
+    sign : {-1, 1}
+        Select the inner (-1) or outer (+1) branch relative to the delta sheet.
+
+    Returns
+    -------
+    tuple of real or sympy expressions
+        Radial coefficients ``(A, B, C, D)`` in the published radial-power ordering.
+
+    Notes
+    -----
+    These low-level helpers assume validated radii, modes and nonsingular powers. Use the public
+    Stokes class for input validation. No mesh, PDE solve or unit conversion is performed; the
+    angular coefficient normalization is supplied by the caller.
+    """
     alpha_pm, alpha_mp = [Rp / rp, Rm / rp][:: int(sign)]
     pm = sign
 
@@ -50,6 +80,36 @@ def coefficients_sphere_delta_fs(Rp, Rm, rp, l, g, nu, sign):
 
 
 def coefficients_sphere_delta_ns(Rp, Rm, rp, l, g, nu, sign):
+    r"""Construct the spherical Kramer zero-slip radial coefficients.
+
+    Parameters
+    ----------
+    Rp : real
+        Positive outer radius in the chosen length scaling; ``Rm < Rp``.
+    Rm : real
+        Positive inner radius in the same scaling as ``Rp``.
+    rp : real
+        Delta-sheet radius strictly between ``Rm`` and ``Rp``.
+    l : int
+        Spherical-harmonic degree, at least 2.
+    g : real
+        Signed normal-stress jump coefficient ``g*Y``; the physical sheet force is ``-g*Y*e_r``.
+    nu : real
+        Positive constant dynamic viscosity in the same scaling as the forcing.
+    sign : {-1, 1}
+        Select the inner (-1) or outer (+1) branch relative to the delta sheet.
+
+    Returns
+    -------
+    tuple of real or sympy expressions
+        Radial coefficients ``(A, B, C, D)`` in the published radial-power ordering.
+
+    Notes
+    -----
+    These low-level helpers assume validated radii, modes and nonsingular powers. Use the public
+    Stokes class for input validation. No mesh, PDE solve or unit conversion is performed; the
+    angular coefficient normalization is supplied by the caller.
+    """
     alpha_p, alpha_m = [Rp / rp, Rm / rp]
     pm, mp = sign, -sign
 
@@ -100,6 +160,35 @@ def coefficients_sphere_delta_ns(Rp, Rm, rp, l, g, nu, sign):
 
 
 def coefficients_sphere_smooth_fs(Rp, Rm, k, l, g, nu):
+    r"""Construct the spherical Kramer free-slip radial coefficients.
+
+    Parameters
+    ----------
+    Rp : real
+        Positive outer radius in the chosen length scaling; ``Rm < Rp``.
+    Rm : real
+        Positive inner radius in the same scaling as ``Rp``.
+    k : int
+        Radial exponent of smooth density ``(r/Rp)**k``. Resonant powers require a
+        logarithmic family and are excluded.
+    l : int
+        Spherical-harmonic degree, at least 2.
+    g : real
+        Signed coefficient of the smooth radial body force ``-g*(r/Rp)**k*Y*e_r``.
+    nu : real
+        Positive constant dynamic viscosity in the same scaling as the forcing.
+
+    Returns
+    -------
+    tuple of real or sympy expressions
+        Radial coefficients ``(A, B, C, D, E)`` in the published radial-power ordering.
+
+    Notes
+    -----
+    These low-level helpers assume validated radii, modes and nonsingular powers. Use the public
+    Stokes class for input validation. No mesh, PDE solve or unit conversion is performed; the
+    angular coefficient normalization is supplied by the caller.
+    """
     alpha = Rm / Rp
     A = 0.5 * Rp ** (-l + 3) * (alpha ** (k + 3) - alpha ** (-l + 1)) * g / (
         (alpha**l - alpha ** (-l + 1)) * (k + l + 2) * (k - l + 3) * (2 * l + 1) * nu
@@ -118,6 +207,35 @@ def coefficients_sphere_smooth_fs(Rp, Rm, k, l, g, nu):
 
 
 def coefficients_sphere_smooth_ns(Rp, Rm, k, l, g, nu):
+    r"""Construct the spherical Kramer zero-slip radial coefficients.
+
+    Parameters
+    ----------
+    Rp : real
+        Positive outer radius in the chosen length scaling; ``Rm < Rp``.
+    Rm : real
+        Positive inner radius in the same scaling as ``Rp``.
+    k : int
+        Radial exponent of smooth density ``(r/Rp)**k``. Resonant powers require a
+        logarithmic family and are excluded.
+    l : int
+        Spherical-harmonic degree, at least 2.
+    g : real
+        Signed coefficient of the smooth radial body force ``-g*(r/Rp)**k*Y*e_r``.
+    nu : real
+        Positive constant dynamic viscosity in the same scaling as the forcing.
+
+    Returns
+    -------
+    tuple of real or sympy expressions
+        Radial coefficients ``(A, B, C, D, E)`` in the published radial-power ordering.
+
+    Notes
+    -----
+    These low-level helpers assume validated radii, modes and nonsingular powers. Use the public
+    Stokes class for input validation. No mesh, PDE solve or unit conversion is performed; the
+    angular coefficient normalization is supplied by the caller.
+    """
     alpha = Rm / Rp
     gamma = (
         (alpha ** (l + 1) + alpha ** (l - 3)) * (2 * l + 1) ** 2
@@ -151,6 +269,42 @@ def coefficients_sphere_smooth_ns(Rp, Rm, k, l, g, nu):
 
 
 def build_delta_solution(Rp, Rm, rp, l, m, g, nu, sign, no_slip):
+    r"""Construct the spherical Kramer selected-wall radial coefficients.
+
+    Parameters
+    ----------
+    Rp : real
+        Positive outer radius in the chosen length scaling; ``Rm < Rp``.
+    Rm : real
+        Positive inner radius in the same scaling as ``Rp``.
+    rp : real
+        Delta-sheet radius strictly between ``Rm`` and ``Rp``.
+    l : int
+        Spherical-harmonic degree, at least 2.
+    m : int
+        Spherical-harmonic order, ``0 <= m <= l``; retained in the branch metadata.
+    g : real
+        Signed Kramer forcing coefficient. Delta normal-stress jump is ``g*Y`` and its
+        physical sheet force is ``-g*Y*e_r``; smooth body force is ``-g*(r/Rp)**k*Y*e_r``.
+    nu : real
+        Positive constant dynamic viscosity in the same scaling as the forcing.
+    sign : {-1, 1}
+        Select the inner (-1) or outer (+1) branch relative to the delta sheet.
+    no_slip : bool
+        True selects zero wall velocity; False selects impermeable free slip at both radii.
+
+    Returns
+    -------
+    types.SimpleNamespace
+        Branch coefficients ``ABCD`` (delta) or ``ABCDE`` (smooth), mode/viscosity/forcing
+        metadata and pressure coefficients for the symbolic field builders.
+
+    Notes
+    -----
+    These low-level helpers assume validated radii, modes and nonsingular powers. Use the public
+    Stokes class for input validation. No mesh, PDE solve or unit conversion is performed; the
+    angular coefficient normalization is supplied by the caller.
+    """
     coeffs = coefficients_sphere_delta_ns(Rp, Rm, rp, l, g, nu, sign) if no_slip else coefficients_sphere_delta_fs(Rp, Rm, rp, l, g, nu, sign)
     _, _, C, D = coeffs
     return SimpleNamespace(
@@ -165,6 +319,46 @@ def build_delta_solution(Rp, Rm, rp, l, m, g, nu, sign, no_slip):
 
 
 def build_smooth_solution(Rp, Rm, k, l, m, g, nu, no_slip):
+    r"""Construct the spherical Kramer selected-wall radial coefficients.
+
+    Parameters
+    ----------
+    Rp : real
+        Positive outer radius in the chosen length scaling; ``Rm < Rp``.
+    Rm : real
+        Positive inner radius in the same scaling as ``Rp``.
+    k : int
+        Radial exponent of smooth density ``(r/Rp)**k``. Resonant powers require a
+        logarithmic family and are excluded.
+    l : int
+        Spherical-harmonic degree, at least 2.
+    m : int
+        Spherical-harmonic order, ``0 <= m <= l``; retained in the branch metadata.
+    g : real
+        Signed Kramer forcing coefficient. Delta normal-stress jump is ``g*Y`` and its
+        physical sheet force is ``-g*Y*e_r``; smooth body force is ``-g*(r/Rp)**k*Y*e_r``.
+    nu : real
+        Positive constant dynamic viscosity in the same scaling as the forcing.
+    no_slip : bool
+        True selects zero wall velocity; False selects impermeable free slip at both radii.
+
+    Returns
+    -------
+    types.SimpleNamespace
+        Branch coefficients ``ABCD`` (delta) or ``ABCDE`` (smooth), mode/viscosity/forcing
+        metadata and pressure coefficients for the symbolic field builders.
+
+    Raises
+    ------
+    NotImplementedError
+        A smooth builder is asked for a resonant radial power.
+
+    Notes
+    -----
+    These low-level helpers assume validated radii, modes and nonsingular powers. Use the public
+    Stokes class for input validation. No mesh, PDE solve or unit conversion is performed; the
+    angular coefficient normalization is supplied by the caller.
+    """
     if (k + 1) * (k + 2) == l * (l + 1) or (k + 3) * (k + 4) == l * (l + 1):
         raise NotImplementedError(f"Smooth solution not implemented for k={k}, l={l}")
     coeffs = coefficients_sphere_smooth_ns(Rp, Rm, k, l, g, nu) if no_slip else coefficients_sphere_smooth_fs(Rp, Rm, k, l, g, nu)
@@ -183,6 +377,37 @@ def build_smooth_solution(Rp, Rm, k, l, m, g, nu, no_slip):
 
 
 def analytical_velocity_cartesian_sympy(soln, r_sym, y_sym, theta_sym, phi_sym, rrotN):
+    r"""Construct the separated Kramer symbolic field.
+
+    Parameters
+    ----------
+    soln : types.SimpleNamespace
+        Branch returned by ``build_delta_solution`` or ``build_smooth_solution`` with its
+        radial and pressure coefficients.
+    r_sym : sympy.Symbol
+        Positive symbolic radial coordinate; the shell formulas exclude the origin.
+    y_sym : sympy expression
+        Chosen spherical harmonic, including the caller's order, real component and normalization.
+    theta_sym : sympy.Symbol
+        Colatitude variable in radians, used to differentiate ``y_sym``.
+    phi_sym : sympy.Symbol
+        Azimuth variable in radians, used to differentiate ``y_sym``.
+    rrotN : sympy.Matrix
+        Cartesian-to-polar/spherical rotation matrix; its transpose maps the local velocity
+        components back to Cartesian coordinates.
+
+    Returns
+    -------
+    sympy.Matrix
+        Cartesian velocity column with two components (cylindrical) or three (spherical), in
+        the input velocity scaling.
+
+    Notes
+    -----
+    No point evaluation or PDE solve is performed. The separated spherical velocity formula uses
+    angular-coordinate derivatives; use the public spherical class's Cartesian evaluator for finite
+    values at poles.
+    """
     if hasattr(soln, "ABCD"):
         A, B, C, D = soln.ABCD
         P_l = A * r_sym**soln.l + B * r_sym ** (-soln.l - 1) + C * r_sym ** (soln.l + 2) + D * r_sym ** (-soln.l + 1)
@@ -201,6 +426,30 @@ def analytical_velocity_cartesian_sympy(soln, r_sym, y_sym, theta_sym, phi_sym, 
 
 
 def analytical_pressure_sympy(soln, r_sym, y_sym):
+    r"""Construct the separated Kramer symbolic field.
+
+    Parameters
+    ----------
+    soln : types.SimpleNamespace
+        Branch returned by ``build_delta_solution`` or ``build_smooth_solution`` with its
+        radial and pressure coefficients.
+    r_sym : sympy.Symbol
+        Positive symbolic radial coordinate; the shell formulas exclude the origin.
+    y_sym : sympy expression
+        Chosen spherical harmonic, including the caller's order, real component and normalization.
+
+    Returns
+    -------
+    sympy expression
+        Symbolic pressure, radial stress or radial poloidal scalar in the branch scaling;
+        total normal stress is ``tau_rr-p``.
+
+    Notes
+    -----
+    No point evaluation or PDE solve is performed. The separated spherical velocity formula uses
+    angular-coordinate derivatives; use the public spherical class's Cartesian evaluator for finite
+    values at poles.
+    """
     p_sym = (soln.G * r_sym**soln.l + soln.H * r_sym ** (-soln.l - 1)) * y_sym
     if hasattr(soln, "K"):
         p_sym += soln.K * r_sym ** (soln.k + 1) * y_sym
@@ -208,6 +457,27 @@ def analytical_pressure_sympy(soln, r_sym, y_sym):
 
 
 def analytical_Pl_sympy(soln, r_sym):
+    r"""Construct the separated Kramer symbolic field.
+
+    Parameters
+    ----------
+    soln : types.SimpleNamespace
+        Branch returned by ``build_delta_solution`` or ``build_smooth_solution`` with its
+        radial and pressure coefficients.
+    r_sym : sympy.Symbol
+        Positive symbolic radial coordinate; the shell formulas exclude the origin.
+
+    Returns
+    -------
+    sympy expression
+        Radial poloidal scalar P_l; this is not the angular Legendre polynomial.
+
+    Notes
+    -----
+    No point evaluation or PDE solve is performed. The separated spherical velocity formula uses
+    angular-coordinate derivatives; use the public spherical class's Cartesian evaluator for finite
+    values at poles.
+    """
     if hasattr(soln, "ABCD"):
         A, B, C, D = soln.ABCD
         return A * r_sym**soln.l + B * r_sym ** (-soln.l - 1) + C * r_sym ** (soln.l + 2) + D * r_sym ** (-soln.l + 1)
@@ -218,7 +488,30 @@ def analytical_Pl_sympy(soln, r_sym):
 
 
 def analytical_radial_normal_stress_sympy(soln, r_sym, y_sym):
-    """Native analytical radial normal stress: sigma_rr = tau_rr - p."""
+    r"""Native analytical radial normal stress: sigma_rr = tau_rr - p.
+
+    Parameters
+    ----------
+    soln : types.SimpleNamespace
+        Branch returned by ``build_delta_solution`` or ``build_smooth_solution`` with its
+        radial and pressure coefficients.
+    r_sym : sympy.Symbol
+        Positive symbolic radial coordinate; the shell formulas exclude the origin.
+    y_sym : sympy expression
+        Chosen spherical harmonic, including the caller's order, real component and normalization.
+
+    Returns
+    -------
+    sympy expression
+        Symbolic pressure, radial stress or radial poloidal scalar in the branch scaling;
+        total normal stress is ``tau_rr-p``.
+
+    Notes
+    -----
+    No point evaluation or PDE solve is performed. The separated spherical velocity formula uses
+    angular-coordinate derivatives; use the public spherical class's Cartesian evaluator for finite
+    values at poles.
+    """
 
     P_l = analytical_Pl_sympy(soln, r_sym)
     dPldr = sp.diff(P_l, r_sym)
@@ -254,6 +547,57 @@ class KramerSphericalStokes(_KramerGeoidMixin, AnalyticSolution):
     Both poles have exact Cartesian values; only the origin is excluded.
     Points at the delta radius select the outer branch. Bulk residuals should
     be checked away from the sheet, whose jumps must be checked separately.
+
+    Parameters
+    ----------
+    mesh : underworld3.discretisation.Mesh
+        Mesh with the solution's dimension and coordinate symbols. Construction
+        builds expressions/evaluators; it does not solve a PDE or create a mesh.
+    ell : int, default=2
+        Harmonic degree ell >= 2; exceptional ell=0/1 Stokes families are excluded.
+    m : int, default=0
+        Harmonic order satisfying 0 <= m <= ell.
+    k : int, default=2
+        Smooth density exponent, unused for delta density. Resonances
+        ``(k+1)*(k+2)==ell*(ell+1)`` or ``(k+3)*(k+4)==ell*(ell+1)`` are excluded.
+    r_inner, r_outer : float
+        Finite positive shell radii, default 1.22 and 2.22, ordered inner < outer.
+    r_int : float, default=1.72
+        Finite sheet radius strictly inside the shell for delta density;
+        unused for smooth density.
+    density : {"delta", "smooth"}, default="delta"
+        Conforming sheet or radial power-law volume density times the selected Y_lm.
+    boundary : {"free", "zero"}, default="free"
+        Impermeable free slip or zero velocity on both walls.
+    viscosity : float, default=1
+        Finite positive constant viscosity in the chosen scaling.
+    forcing : float, default=1
+        Finite signed Kramer coefficient g; no automatic density/unit conversion.
+    component : {"cos", "sin"}, default="cos"
+        Real angular component; order zero requires cos.
+    normalization : str, default="axisymmetric_unnormalized"
+        Either "axisymmetric_unnormalized" or "real_orthonormal", setting
+        the common forcing/field normalization. The unnormalized basis is defined
+        only for m=0; use real_orthonormal for nonzero order.
+
+    Raises
+    ------
+    TypeError
+        The radial power (or spherical degree/order) has an invalid type.
+    ValueError
+        Mesh dimension, mode, geometry, density/wall choice, viscosity or forcing
+        violates the constructor contract.
+    NotImplementedError
+        The selected smooth power belongs to a resonant logarithmic family.
+
+    Notes
+    -----
+    Use one consistent coordinate, viscosity and force scaling; no conversion
+    is performed. Delta bulk force is zero and the outward normal-stress jump
+    is ``g*Y``, so its physical sheet force in ``div(sigma)+f=0`` is ``-g*Y*e_r``.
+    Smooth body force is ``-g*(r/r_outer)**k*Y*e_r``. At the delta radius numerical
+    evaluation selects the outer branch; check bulk equations away from the sheet.
+    ``evaluation_cse`` controls cached NumPy compilation and leaves fields unchanged.
     """
 
     dim = 3
@@ -350,6 +694,22 @@ class KramerSphericalStokes(_KramerGeoidMixin, AnalyticSolution):
         self._evaluators = {}
 
     def apply_boundary_conditions(self, solver):
+        r"""Apply boundary conditions.
+
+        Parameters
+        ----------
+        solver : underworld3.systems.Stokes
+            Solver receiving the reference wall data on Upper and Lower before solving.
+
+        Returns
+        -------
+        None
+            Mutates wall conditions and enables the pressure nullspace.
+
+        Notes
+        -----
+        Select homogeneous free/zero slip according to boundary. This performs no solve.
+        """
         if self.boundary == "zero":
             prescribed_velocity(solver, self.boundaries, (0., 0., 0.))
         else:
@@ -357,6 +717,31 @@ class KramerSphericalStokes(_KramerGeoidMixin, AnalyticSolution):
         solver.petsc_use_pressure_nullspace = True
 
     def apply_forcing(self, solver, internal_boundary="Internal"):
+        r"""Apply forcing.
+
+        Parameters
+        ----------
+        solver : underworld3.systems.Stokes
+            Solver on the reference mesh whose bodyforce is configured before solving.
+        internal_boundary : str, default="Internal"
+            Label for a conforming delta sheet, required only for delta density.
+
+        Returns
+        -------
+        None
+            Mutates solver forcing; it does not run the solver.
+
+        Raises
+        ------
+        ValueError
+            Kramer solver/reference meshes differ or a delta interface label is missing.
+
+        Notes
+        -----
+        Call once, separately from applying the wall conditions. Kramer delta cases add the natural
+        stress-jump datum g*Y*e_r with opposite physical-force sign; smooth cases set the bulk
+        force.
+        """
         if solver.mesh is not self.mesh:
             raise ValueError("Solver and solution must share the same mesh.")
         if self.density == "delta" and internal_boundary not in self.mesh.boundaries.__members__:
@@ -367,6 +752,29 @@ class KramerSphericalStokes(_KramerGeoidMixin, AnalyticSolution):
             solver.add_natural_bc(self.fn_interface_stress_jump*X/sp.sqrt(X.dot(X)), internal_boundary)
 
     def compile_evaluators(self, *fields):
+        r"""Compile evaluators.
+
+        Parameters
+        ----------
+        *fields : str
+            Names of fields to prepare; use the same names accepted by evaluate.
+            An empty argument list compiles nothing.
+
+        Returns
+        -------
+        None
+            Cached evaluators are prepared without sampling points or solving a PDE.
+
+        Raises
+        ------
+        ValueError
+            A requested field is unknown.
+
+        Notes
+        -----
+        The cache includes evaluation_cse; toggling it selects separately compiled
+        common-subexpression-elimination evaluators.
+        """
         for field in fields:
             if field not in self._cartesian_fields[0]:
                 raise ValueError(f"Unknown Kramer field {field!r}.")
@@ -379,6 +787,37 @@ class KramerSphericalStokes(_KramerGeoidMixin, AnalyticSolution):
                                                       cse=bool(self.evaluation_cse), docstring_limit=0)
 
     def evaluate(self, field, coords):
+        r"""Evaluate the analytical reference field.
+
+        Parameters
+        ----------
+        field : str or sympy expression
+            Named field or symbolic expression. Native names include velocity,
+            pressure, viscosity, bodyforce, strainrate, stress and radial_normal_stress;
+            Additional named traction field: radial_shear_stress.
+        coords : array-like, shape (N, 3)
+            Finite Cartesian coordinates in the reference scaling; the origin is
+            excluded. Shell membership is the caller's responsibility.
+
+        Returns
+        -------
+        numpy.ndarray
+            One value per point: scalar (N,), vector (N, 3), or tensor
+            (N, 3, 3). Spherical Kramer radial_shear_stress is a
+            Cartesian tangential traction vector. Arbitrary expressions use the UW3
+            evaluator's expression shape. Empty arrays retain the corresponding shape.
+
+        Raises
+        ------
+        ValueError
+            Coordinates or the requested field are invalid.
+
+        Notes
+        -----
+        Named fields use cached vectorized NumPy evaluators; symbolic expressions delegate to the
+        shared JIT evaluator. This performs no Stokes solve. Delta sheet points select the outer
+        branch; Cartesian spherical evaluators are finite at both poles.
+        """
         if not isinstance(field, str):
             return super().evaluate(field, coords)
         if field not in self._cartesian_fields[0]:
@@ -405,6 +844,23 @@ class KramerSphericalStokes(_KramerGeoidMixin, AnalyticSolution):
         return result
 
     def sample_points(self, count=12):
+        r"""Sample points.
+
+        Parameters
+        ----------
+        count : int, default=12
+            Requested number of interior diagnostic points; use a positive count.
+
+        Returns
+        -------
+        numpy.ndarray, shape (count, 3)
+            Deterministic Cartesian points strictly between the two reference radii.
+
+        Notes
+        -----
+        This samples the continuous reference independently of mesh nodes. Kramer perturbs points
+        that would coincide with the internal sheet.
+        """
         radii = self.r_inner+(self.r_outer-self.r_inner)*(np.arange(count)+0.37)/count
         radii[np.isclose(radii,self.r_int)] += 1e-4*(self.r_outer-self.r_inner)
         z = 1-2*(np.arange(count)+0.5)/count

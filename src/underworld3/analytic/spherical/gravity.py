@@ -158,7 +158,30 @@ def _validate_geometry(
 
 
 def axisymmetric_harmonic_norm(harmonic_degree: int) -> float:
-    r"""Return ``integral(P_ell(cos(theta))**2 dOmega)`` on the unit sphere."""
+    r"""Return ``integral(P_ell(cos(theta))**2 dOmega)`` on the unit sphere.
+
+    Parameters
+    ----------
+    harmonic_degree : int
+        Nonnegative spherical-harmonic degree; the pure radial kernels include degree zero.
+
+    Returns
+    -------
+    float
+        Dimensionless unit-sphere angular norm 4*pi/(2*harmonic_degree+1).
+
+    Raises
+    ------
+    TypeError
+        harmonic_degree is not an integer or is boolean.
+    ValueError
+        harmonic_degree is negative.
+
+    Notes
+    -----
+    The angular basis is the unnormalized axisymmetric Legendre polynomial ``P_l(cos(theta))``. No
+    mesh, MPI operation or PDE solve is performed.
+    """
 
     degree = _validate_degree(harmonic_degree)
     return float(4.0 * np.pi / (2 * degree + 1))
@@ -170,7 +193,38 @@ def recover_axisymmetric_coefficient(
     sphere_radius: Real,
     harmonic_degree: int,
 ) -> float:
-    r"""Recover ``f_ell0`` from ``integral(f P_ell dS)`` on a sphere."""
+    r"""Recover ``f_ell0`` from ``integral(f P_ell dS)`` on a sphere.
+
+    Parameters
+    ----------
+    weighted_surface_integral : real
+        Finite integral of the scalar field times P_l over the spherical surface; units are
+        field times area.
+    sphere_radius : real
+        Finite positive sphere radius in the surface integral's length units.
+    harmonic_degree : int
+        Nonnegative spherical-harmonic degree; the pure radial kernels include degree zero.
+
+    Returns
+    -------
+    float
+        Integral divided by sphere_radius**2 and the unit-sphere angular norm, in the
+        original field units.
+
+    Raises
+    ------
+    TypeError
+        The harmonic degree/mode or density power has an invalid type, or a real input
+        cannot be converted.
+    ValueError
+        A numeric input is nonfinite, a required positive value is nonpositive, or the
+        harmonic degree/mode, radius ordering or source support is invalid.
+
+    Notes
+    -----
+    The angular basis is the unnormalized axisymmetric Legendre polynomial ``P_l(cos(theta))``. No
+    mesh, MPI operation or PDE solve is performed.
+    """
 
     integral = _finite_float(weighted_surface_integral, "weighted_surface_integral")
     radius = _positive_float(sphere_radius, "sphere_radius")
@@ -184,7 +238,41 @@ def spherical_sheet_source_amplitude(
     surface_density_coefficient: Real,
     gravitational_constant: Real = 1.0,
 ) -> float:
-    r"""Return the potential coefficient at a spherical density sheet."""
+    r"""Return the potential coefficient at a spherical density sheet.
+
+    Parameters
+    ----------
+    source_radius : real
+        Finite positive sheet radius in the chosen length units.
+    harmonic_degree : int
+        Nonnegative spherical-harmonic degree; the pure radial kernels include degree zero.
+    surface_density_coefficient : real
+        Finite signed surface-mass density coefficient multiplying the chosen harmonic;
+        physical units are mass/area.
+    gravitational_constant : real, default=1.0
+        Finite positive G in units consistent with radii and densities. No unit conversion
+        is performed.
+
+    Returns
+    -------
+    float
+        Potential coefficient at the target radius in length^2/time^2 for physical inputs.
+
+    Raises
+    ------
+    TypeError
+        The harmonic degree/mode or density power has an invalid type, or a real input
+        cannot be converted.
+    ValueError
+        A numeric input is nonfinite, a required positive value is nonpositive, or the
+        harmonic degree/mode, radius ordering or source support is invalid.
+
+    Notes
+    -----
+    The convention is laplacian(Phi)=-4*pi*G*rho. All density coefficients and returned coefficients
+    share the selected angular basis/normalization. No mesh, MPI operation or PDE solve is
+    performed.
+    """
 
     source_radius = _positive_float(source_radius, "source_radius")
     degree = _validate_degree(harmonic_degree)
@@ -199,7 +287,37 @@ def spherical_sheet_radial_factor(
     target_radius: Real,
     harmonic_degree: int,
 ) -> float:
-    r"""Return the regular/decaying radial continuation factor."""
+    r"""Return the regular/decaying radial continuation factor.
+
+    Parameters
+    ----------
+    source_radius : real
+        Finite positive sheet radius in the chosen length units.
+    target_radius : real
+        Finite positive evaluation radius, inside or outside the source support.
+    harmonic_degree : int
+        Nonnegative spherical-harmonic degree; the pure radial kernels include degree zero.
+
+    Returns
+    -------
+    float
+        Dimensionless factor (target/source)**l inside or (source/target)**(l+1) outside; it
+        is 1 on the sheet.
+
+    Raises
+    ------
+    TypeError
+        The harmonic degree/mode or density power has an invalid type, or a real input
+        cannot be converted.
+    ValueError
+        A numeric input is nonfinite, a required positive value is nonpositive, or the
+        harmonic degree/mode, radius ordering or source support is invalid.
+
+    Notes
+    -----
+    The factor is independent of source amplitude and angular normalization. No mesh, MPI operation
+    or PDE solve is performed.
+    """
 
     source_radius = _positive_float(source_radius, "source_radius")
     target_radius = _positive_float(target_radius, "target_radius")
@@ -217,7 +335,43 @@ def spherical_sheet_potential_coefficient(
     surface_density_coefficient: Real,
     gravitational_constant: Real = 1.0,
 ) -> float:
-    r"""Return ``Phi_lm`` at one target radius for a spherical density sheet."""
+    r"""Return ``Phi_lm`` at one target radius for a spherical density sheet.
+
+    Parameters
+    ----------
+    source_radius : real
+        Finite positive sheet radius in the chosen length units.
+    target_radius : real
+        Finite positive evaluation radius, inside or outside the source support.
+    harmonic_degree : int
+        Nonnegative spherical-harmonic degree; the pure radial kernels include degree zero.
+    surface_density_coefficient : real
+        Finite signed surface-mass density coefficient multiplying the chosen harmonic;
+        physical units are mass/area.
+    gravitational_constant : real, default=1.0
+        Finite positive G in units consistent with radii and densities. No unit conversion
+        is performed.
+
+    Returns
+    -------
+    float
+        Potential coefficient at the target radius in length^2/time^2 for physical inputs.
+
+    Raises
+    ------
+    TypeError
+        The harmonic degree/mode or density power has an invalid type, or a real input
+        cannot be converted.
+    ValueError
+        A numeric input is nonfinite, a required positive value is nonpositive, or the
+        harmonic degree/mode, radius ordering or source support is invalid.
+
+    Notes
+    -----
+    The convention is laplacian(Phi)=-4*pi*G*rho. All density coefficients and returned coefficients
+    share the selected angular basis/normalization. No mesh, MPI operation or PDE solve is
+    performed.
+    """
 
     amplitude = spherical_sheet_source_amplitude(
         source_radius=source_radius,
@@ -247,6 +401,46 @@ def spherical_sheet_radial_derivative_coefficient(
     ``source_side`` is required only when ``target_radius == source_radius``;
     use ``"inside"`` for the regular branch and ``"outside"`` for the
     decaying branch.
+
+    Parameters
+    ----------
+    source_radius : real
+        Finite positive sheet radius in the chosen length units.
+    target_radius : real
+        Finite positive evaluation radius, inside or outside the source support.
+    harmonic_degree : int
+        Nonnegative spherical-harmonic degree; the pure radial kernels include degree zero.
+    surface_density_coefficient : real
+        Finite signed surface-mass density coefficient multiplying the chosen harmonic;
+        physical units are mass/area.
+    gravitational_constant : real, default=1.0
+        Finite positive G in units consistent with radii and densities. No unit conversion
+        is performed.
+    source_side : {"inside", "outside"} or None, default=None
+        Required exactly on a density sheet to select the one-sided derivative; must be None
+        away from the sheet.
+
+    Returns
+    -------
+    float
+        Radial potential derivative coefficient in potential/length units. Compact
+        volume-source derivatives are continuous at the source-support boundaries.
+
+    Raises
+    ------
+    TypeError
+        The harmonic degree/mode or density power has an invalid type, or a real input
+        cannot be converted.
+    ValueError
+        A numeric input is nonfinite, a required positive value is nonpositive, or the
+        harmonic degree/mode, radius ordering or source support is invalid.
+
+    Notes
+    -----
+    The convention is laplacian(Phi)=-4*pi*G*rho. All density coefficients and returned coefficients
+    share the selected angular basis/normalization. No mesh, MPI operation or PDE solve is
+    performed. The sheet derivative jump outside minus inside is -4*pi*G*sigma; select a side
+    explicitly on the sheet.
     """
 
     source_radius = _positive_float(source_radius, "source_radius")
@@ -333,6 +527,46 @@ def spherical_volume_density_potential_coefficient(
     between ``radius_inner`` and ``radius_outer`` and is zero elsewhere.  The
     result follows directly from the regular/decaying spherical Green kernel
     and uses the convention ``laplacian(Phi) = -4*pi*G*rho``.
+
+    Parameters
+    ----------
+    radius_inner : real
+        Finite positive inner source/shell radius in consistent length units.
+    radius_outer : real
+        Finite positive outer source/shell radius, strictly larger than radius_inner.
+    target_radius : real
+        Finite positive evaluation radius, inside or outside the source support.
+    harmonic_degree : int
+        Nonnegative spherical-harmonic degree; the pure radial kernels include degree zero.
+    density_power : int, default=2
+        Integer k in the compact source rho(r)=density_amplitude*(r/radius_outer)**k;
+        default 2. Signed powers are supported on positive source radii.
+    density_amplitude : real, default=1.0
+        Finite signed volume-density coefficient at radius_outer; default 1. Physical units
+        are mass/volume; support is the source annulus/shell.
+    gravitational_constant : real, default=1.0
+        Finite positive G in units consistent with radii and densities. No unit conversion
+        is performed.
+
+    Returns
+    -------
+    float
+        Potential coefficient at the target radius in length^2/time^2 for physical inputs.
+
+    Raises
+    ------
+    TypeError
+        The harmonic degree/mode or density power has an invalid type, or a real input
+        cannot be converted.
+    ValueError
+        A numeric input is nonfinite, a required positive value is nonpositive, or the
+        harmonic degree/mode, radius ordering or source support is invalid.
+
+    Notes
+    -----
+    The convention is laplacian(Phi)=-4*pi*G*rho. All density coefficients and returned coefficients
+    share the selected angular basis/normalization. No mesh, MPI operation or PDE solve is
+    performed.
     """
 
     ri, ro, radius, degree, power, amplitude, gravity_constant = (
@@ -373,7 +607,48 @@ def spherical_sheet_finite_dirichlet_potential_coefficient(
     surface_density_coefficient: Real,
     gravitational_constant: Real = 1.0,
 ) -> float:
-    r"""Return one sheet's regular full-ball solution with ``Phi(R_ext)=0``."""
+    r"""Return one sheet's regular full-ball solution with ``Phi(R_ext)=0``.
+
+    Parameters
+    ----------
+    source_radius : real
+        Finite positive sheet radius in the chosen length units.
+    exterior_radius : real
+        Finite positive zero-Dirichlet truncation radius, strictly beyond the sheet or outer
+        volume-source radius.
+    target_radius : real
+        Finite positive evaluation radius, inside or outside the source support. Must not
+        exceed ``exterior_radius``.
+    harmonic_degree : int
+        Nonnegative spherical-harmonic degree; the pure radial kernels include degree zero.
+    surface_density_coefficient : real
+        Finite signed surface-mass density coefficient multiplying the chosen harmonic;
+        physical units are mass/area.
+    gravitational_constant : real, default=1.0
+        Finite positive G in units consistent with radii and densities. No unit conversion
+        is performed.
+
+    Returns
+    -------
+    float
+        Potential coefficient at the target radius in length^2/time^2 for physical inputs.
+
+    Raises
+    ------
+    TypeError
+        The harmonic degree/mode or density power has an invalid type, or a real input
+        cannot be converted.
+    ValueError
+        A numeric input is nonfinite, a required positive value is nonpositive, or the
+        harmonic degree/mode, radius ordering or source support is invalid.
+
+    Notes
+    -----
+    The convention is laplacian(Phi)=-4*pi*G*rho. All density coefficients and returned coefficients
+    share the selected angular basis/normalization. No mesh, MPI operation or PDE solve is
+    performed. A regular homogeneous r**l correction enforces Phi(exterior_radius)=0; targets
+    outside that boundary are rejected.
+    """
 
     source = _positive_float(source_radius, "source_radius")
     exterior = _positive_float(exterior_radius, "exterior_radius")
@@ -410,7 +685,49 @@ def spherical_volume_density_radial_derivative_coefficient(
     density_amplitude: Real = 1.0,
     gravitational_constant: Real = 1.0,
 ) -> float:
-    r"""Return ``dPhi_ell/dr`` for the compact radial volume source."""
+    r"""Return ``dPhi_ell/dr`` for the compact radial volume source.
+
+    Parameters
+    ----------
+    radius_inner : real
+        Finite positive inner source/shell radius in consistent length units.
+    radius_outer : real
+        Finite positive outer source/shell radius, strictly larger than radius_inner.
+    target_radius : real
+        Finite positive evaluation radius, inside or outside the source support.
+    harmonic_degree : int
+        Nonnegative spherical-harmonic degree; the pure radial kernels include degree zero.
+    density_power : int, default=2
+        Integer k in the compact source rho(r)=density_amplitude*(r/radius_outer)**k;
+        default 2. Signed powers are supported on positive source radii.
+    density_amplitude : real, default=1.0
+        Finite signed volume-density coefficient at radius_outer; default 1. Physical units
+        are mass/volume; support is the source annulus/shell.
+    gravitational_constant : real, default=1.0
+        Finite positive G in units consistent with radii and densities. No unit conversion
+        is performed.
+
+    Returns
+    -------
+    float
+        Radial potential derivative coefficient in potential/length units. Compact
+        volume-source derivatives are continuous at the source-support boundaries.
+
+    Raises
+    ------
+    TypeError
+        The harmonic degree/mode or density power has an invalid type, or a real input
+        cannot be converted.
+    ValueError
+        A numeric input is nonfinite, a required positive value is nonpositive, or the
+        harmonic degree/mode, radius ordering or source support is invalid.
+
+    Notes
+    -----
+    The convention is laplacian(Phi)=-4*pi*G*rho. All density coefficients and returned coefficients
+    share the selected angular basis/normalization. No mesh, MPI operation or PDE solve is
+    performed.
+    """
 
     ri, ro, radius, degree, power, amplitude, gravity_constant = (
         _validate_volume_density_parameters(
@@ -460,6 +777,51 @@ def spherical_volume_density_finite_dirichlet_potential_coefficient(
     The infinite-domain solution is corrected by the regular homogeneous
     branch ``C*r**ell``. This preserves regularity at the centre and enforces
     the finite exterior Dirichlet condition exactly.
+
+    Parameters
+    ----------
+    radius_inner : real
+        Finite positive inner source/shell radius in consistent length units.
+    radius_outer : real
+        Finite positive outer source/shell radius, strictly larger than radius_inner.
+    exterior_radius : real
+        Finite positive zero-Dirichlet truncation radius, strictly beyond the sheet or outer
+        volume-source radius.
+    target_radius : real
+        Finite positive evaluation radius, inside or outside the source support. Must not
+        exceed ``exterior_radius``.
+    harmonic_degree : int
+        Nonnegative spherical-harmonic degree; the pure radial kernels include degree zero.
+    density_power : int, default=2
+        Integer k in the compact source rho(r)=density_amplitude*(r/radius_outer)**k;
+        default 2. Signed powers are supported on positive source radii.
+    density_amplitude : real, default=1.0
+        Finite signed volume-density coefficient at radius_outer; default 1. Physical units
+        are mass/volume; support is the source annulus/shell.
+    gravitational_constant : real, default=1.0
+        Finite positive G in units consistent with radii and densities. No unit conversion
+        is performed.
+
+    Returns
+    -------
+    float
+        Potential coefficient at the target radius in length^2/time^2 for physical inputs.
+
+    Raises
+    ------
+    TypeError
+        The harmonic degree/mode or density power has an invalid type, or a real input
+        cannot be converted.
+    ValueError
+        A numeric input is nonfinite, a required positive value is nonpositive, or the
+        harmonic degree/mode, radius ordering or source support is invalid.
+
+    Notes
+    -----
+    The convention is laplacian(Phi)=-4*pi*G*rho. All density coefficients and returned coefficients
+    share the selected angular basis/normalization. No mesh, MPI operation or PDE solve is
+    performed. A regular homogeneous r**l correction enforces Phi(exterior_radius)=0; targets
+    outside that boundary are rejected.
     """
 
     exterior = _positive_float(exterior_radius, "exterior_radius")
@@ -502,7 +864,51 @@ def spherical_volume_density_potential_coefficient_quadrature(
     gravitational_constant: Real = 1.0,
     quadrature_points: int = 128,
 ) -> float:
-    r"""Evaluate the same volume-source Green integral by Gauss--Legendre."""
+    r"""Evaluate the same volume-source Green integral by Gauss--Legendre.
+
+    Parameters
+    ----------
+    radius_inner : real
+        Finite positive inner source/shell radius in consistent length units.
+    radius_outer : real
+        Finite positive outer source/shell radius, strictly larger than radius_inner.
+    target_radius : real
+        Finite positive evaluation radius, inside or outside the source support.
+    harmonic_degree : int
+        Nonnegative spherical-harmonic degree; the pure radial kernels include degree zero.
+    density_power : int, default=2
+        Integer k in the compact source rho(r)=density_amplitude*(r/radius_outer)**k;
+        default 2. Signed powers are supported on positive source radii.
+    density_amplitude : real, default=1.0
+        Finite signed volume-density coefficient at radius_outer; default 1. Physical units
+        are mass/volume; support is the source annulus/shell.
+    gravitational_constant : real, default=1.0
+        Finite positive G in units consistent with radii and densities. No unit conversion
+        is performed.
+    quadrature_points : int, default=128
+        At least two Gauss-Legendre nodes per radial subinterval; default 128. This is
+        integration resolution, not a mesh size.
+
+    Returns
+    -------
+    float
+        Potential coefficient at the target radius in length^2/time^2 for physical inputs.
+
+    Raises
+    ------
+    TypeError
+        The harmonic degree/mode or density power has an invalid type, or a real input
+        cannot be converted.
+    ValueError
+        A numeric input is nonfinite, a required positive value is nonpositive, or the
+        harmonic degree/mode, radius ordering or source support is invalid.
+
+    Notes
+    -----
+    The convention is laplacian(Phi)=-4*pi*G*rho. All density coefficients and returned coefficients
+    share the selected angular basis/normalization. No mesh, MPI operation or PDE solve is
+    performed.
+    """
 
     ri, ro, radius, degree, power, amplitude, gravity_constant = (
         _validate_volume_density_parameters(
@@ -559,6 +965,43 @@ def spherical_shell_potential_operator(
 
     Rows target the surface then CMB. Columns source unit surface then CMB
     density/topography coefficients. The normalization has ``4*pi*G/g = 1``.
+
+    Parameters
+    ----------
+    radius_inner : real
+        Finite positive inner source/shell radius in consistent length units.
+    radius_outer : real
+        Finite positive outer source/shell radius, strictly larger than radius_inner.
+    harmonic_degree : int
+        Nonnegative spherical-harmonic degree; the pure radial kernels include degree zero.
+    internal_load_radius : real or None, default=None
+        Internal sheet radius, strictly inside the shell when supplied. Required for a
+        nonzero internal load; default None.
+    internal_load_coefficient : real, default=0.0
+        Finite signed normalized outward radial-load coefficient; default 0. It enters the
+        normalized potential with negative sheet-density sign.
+
+    Returns
+    -------
+    operator : numpy.ndarray, shape (2, 2)
+        Normalized unit boundary-source operator; rows/columns are surface then CMB.
+    load : numpy.ndarray, shape (2,)
+        Fixed normalized internal-sheet potential coefficients in the same ordering.
+
+    Raises
+    ------
+    TypeError
+        The harmonic degree/mode or density power has an invalid type, or a real input
+        cannot be converted.
+    ValueError
+        A numeric input is nonfinite, a required positive value is nonpositive, or the
+        harmonic degree/mode, radius ordering or source support is invalid.
+
+    Notes
+    -----
+    Radii and inputs are nondimensional. This kernel factors out 4*pi*G/g and does not take density
+    contrasts or return SI potential. Boundary source coefficients must share a harmonic
+    normalization.
     """
 
     radius_inner, radius_outer, degree = _validate_geometry(
@@ -618,7 +1061,7 @@ def spherical_physical_shell_response(
     internal_surface_density=0.0, volume_density=0.0, density_power=2,
     include_self_gravity=False,
 ):
-    """Physical potential/geoid from radial-outward displacement coefficients.
+    r"""Physical potential/geoid from radial-outward displacement coefficients.
 
     Radii and densities have caller-selected consistent physical units.
     Interface contrasts are rho_smaller_radius-rho_larger_radius. All sources
@@ -626,6 +1069,73 @@ def spherical_physical_shell_response(
     this returns Phi and Phi/g with G and both gravity values retained.
     Linear interface feedback solves (I-diag(1/g)*K)h=h_dynamic+Phi_load/g.
     The initial Stokes stress must not already contain this gravity feedback.
+
+    Parameters
+    ----------
+    radius_inner : real
+        Finite positive inner source/shell radius in consistent length units.
+    radius_outer : real
+        Finite positive outer source/shell radius, strictly larger than radius_inner.
+    harmonic_degree : int
+        Nonnegative spherical-harmonic degree; the pure radial kernels include degree zero.
+    outer_topography : real
+        Finite outward-positive hydrodynamic displacement coefficient at the outer boundary,
+        in length units.
+    inner_topography : real
+        Finite outward-positive hydrodynamic displacement coefficient at the inner boundary,
+        in the same length units.
+    outer_density_contrast : real
+        Finite signed outer density contrast rho_smaller_radius-rho_larger_radius, in
+        mass/volume units.
+    inner_density_contrast : real
+        Corresponding finite signed inner density contrast, in the same units.
+    outer_gravity : real
+        Finite positive outer reference gravity magnitude, in length/time^2.
+    inner_gravity : real
+        Finite positive inner reference gravity magnitude, in length/time^2.
+    gravitational_constant : real
+        Finite positive G in units consistent with radii and densities. No unit conversion
+        is performed.
+    internal_load_radius : real or None, default=None
+        Internal sheet radius, strictly inside the shell when supplied. Required for a
+        nonzero internal load; default None.
+    internal_surface_density : real, default=0.0
+        Finite signed internal sheet-density coefficient in mass/area units; default 0.
+    volume_density : real, default=0.0
+        Finite signed compact volume-density amplitude at radius_outer, in mass/volume
+        units; default 0 disables it.
+    density_power : int, default=2
+        Integer k in the compact source rho(r)=density_amplitude*(r/radius_outer)**k;
+        default 2. Signed powers are supported on positive source radii.
+    include_self_gravity : bool, default=False
+        Enable linear two-interface potential/displacement feedback; default False. The
+        original Stokes stresses must not already include that feedback.
+
+    Returns
+    -------
+    dict
+        outer_topography/inner_topography, outer_potential/inner_potential and
+        outer_geoid/inner_geoid in physical input units. Feedback adds corresponding
+        ``*_self_gravity`` keys plus matrix_condition_number and matrix_residual_norm.
+
+    Raises
+    ------
+    TypeError
+        The harmonic degree/mode or density power has an invalid type, or a real input
+        cannot be converted.
+    ValueError
+        A numeric input is nonfinite, a required positive value is nonpositive, or the
+        harmonic degree/mode, radius ordering or source support is invalid.
+    numpy.linalg.LinAlgError
+        The feedback matrix is singular or numerically ill-conditioned.
+
+    Notes
+    -----
+    The convention is laplacian(Phi)=-4*pi*G*rho. All density coefficients and returned coefficients
+    share the selected angular basis/normalization. No mesh, MPI operation or PDE solve is
+    performed. Geoid is Phi/g at each boundary, with length units. Feedback solves
+    (I-diag(1/g)*K)h=h_dynamic+Phi_load/g. Unlike the normalized Zhong API, G and both gravities are
+    retained. density_power is used only for a nonzero volume source.
     """
     ri, ro, ell = _validate_geometry(radius_inner,radius_outer,harmonic_degree)
     G = _positive_float(gravitational_constant,'gravitational_constant')
