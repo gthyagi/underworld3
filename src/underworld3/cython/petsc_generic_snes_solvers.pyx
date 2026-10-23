@@ -8784,6 +8784,12 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
 
         Notes
         -----
+        Before calling, set ``stokes.petsc_use_pressure_nullspace = True``.
+        The accepted-solve history reads the rotated solver's projected
+        pressure-gauge residual, which is recorded only with this projection
+        enabled. This method does not configure the gauge automatically;
+        other pressure-gauge configurations are outside its supported contract.
+
         This lagged solve/update schedule is a UW3 implementation choice.
         The Taylor motivation is Atallah, Canuto and Scovazzi (2020),
         "The second-generation Shifted Boundary Method and its numerical

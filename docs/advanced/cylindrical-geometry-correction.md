@@ -50,6 +50,7 @@ P2 line mass. Discrete normal flux and rigid-rotation torque are projected to ze
 No analytical Stokes solution supplies the wall data.
 
 ```python
+stokes.petsc_use_pressure_nullspace = True
 walls = {}
 for boundary, radius, sign in (("Lower", 1.22, -1), ("Upper", 2.22, 1)):
     walls[boundary] = stokes.add_cylindrical_wall_transfer(
@@ -65,7 +66,12 @@ is registered on these boundaries. Use `amplitude=0` for smooth physical pressur
 Four updates produce five accepted solves, with final fields retained from the
 last solve. A converged, zero-increment warm start is accepted. Failed histories
 remain on `stokes.cylindrical_wall_history`; file output belongs to the caller.
-The existing Stokes pressure/nullspace configuration remains the caller's choice.
+Enable `stokes.petsc_use_pressure_nullspace = True` before the first solve.
+The wall history reads the projected pressure-gauge residual produced by that
+configuration; other pressure-gauge configurations are outside this helper's
+supported contract. The helper does not install the pressure projection or
+velocity nullspace itself. Configure the rigid-rotation velocity modes separately
+when required by the enclosing free-slip system.
 
 ## Spatial circular reaction and topography
 

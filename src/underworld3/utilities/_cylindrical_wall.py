@@ -103,6 +103,9 @@ def _solve_with_wall_updates(stokes, walls, updates):
     The final solve uses the last recorded boundary fields. A residual-accepted
     zero-increment warm start is valid. Partial history is stored on the solver
     before raising so the caller can record a failed step without accepting it.
+    Requires the caller's ``petsc_use_pressure_nullspace=True`` configuration:
+    accepted history reads the projected pressure-gauge residual. This helper
+    does not install a pressure gauge or support another gauge configuration.
     The fixed-point schedule and choice of four updates are UW3 benchmark
     choices; they are not an iteration theorem from the shifted-boundary paper
     cited in this module's documentation.
