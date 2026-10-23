@@ -236,6 +236,6 @@ def _pressure_jump_values(points, interface_radius, outer_radius, wavenumber, am
     profile, _ = _profile_values(radius, interface_radius, width)
     pressure = -amplitude * above * profile * np.cos(
         wavenumber * np.arctan2(points[..., 1], points[..., 0]))
-    gradient = -above[..., None] * _extended_regular_force(
-        points, interface_radius, width, wavenumber, amplitude)
+    gradient = -(above[..., None] * _extended_regular_force(
+        points, interface_radius, width, wavenumber, amplitude))
     return pressure, gradient
