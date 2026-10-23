@@ -113,3 +113,28 @@ reaction checks and the target actually supplied to gravity. Keep complete spati
 errors distinct from modal errors. A correction changes the numerical problem
 on an unchanged affine mesh; both baseline and corrected cases must be solved
 independently for a scientific before/after comparison.
+
+## References and attribution boundaries
+
+- Chang, K. S., and Kwak, D. Y. (2009), *Extraction method for Stokes Flow with
+  jumps in the pressure*, [arXiv:0911.4769](https://arxiv.org/abs/0911.4769).
+  Section 2, equations (4)-(6), motivates regular/singular pressure splitting.
+  UW3 uses its own prescribed radial profile, exact-circle cap integration,
+  DG P2 load moments and outer-chord natural datum, rather than the paper's
+  harmonic extension and CR discretisation.
+- Atallah, N. M., Canuto, C., and Scovazzi, G. (2020), *The second-generation
+  Shifted Boundary Method and its numerical analysis*, Computer Methods in
+  Applied Mechanics and Engineering 372, 113341,
+  [doi:10.1016/j.cma.2020.113341](https://doi.org/10.1016/j.cma.2020.113341),
+  [author preprint](https://arxiv.org/abs/2004.10584). Section 2.2, equations
+  (8)-(13), supplies the Taylor-shift motivation. Its Section 4.2 uses a
+  Nitsche formulation and assumes body-fitted Neumann boundaries. UW3's lagged
+  strong free-slip, tangential load projection and compatibility corrections
+  are separate constructions; that analysis provides no stability proof here.
+- Zhong, S., Gurnis, M., and Hulbert, G. (1993), *Accurate determination of
+  surface normal stress in viscous flow from a consistent boundary flux
+  method*, Physics of the Earth and Planetary Interiors 78(1-2), 1-8,
+  [doi:10.1016/0031-9201(93)90078-N](https://doi.org/10.1016/0031-9201(93)90078-N).
+  This is the CBF stress-recovery reference. UW3's circular moment transfer,
+  Taylor reaction correction and weighted coefficient integration extend the
+  calculation and are not results established by that paper.

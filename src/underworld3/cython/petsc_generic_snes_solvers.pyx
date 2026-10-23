@@ -8693,6 +8693,15 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
         Explicitly selected correction for affine 2D P2/continuous-P1 annuli,
         constant viscosity and a fitted circular sheet. No analytical Stokes
         solution enters construction. Call collectively on every rank.
+
+        References
+        ----------
+        K. S. Chang and D. Y. Kwak (2009), "Extraction method for Stokes
+        Flow with jumps in the pressure", arXiv:0911.4769,
+        https://arxiv.org/abs/0911.4769, Section 2, equations (4)-(6).
+        The pressure split motivates this method. The radial lift, circular-cut
+        load integration and outer-chord natural datum are UW3 adaptations,
+        not the paper's harmonic-extension/CR scheme.
         """
         from underworld3.utilities._cylindrical_pressure import _create_circular_pressure_lift
         if self.u.degree != 2 or not self.u.continuous or self.p.degree != 1 or not self.p.continuous:
@@ -8735,6 +8744,18 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
         Restricted to affine 2D P2/continuous-P1 annuli and constant viscosity.
         Registers rotated normal and tangential natural data. Only owned
         boundary-cell traces are replicated; no volume field is gathered.
+
+        References
+        ----------
+        N. M. Atallah, C. Canuto and G. Scovazzi (2020), "The
+        second-generation Shifted Boundary Method and its numerical analysis",
+        Computer Methods in Applied Mechanics and Engineering 372, 113341,
+        https://doi.org/10.1016/j.cma.2020.113341; arXiv:2004.10584,
+        Section 2.2, equations (8)-(13).
+        These equations motivate Taylor transfer. Strong free-slip constraints,
+        lagged numerical traction and flux/torque projection are UW3 additions.
+        This is not that paper's Nitsche scheme; its Section 4.2 assumes
+        body-fitted Neumann boundaries and does not prove this method stable.
         """
         from underworld3.utilities._cylindrical_wall import _add_cylindrical_wall_transfer
         return _add_cylindrical_wall_transfer(
@@ -8760,6 +8781,16 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
             available as ``cylindrical_wall_history`` if an iterate fails. This
             method performs no file I/O. A residual-accepted zero-increment
             warm start counts as an accepted solve.
+
+        Notes
+        -----
+        This lagged solve/update schedule is a UW3 implementation choice.
+        The Taylor motivation is Atallah, Canuto and Scovazzi (2020),
+        "The second-generation Shifted Boundary Method and its numerical
+        analysis", CMAME 372, 113341,
+        https://doi.org/10.1016/j.cma.2020.113341, Section 2.2.
+        Four updates and their convergence are verified by benchmark evidence;
+        they are not guarantees provided by that paper.
         """
         from underworld3.utilities._cylindrical_wall import _solve_with_wall_updates
         return _solve_with_wall_updates(self, walls, updates)
@@ -8782,6 +8813,16 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
             Circular length, moment, mean and correction checks. The original
             assembled CBF reaction cache remains unchanged. No coefficients or
             reference fields enter this transfer.
+
+        References
+        ----------
+        S. Zhong, M. Gurnis and G. Hulbert (1993), "Accurate determination
+        of surface normal stress in viscous flow from a consistent boundary
+        flux method", Physics of the Earth and Planetary Interiors 78(1-2),
+        1-8, https://doi.org/10.1016/0031-9201(93)90078-N.
+        Cited for momentum-residual CBF stress recovery. The circular-minus-
+        polygonal moment transfer and Taylor correction here are UW3
+        adaptations; this reference does not analyse those corrections.
         """
         from underworld3.utilities._cylindrical_reactions import _recover_circular_topography
         return _recover_circular_topography(self, wall, field, buoyancy_scale)
@@ -8804,6 +8845,16 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
             Circle-weighted least-squares cosine coefficient. This operation
             is for spectral postprocessing; Direct-field Poisson uses the
             spatial field directly. Call collectively on every rank.
+
+        Notes
+        -----
+        This circle-weighted integration of an existing spatial field is a UW3
+        postprocessing construction. The underlying CBF provenance is Zhong,
+        Gurnis and Hulbert (1993), "Accurate determination of surface normal
+        stress in viscous flow from a consistent boundary flux method",
+        Physics of the Earth and Planetary Interiors 78(1-2), 1-8,
+        https://doi.org/10.1016/0031-9201(93)90078-N. That paper does not
+        define the circle-transfer Jacobian or this coefficient integration.
         """
         from underworld3.utilities._cylindrical_reactions import _circular_field_coefficient
         if wavenumber <= 0:

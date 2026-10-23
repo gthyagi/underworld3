@@ -3,6 +3,18 @@
 Only boundary traces are replicated. Sparse solves are one-dimensional line
 mass systems; no volume field is gathered. The spatial target is independent
 of Fourier fitting and the original solver reaction cache remains unchanged.
+
+The consistent boundary flux (CBF) principle recovers surface stress from the
+discrete momentum balance [1]_. The circular-minus-polygonal stress moments and
+Taylor shift below are UW3 geometry adaptations, not a scheme or stability
+result established in that paper.
+
+References
+----------
+.. [1] Zhong, S., Gurnis, M., and Hulbert, G. (1993). Accurate determination
+   of surface normal stress in viscous flow from a consistent boundary flux
+   method. Physics of the Earth and Planetary Interiors, 78(1-2), 1-8.
+   https://doi.org/10.1016/0031-9201(93)90078-N
 """
 
 import numpy as np
@@ -21,6 +33,11 @@ def _circular_reaction_field(edges, trace, raw_reaction, radius, sign, quadratur
     traction mean on its own geometry, then invert the circular consistent
     line mass. The circular stress uses the same first-order Taylor shift as
     the coefficient diagnostic. Keep the assembled CBF residual contribution.
+
+    The residual-based stress recovery follows the CBF principle of Zhong,
+    Gurnis and Hulbert (1993), cited in the module. The additive moment transfer
+    is our extension to a physical circular trace; its accuracy is verified
+    independently and no published stability proof is claimed for it.
     """
     rule = _trace_rule(edges, sign, 2, quadrature)
     t = (np.polynomial.legendre.leggauss(quadrature)[0] + 1) / 2
@@ -78,7 +95,15 @@ def _validate_spatial_target(wall, field):
 
 
 def _recover_circular_topography(stokes, wall, field, buoyancy_scale):
-    """Write physical circular-wall topography directly into a spatial FE field."""
+    r"""Write circular-wall topography from CBF reactions and numerical moments.
+
+    Recover polygonal normal traction from the discrete Stokes momentum
+    residual using a consistent boundary mass, following the CBF principle
+    of Zhong, Gurnis and Hulbert (1993; module reference). Apply our circular
+    moment transfer, then use the signed buoyancy balance
+    :math:`h=-\sigma_{nn}/(\Delta\rho g)`. No projected volume stress or
+    analytical Stokes field replaces the assembled reaction.
+    """
     if buoyancy_scale == 0:
         raise ValueError("Topography requires nonzero buoyancy_scale.")
     _validate_spatial_target(wall, field)

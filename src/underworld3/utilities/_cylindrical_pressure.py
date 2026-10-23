@@ -3,6 +3,13 @@
 The caller selects this mathematical correction explicitly. No reference Stokes
 solution enters the source. Owned-cell checks are reduced once; force values
 also populate local ghost cells. Public entry: Stokes.cylindrical_pressure_lifting.
+
+Pressure decomposition is motivated by Chang and Kwak (2009), "Extraction method
+for Stokes Flow with jumps in the pressure", arXiv:0911.4769,
+https://arxiv.org/abs/0911.4769, Section 2, equations (4)-(6). The prescribed
+radial lift, exact-circle cap integration, DG P2 moment representation and
+outer-chord natural datum are this UW3 implementation. It does not implement
+the paper's Section 3 harmonic extension or Section 4 CR discretisation.
 """
 
 from typing import NamedTuple
@@ -54,6 +61,8 @@ def _load_moments(vertices, interface_radius, width, wavenumber, amplitude, quad
     Interior quadrature integrates the smooth outer branch on each triangle.
     Polar cap quadrature removes the region r<R exactly in geometry. No
     analytical Stokes velocity, pressure or stress enters this construction.
+    This polar cap subtraction and DG P2 moment representation are UW3
+    constructions, not the interface approximation in Chang and Kwak (2009).
     """
     edges = np.stack((vertices[:, 1] - vertices[:, 0], vertices[:, 2] - vertices[:, 0]), axis=-1)
     inverse = np.linalg.inv(edges)
@@ -142,6 +151,14 @@ def _create_circular_pressure_lift(
     A linear radial profile avoids introducing a narrow transition layer.
     Local cell connectivity includes ghosts; each DG cell is populated locally,
     then owned-cell diagnostics are summed once across MPI ranks.
+
+    References
+    ----------
+    K. S. Chang and D. Y. Kwak (2009), "Extraction method for Stokes
+    Flow with jumps in the pressure", arXiv:0911.4769,
+    https://arxiv.org/abs/0911.4769, Section 2, equations (4)-(6).
+    The regular-plus-singular pressure split motivates this construction;
+    its radial profile, cut loads and boundary datum are UW3 adaptations.
     """
     if mesh.dim != 2 or mesh.cdim != 2:
         raise ValueError("Circular pressure extraction requires a two-dimensional affine mesh.")

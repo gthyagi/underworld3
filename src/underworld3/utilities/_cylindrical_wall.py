@@ -5,6 +5,14 @@ solves below are bounded one-dimensional boundary mass systems, not volume
 operators; the Stokes system remains distributed PETSc. Parallel collectives
 are internal implementation details, never part of the notebook contract.
 No analytical Stokes data or coefficient fitting enters a numerical wall update.
+
+Taylor boundary transfer is motivated by N. M. Atallah, C. Canuto and G. Scovazzi
+(2020), "The second-generation Shifted Boundary Method and its numerical
+analysis", Computer Methods in Applied Mechanics and Engineering 372, 113341,
+https://doi.org/10.1016/j.cma.2020.113341, Section 2.2, equations (8)-(13).
+This lagged strong free-slip/traction projection is a UW3 adaptation, not their
+Nitsche formulation. Their Section 4.2 assumes body-fitted Neumann boundaries;
+its stability/convergence analysis does not cover this implementation.
 """
 
 import numpy as np
@@ -95,6 +103,9 @@ def _solve_with_wall_updates(stokes, walls, updates):
     The final solve uses the last recorded boundary fields. A residual-accepted
     zero-increment warm start is valid. Partial history is stored on the solver
     before raising so the caller can record a failed step without accepting it.
+    The fixed-point schedule and choice of four updates are UW3 benchmark
+    choices; they are not an iteration theorem from the shifted-boundary paper
+    cited in this module's documentation.
     """
     if updates < 0 or int(updates) != updates:
         raise ValueError("Wall updates must be a non-negative integer.")
@@ -230,7 +241,13 @@ def _numerical_trace(
     )
 
 class _NumericalWall:
-    """Cache one wall's geometry and refresh its scalar/vector boundary data."""
+    """Cache one wall's numerical boundary traces and lagged Taylor data.
+
+    First-order transfer follows the Taylor identity in Atallah, Canuto and
+    Scovazzi (2020), Section 2.2; see the full reference in this module.
+    Strong normal constraints and compatible tangential loads are UW3's
+    formulation, with no claim to inherit their Nitsche stability analysis.
+    """
 
     def __init__(
         self,
@@ -328,7 +345,12 @@ class _NumericalWall:
         return velocity, pressure
 
     def update(self):
-        """Rebuild lagged Taylor data; explicitly project the normal datum to zero flux."""
+        """Rebuild Taylor data and project normal flux and tangential torque.
+
+        The first-order boundary shift is motivated by Atallah, Canuto and
+        Scovazzi (2020), Section 2.2, equations (8)-(13). Nodal load projection,
+        zero-flux/zero-torque corrections and lagged solves are UW3 additions.
+        """
         velocity, pressure = self.cell_values()
         points = self.rule["points"]
         trace = _numerical_trace(self.vertices, velocity, pressure, points, *self.physics)
