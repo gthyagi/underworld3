@@ -169,6 +169,32 @@ native 1/μ pressure mass as the Schur preconditioner). There is no separate
 linear path and no up-front nonlinearity probe: a linear model converges after
 its first increment and the loop self-terminates.
 
+### Explicit linear-solver options
+
+The rotated path accepts three solver-local overrides through
+`solver.petsc_options`. Without them, its nested FGMRES defaults are unchanged:
+
+```python
+solver.petsc_options["rotated_fieldsplit_velocity_ksp_type"] = "preonly"
+solver.petsc_options["rotated_fieldsplit_pressure_ksp_type"] = "preonly"
+solver.petsc_options["rotated_ksp_max_it"] = 500
+```
+
+Set these on every rank before `solve()`. UW3 maps the public
+`velocity`/`pressure` names to its private `vel`/`pres` fieldsplit prefix.
+Changing or removing an override invalidates the cached rotated workspace.
+The effective types and limit are returned as `velocity_ksp_type`,
+`pressure_ksp_type` and `ksp_max_it` in `solver._rotated_freeslip_info`.
+
+Selecting `preonly` for both inner KSPs uses the existing velocity multigrid
+and pressure-mass preconditioners as block applications. Coupled FGMRES still
+enforces `solver.tolerance` on the original system. This differs from putting
+only the velocity KSP in `preonly` while iterating the pressure Schur equation,
+which has the limitation described below. The pressure-mass approximation is
+described in the [PETSc Stokes guide](https://petsc.org/release/tutorials/physics/guide_to_stokes/).
+This configuration was validated for the constant-viscosity P2/P1 annulus;
+performance for other rheologies and meshes requires separate validation.
+
 ### Where the multigrid hierarchy comes from
 
 Native geometric FMG cannot serve a rotated solve at all — the DM-coupled

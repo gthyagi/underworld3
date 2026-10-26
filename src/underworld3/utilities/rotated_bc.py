@@ -1116,7 +1116,10 @@ def solve_rotated_freeslip(solver, boundaries, remove_rotation_gauge=True,
         solver._rotated_linear_cache = None
         cache = None
 
-    geometry_sig = _rotated_geometry_signature(solver, boundaries) \
+    # A changed or removed opt-in must rebuild the cached KSP as well as its
+    # workspace; otherwise a previous preonly selection silently persists.
+    geometry_sig = (_rotated_geometry_signature(solver, boundaries),
+                    tuple(sorted(_rotated_ksp_overrides(solver).items()))) \
         if cache_allowed else None
     coefficient_variables = None
     coefficient_states = None
@@ -1597,6 +1600,9 @@ def solve_rotated_freeslip(solver, boundaries, remove_rotation_gauge=True,
             "velocity_pc": "direct-LU" if use_lu else (ctx or {}).get("velocity_pc"),
             "schur_pre": "none" if use_lu else (ctx or {}).get("schur_pre"),
             "velocity_pc_type": None if use_lu else (ctx or {}).get("velocity_pc_type"),
+            "velocity_ksp_type": (ctx or {}).get("velocity_ksp_type"),
+            "pressure_ksp_type": (ctx or {}).get("pressure_ksp_type"),
+            "ksp_max_it": (ctx or {}).get("ksp_max_it"),
             "continuation_switched": continuation and phase == "newton",
             "rotation_reused": rotation_reused,
             "workspace_reused": workspace_reused}
@@ -1700,6 +1706,24 @@ def _destroy_rotated_ksp_ctx(ctx):
         ctx["cns"] = None
 
 
+def _rotated_ksp_overrides(solver) -> dict[str, str | int]:
+    """Read explicit solver-local options for the private rotated KSP prefix.
+
+    Unset keys return no override, preserving the nested FGMRES defaults.
+    The two public field names match the native velocity/pressure vocabulary;
+    the private IS-built split uses ``vel``/``pres`` instead.
+    """
+    options = solver.petsc_options
+    overrides = {}
+    for field, private_field in (("velocity", "vel"), ("pressure", "pres")):
+        key = f"rotated_fieldsplit_{field}_ksp_type"
+        if options.hasName(key):
+            overrides[f"fieldsplit_{private_field}_ksp_type"] = options.getString(key)
+    if options.hasName("rotated_ksp_max_it"):
+        overrides["ksp_max_it"] = options.getInt("rotated_ksp_max_it")
+    return overrides
+
+
 def _solve_rotated_iterative(solver, Ahat, bhat, Q, Qt, normal_rows, verbose=False,
                              custom_Pl=None, nsp=None, Mp=None, ctx=None,
                              refresh_operator=True):
@@ -1739,7 +1763,17 @@ def _solve_rotated_iterative(solver, Ahat, bhat, Q, Qt, normal_rows, verbose=Fal
 
     ``refresh_operator=False`` is the cross-solve fast path for an exactly
     unchanged matrix: the KSP/PC/GAMG hierarchy is left untouched and only the
-    right-hand side changes."""
+    right-hand side changes.
+
+    Explicit ``solver.petsc_options`` keys
+    ``rotated_fieldsplit_velocity_ksp_type``,
+    ``rotated_fieldsplit_pressure_ksp_type`` and ``rotated_ksp_max_it``
+    override only their named defaults. Selecting ``preonly`` for BOTH inner
+    KSPs applies block preconditioners while outer FGMRES solves the coupled
+    system. It does not request an accurately iterated Schur action. See the
+    PETSc Stokes guide's pressure-mass approximation:
+    https://petsc.org/release/tutorials/physics/guide_to_stokes/.
+    """
     from underworld3.utilities import custom_mg
     dm = solver.dm
     vel_is = solver._subdict["velocity"][0]
@@ -1842,6 +1876,7 @@ def _solve_rotated_iterative(solver, Ahat, bhat, Q, Qt, normal_rows, verbose=Fal
                 "fieldsplit_vel_ksp_rtol": str(tol * 0.033),
                 "fieldsplit_vel_ksp_max_it": "200",
             })
+        cfg.update(_rotated_ksp_overrides(solver))
         for k, v in cfg.items():
             opts[pfx + k] = v
         try:
@@ -1993,6 +2028,9 @@ def _solve_rotated_iterative(solver, Ahat, bhat, Q, Qt, normal_rows, verbose=Fal
     ctx["vel_its_last"] = vel_ksp.getIterationNumber()
     ctx["pres_its_last"] = pres_ksp.getIterationNumber()
     ctx["velocity_pc_type"] = vel_ksp.getPC().getType()
+    ctx["velocity_ksp_type"] = vel_ksp.getType()
+    ctx["pressure_ksp_type"] = pres_ksp.getType()
+    ctx["ksp_max_it"] = ksp.getTolerances()[3]
     # A velocity FGMRES that exhausts its cap returns KSP_DIVERGED_ITS, which
     # KSPCheckSolve deliberately does NOT escalate — so without this it degrades
     # silently. (`preonly` could never fail, which is why the check is new.)

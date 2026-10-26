@@ -35,6 +35,12 @@ datum strongly.
 
 Governing document: [rotated free-slip](../subsystems/rotated-freeslip.md).
 
+Rotated linear-solver defaults are unchanged unless explicitly overridden.
+The `rotated_fieldsplit_velocity_ksp_type`,
+`rotated_fieldsplit_pressure_ksp_type` and `rotated_ksp_max_it` options on
+`solver.petsc_options` select the benchmark's inner solvers and outer iteration
+allowance; see the governing document's explicit linear-solver options.
+
 ## Nitsche: only for a condition that must evolve
 
 A hard rotated constraint cannot morph. A condition that changes character
