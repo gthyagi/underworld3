@@ -226,11 +226,13 @@ Galerkin-coarsened rotated block inherits the rigid-rotation null space where
 `redundant`/LU hits a zero pivot. See
 [the solvers subsystem doc](solvers.md) for the bundle itself.
 
-### The velocity sub-KSP must converge, not just apply
+### Velocity accuracy in the default nested Schur solve
 
-The velocity block is preconditioned by multigrid, but the KSP *around* that
-multigrid is FGMRES to `0.1 × tolerance` — never `preonly`. This is not a
-tuning preference. `PCFieldSplit` forms the Schur complement
+In the default nested configuration, the velocity block is preconditioned by
+multigrid, with FGMRES around it at `0.033 × tolerance`. The following accuracy
+requirement concerns an iterated pressure Schur equation; the explicit
+both-`preonly` block configuration above does not iterate that equation.
+`PCFieldSplit` forms the Schur complement
 `S = A₁₁ − A₁₀ A₀₀⁻¹ A₀₁` and applies `A₀₀⁻¹` through this same velocity KSP,
 so `preonly` replaces `A₀₀⁻¹` with a single multigrid cycle and hands the
 pressure Krylov a *different* system `S̃ ≠ S`, preconditioned by a 1/μ mass
@@ -253,8 +255,8 @@ null space attached to `S`) has not been isolated.
 
 The native (non-rotated) Stokes path and the GAMG fallback have always wrapped
 their multigrid this way; the rotated custom-FMG branch was the sole exception.
-`max_it` matches both (200); `rtol` matches the GAMG fallback (0.1 × tol), where
-the native path asks for 0.033 × tol.
+The current velocity `max_it` is 200 and `rtol` is `0.033 × tolerance` on both
+rotated routes; the pressure KSP asks for `0.1 × tolerance`.
 
 Two things make this easy to miss, and both are now instrumented. The outer
 iteration count does not reveal it — a full Schur factorisation with a good
