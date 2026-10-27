@@ -193,6 +193,22 @@ def _ordered_rows(mesh, field, vertices):
     return np.take_along_axis(rows, distance.argmin(axis=1), axis=1)
 
 
+def _field_values(field, vertices, points, cells):
+    """Continue a P1/P2 source from its actual PETSc interpolation nodes.
+
+    DG nodes need not be triangle vertices or edge midpoints. Reconstruct the
+    same cell polynomial in a canonical barycentric basis before quadrature.
+    """
+    rows = field.mesh._cell_node_indices(field.degree, field.continuous)[cells]
+    nodes = np.asarray(field.coords)[rows]
+    shape, _, bary = _p2_basis(vertices[cells], nodes)
+    design = shape if field.degree == 2 else bary
+    coefficients = np.linalg.solve(design, np.asarray(field.array)[rows, 0, :])
+    shape, _, bary = _p2_basis(vertices[cells], points)
+    basis = shape if field.degree == 2 else bary
+    return np.einsum("eqi,eid->eqd", basis, coefficients)
+
+
 def _coordinate_values(expression, points, components, mesh):
     expression = uw.function.expressions._unwrap_for_compilation(
         expression, keep_constants=False, return_self=False
@@ -415,12 +431,7 @@ def _solve_cylindrical_gap(
             raise ValueError(
                 "Use the unmodified P1/P2 vector source field on the Stokes mesh"
             )
-        source_rows = _ordered_rows(mesh, field, vertices)[owned]
-        shape, _, bary = _p2_basis(vertices[owned], points)
-        source_shape = shape if field.degree == 2 else bary
-        force = np.einsum(
-            "eqi,eid->eqd", source_shape, np.asarray(field.array)[source_rows, 0, :]
-        )
+        force = _field_values(field, vertices, points, owned)
     else:
         force = _coordinate_values(bodyforce, points, 2, mesh)
     shape, _, _ = _p2_basis(vertices[owned], points)

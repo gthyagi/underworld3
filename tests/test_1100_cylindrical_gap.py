@@ -109,3 +109,26 @@ def test_mixed_element_transpose_is_inserted_in_row_order():
     np.testing.assert_array_equal(actual, b[0].T)
     assert matrix.isSymmetric(tol=1e-14)
     matrix.destroy()
+
+
+@pytest.mark.tier_b
+def test_dg_source_reproduces_a_quadratic_at_nonstandard_nodes():
+    from underworld3.utilities._cylindrical_gap import _field_values, _triangle_rule
+
+    mesh = uw.meshing.Annulus(
+        radiusInner=1.22, radiusOuter=2.22, cellSize=0.25, qdegree=3
+    )
+    force = uw.discretisation.MeshVariable(
+        "QuadraticGapForce", mesh, 2, degree=2, continuous=False
+    )
+    x, y = np.asarray(force.coords).T
+    values = np.column_stack((x * x + x * y, y * y - x * y))
+    force.array[:, 0, :] = values
+    rows = mesh._cell_node_indices(1, True)
+    vertices = np.asarray(mesh._get_coords_for_basis(1, True))[rows]
+    owned = np.flatnonzero(mesh._get_owned_cells_mask())
+    points, _ = _triangle_rule(vertices[owned], 4)
+    x, y = points[..., 0], points[..., 1]
+    exact = np.stack((x * x + x * y, y * y - x * y), axis=-1)
+    actual = _field_values(force, vertices, points, owned)
+    np.testing.assert_allclose(actual, exact, atol=2e-13, rtol=0)
