@@ -5729,10 +5729,16 @@ class Mesh(Stateful, uw_object):
 
         dmnew = self._basis_coordinate_dm(degree, continuous)
         coordsNewL = dmnew.getLocalVec()
+        coordsNewG = dmnew.getGlobalVec()
         try:
             petsc_dm_project_coordinate_identity(self.dm, dmnew, coordsNewL)
+            # Neighbouring cells can evaluate a shared node with different
+            # roundoff. Distribute its owner's value so halo coordinates agree.
+            dmnew.localToGlobal(coordsNewL, coordsNewG, addv=PETSc.InsertMode.INSERT_VALUES)
+            dmnew.globalToLocal(coordsNewG, coordsNewL)
             return coordsNewL.array.reshape(-1, self.cdim).copy()
         finally:
+            dmnew.restoreGlobalVec(coordsNewG)
             dmnew.restoreLocalVec(coordsNewL)
             dmnew.destroy()
 
