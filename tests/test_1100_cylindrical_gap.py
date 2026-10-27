@@ -13,7 +13,8 @@ pytestmark = pytest.mark.level_2
 
 
 @pytest.mark.tier_b
-def test_cylindrical_gap_preserves_pressure_gradient_and_null_modes():
+@pytest.mark.parametrize("force_degree", [None, 1, 2])
+def test_cylindrical_gap_preserves_pressure_gradient_and_null_modes(force_degree):
     mesh = uw.meshing.Annulus(
         radiusInner=1.22, radiusOuter=2.22, cellSize=0.125, qdegree=3
     )
@@ -22,6 +23,14 @@ def test_cylindrical_gap_preserves_pressure_gradient_and_null_modes():
     stokes = uw.systems.Stokes(mesh, velocityField=velocity, pressureField=pressure)
     stokes.constitutive_model = uw.constitutive_models.ViscousFlowModel
     stokes.bodyforce = sp.Matrix([1, 0])
+    if force_degree is not None:
+        force = uw.discretisation.MeshVariable(
+            "GapForce", mesh, 2, degree=force_degree, continuous=force_degree == 1
+        )
+        values = np.zeros_like(np.asarray(force.array))
+        values[:, 0, 0] = 1.0
+        force.array[:, :, :] = values
+        stokes.bodyforce = force.sym
     result = stokes.solve_cylindrical_gap(
         inner_boundary="Lower",
         outer_boundary="Upper",

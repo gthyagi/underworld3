@@ -315,6 +315,15 @@ def _solve_cylindrical_gap(
             continuous=True,
         )
     reaction = stokes._cylindrical_gap_reaction
+    if stokes.constraints != sp.Matrix((stokes.div_u,)):
+        raise ValueError(
+            "Cylindrical gap Stokes requires the standard zero-divergence constraint"
+        )
+    penalty = uw.function.expressions._unwrap_for_compilation(
+        stokes.penalty, keep_constants=False, return_self=False
+    )
+    if penalty != 0:
+        raise ValueError("Cylindrical gap Stokes does not include a grad-div penalty")
     vertex_rows = mesh._cell_node_indices(1, True)
     vertices = np.asarray(mesh._get_coords_for_basis(1, True))[vertex_rows]
     urows, prows = _ordered_rows(mesh, velocity, vertices), _ordered_rows(
@@ -401,7 +410,7 @@ def _solve_cylindrical_gap(
             field.mesh is not mesh
             or field.degree not in (1, 2)
             or field.num_components != 2
-            or bodyforce != field.sym
+            or tuple(bodyforce) != tuple(field.sym)
         ):
             raise ValueError(
                 "Use the unmodified P1/P2 vector source field on the Stokes mesh"
