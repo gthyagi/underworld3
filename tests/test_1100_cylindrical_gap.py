@@ -55,3 +55,23 @@ def test_cylindrical_gap_preserves_pressure_gradient_and_null_modes():
     assert result.checks["pressure_null_relative_residual"] < 1e-12
     assert result.checks["rotation_null_relative_residual"] < 1e-12
     assert abs(result.checks["physical_area"] - np.pi * (2.22**2 - 1.22**2)) < 1e-11
+
+
+@pytest.mark.tier_b
+def test_circular_cap_area_and_empty_partition():
+    from underworld3.utilities._cylindrical_gap import _cap_quadrature
+
+    radius, half_angle = 2.22, 0.06
+    edges = radius * np.array(
+        [
+            [
+                [np.cos(half_angle), -np.sin(half_angle)],
+                [np.cos(half_angle), np.sin(half_angle)],
+            ]
+        ]
+    )
+    rule = _cap_quadrature(edges, radius, 12, 4)
+    exact = radius**2 * (2 * half_angle - np.sin(2 * half_angle)) / 2
+    np.testing.assert_allclose(rule["cap_weight"].sum(), exact, atol=1e-14, rtol=0)
+    empty = _cap_quadrature(np.empty((0, 2, 2)), radius, 8, 4)
+    assert empty["cap_points"].shape == (0, 32, 2)

@@ -445,7 +445,9 @@ def _solve_cylindrical_gap(
             rule["circle_points"] / wall["radius"],
         )
         edge_uids = umap.reshape(-1, 2)[wall["edge_rows"], 0]
-        lid = nu + npres + np.searchsorted(boundary_uids, edge_uids)
+        lid = np.asarray(
+            nu + npres + np.searchsorted(boundary_uids, edge_uids), dtype=PETSc.IntType
+        )
         for u, l, value in zip(uid[owners], lid, c.reshape(-1, 3, 12), strict=True):
             matrix.setValues(l, u, value, addv=PETSc.InsertMode.ADD_VALUES)
             matrix.setValues(u, l, value.T, addv=PETSc.InsertMode.ADD_VALUES)
