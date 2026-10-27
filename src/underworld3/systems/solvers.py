@@ -2415,6 +2415,78 @@ class SNES_Stokes(_ConstitutiveModelStateMixin, SNES_Stokes_SaddlePt):
         symval = sympify(constraints_matrix)
         self._constraints = symval
 
+    def solve_cylindrical_gap(
+        self, *, inner_boundary, outer_boundary, radius_inner, radius_outer,
+        viscosity, pressure_jump, pressure_jump_integral, cap_bodyforce,
+        quadrature, linear_solver_options,
+    ):
+        r"""Solve coupled Stokes flow on physical circles with signed gap integrals.
+
+        Parameters
+        ----------
+        inner_boundary, outer_boundary : str
+            Complete exterior circle labels, centred at the origin.
+        radius_inner, radius_outer : float
+            Positive physical radii, ordered inner < outer.
+        viscosity : float
+            Positive constant matching the Newtonian constitutive viscosity.
+        pressure_jump : scalar coordinate expression
+            Prescribed lift in :math:`p=q+p_J`; zero without pressure splitting.
+        pressure_jump_integral : float
+            Global integral of the lift over the polygonal mesh, including its
+            interface-cut correction. Use the value returned by
+            :meth:`cylindrical_pressure_lifting`, or zero without a lift.
+        cap_bodyforce : vector coordinate expression
+            Smooth regular-force extension into both boundary caps. For the
+            cylindrical pressure lift this is :math:`-\nabla p_J` away from
+            the source interface. Volume forcing is read from ``bodyforce``:
+            one unmodified P1/P2 vector MeshVariable or a coordinate expression.
+        quadrature : int
+            Angular Gauss points per circular cap; at least three.
+        linear_solver_options : dict
+            PETSc KSP/PC options for this explicitly selected linear backend,
+            e.g. ``{"ksp_type": "preonly", "pc_type": "lu",
+            "pc_factor_mat_solver_type": "mumps"}``. Ordinary SNES and
+            rotated-solver options do not configure this separate coupled path.
+
+        Returns
+        -------
+        named tuple
+            ``normal_reaction`` and ``checks``. The reaction contains boundary
+            P2-in-angle coefficients for :math:`\lambda=-\sigma_{nn}`;
+            interior entries are zero and are not a volume stress field.
+            Velocity and regular pressure are written to this solver's fields.
+
+        Notes
+        -----
+        Collective, distributed PETSc assembly on fixed nondimensional affine
+        triangles, continuous P2 velocity/P1 pressure, constant Newtonian
+        viscosity, and two complete free-slip circles. Do not register ordinary
+        essential/natural/rotated conditions as well. Momentum and continuity
+        integrate polygon + outer caps - inner caps. A boundary multiplier
+        enforces zero normal velocity weakly on the true circles; this is not
+        pointwise rotated free slip. Pressure and reaction shift together;
+        volume pressure and rigid-rotation gauges are imposed after solving.
+        This opt-in research method has no claimed uniform inf-sup theorem.
+
+        References
+        ----------
+        Collins, Li, Lozinski & Scovazzi (2025), Gap-SBM,
+        https://arxiv.org/abs/2508.09613: solution/test extension and gap work.
+        Urquiza, Garon & Farinas (2014), JCP 256, 748-767,
+        https://doi.org/10.1016/j.jcp.2013.08.045: weak slip multipliers.
+        Burman, Hansbo & Larson (2020), BIT 60, 235-260,
+        https://doi.org/10.1007/s10543-019-00773-4: related multiplier boundary
+        correction. Signed circular caps, P2/P1/P2 spaces and paired gauges
+        are this UW3 adaptation, not a reproduction of one published method.
+        """
+        from underworld3.utilities._cylindrical_gap import _solve_cylindrical_gap
+        return _solve_cylindrical_gap(
+            self, inner_boundary, outer_boundary, radius_inner, radius_outer,
+            viscosity, pressure_jump, pressure_jump_integral, cap_bodyforce,
+            quadrature, linear_solver_options,
+        )
+
     @property
     def bodyforce(self):
         r"""Body force vector (source term).

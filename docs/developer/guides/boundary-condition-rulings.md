@@ -66,6 +66,16 @@ Zero-slip transfer needs only velocity, so it accepts either pressure-split
 workflow without a wall pressure input. No topography or gravity calculation
 is needed. Method docstrings give the equations, references and limitations.
 
+`Stokes.solve_cylindrical_gap` is an explicitly selected research alternative
+for the same constant-viscosity P2/P1 annulus. It assembles momentum and
+continuity on polygon + outer caps - inner caps and solves a physical-circle
+normal multiplier with velocity and pressure. The normal condition is weak,
+not pointwise rotated free slip; its KSP options are supplied explicitly.
+Do not combine it with ordinary wall registrations. The method docstring
+identifies the Gap-SBM and weak-slip multiplier references and distinguishes
+the annulus construction from their published methods. No uniform inf-sup
+stability theorem is claimed for this particular P2/P1/P2 space.
+
 ## Nitsche: only for a condition that must evolve
 
 A hard rotated constraint cannot morph. A condition that changes character
