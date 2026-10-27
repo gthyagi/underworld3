@@ -41,6 +41,31 @@ The `rotated_fieldsplit_velocity_ksp_type`,
 `solver.petsc_options` select the benchmark's inner solvers and outer iteration
 allowance; see the governing document's explicit linear-solver options.
 
+## Physical circular walls on affine annulus meshes
+
+`Stokes.add_cylindrical_wall_transfer` registers a lagged rotated normal
+constraint and tangential natural load for free slip on the true circle.
+`Stokes.add_cylindrical_zero_slip_transfer` registers a full-vector shifted
+Dirichlet condition. These replace the ordinary wall registration on each
+boundary. Both require fixed, nondimensional affine triangles, continuous
+P2 velocity/P1 regular pressure, and a complete inner/outer circle pair.
+
+Call `solve_cylindrical_wall_updates(walls=walls, updates=...)` for free slip,
+or `solve_cylindrical_zero_slip_updates` for zero slip, with the pressure
+nullspace enabled. The explicit update count performs one initial solve plus
+that many numerical wall updates. Check the returned physical-circle residuals
+and update changes; a solver convergence flag alone does not establish wall
+iteration convergence. Free-slip transfer also requires constant viscosity.
+
+Pressure splitting remains separate. For free-slip transfer, pass the known
+`pressure_jump` expression from `cylindrical_pressure_lifting`, or the scalar
+DG P1 `pressure_jump_field` from `pressure_split`; pass zero without splitting.
+The latter uses one-sided cell coefficients, without averaging a jump at
+facets. Keep the split's exterior natural datum on natural components.
+Zero-slip transfer needs only velocity, so it accepts either pressure-split
+workflow without a wall pressure input. No topography or gravity calculation
+is needed. Method docstrings give the equations, references and limitations.
+
 ## Nitsche: only for a condition that must evolve
 
 A hard rotated constraint cannot morph. A condition that changes character

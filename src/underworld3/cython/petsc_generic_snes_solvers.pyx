@@ -8709,6 +8709,148 @@ class SNES_Stokes_SaddlePt(SolverBaseClass):
         return _create_circular_pressure_lift(self.mesh, interface_radius, outer_radius,
                                              wavenumber, amplitude, quadrature_points)
 
+    def add_cylindrical_wall_transfer(self, *, boundary, radius, sign,
+                                      viscosity, pressure_jump, quadrature):
+        r"""Register lagged free-slip transfer to a physical circular wall.
+
+        Parameters
+        ----------
+        boundary : str
+            Complete exterior circular boundary label on a fixed affine mesh.
+        radius : float
+            Physical circle radius, centered at the coordinate origin.
+        sign : int
+            Domain-outward normal orientation: -1 inner, +1 outer.
+        viscosity : float
+            Positive constant viscosity, matching the constitutive model.
+        pressure_jump : scalar expression or scalar P1 MeshVariable
+            Known pressure lift in :math:`p=q+p_J`; pass zero without splitting.
+            Accepts the coordinate expression from cylindrical_pressure_lifting
+            or the DG P1 field from pressure_split. Cell-side values are used
+            for discontinuous fields; no analytical Stokes state is required.
+        quadrature : int
+            Gauss points per boundary edge, at least three.
+
+        Returns
+        -------
+        object
+            Wall handle for :meth:`solve_cylindrical_wall_updates`.
+
+        Notes
+        -----
+        Requires nondimensional continuous P2 velocity/P1 regular pressure on
+        affine triangles. Replaces ordinary free-slip registration on this wall.
+        Registers a rotated normal datum and a tangential natural datum, then
+        updates them from numerical cell gradients/Hessians: the normal shift
+        is :math:`-s(R-r)\partial_r u_r`, the shear shift
+        :math:`-(R-r)\partial_r\sigma_{r\theta}`. Polygon-facet loads preserve
+        tangential P2 nodal moments, zero net flux and zero rotation torque.
+        The method does not recover boundary traction or compute topography.
+
+        References
+        ----------
+        Atallah, Canuto and Scovazzi (2020), CMAME 372, 113341,
+        https://doi.org/10.1016/j.cma.2020.113341, Section 2.2, equations
+        (8)--(13), motivates Taylor transfer. This strong, lagged mixed-slip
+        adaptation is not their Nitsche method; no convergence theorem is
+        claimed. Check physical-circle residuals in the solve history.
+        """
+        from underworld3.utilities._cylindrical_wall import _add_cylindrical_wall_transfer
+        return _add_cylindrical_wall_transfer(self, boundary=boundary, radius=radius,
+            sign=sign, viscosity=viscosity, pressure_jump=pressure_jump,
+            quadrature=quadrature)
+
+    def solve_cylindrical_wall_updates(self, *, walls, updates):
+        """Solve with lagged free-slip conditions on both physical circles.
+
+        Parameters
+        ----------
+        walls : mapping
+            Names to this system's inner and outer wall handles.
+        updates : int
+            Nonnegative update count; performs ``updates + 1`` Stokes solves.
+
+        Returns
+        -------
+        list of dict
+            Solver verdict, pressure gauge, update changes and true-circle
+            normal-velocity/shear-stress RMS after every solve. The iteration
+            count is explicit, not a convergence guarantee.
+
+        Notes
+        -----
+        Enable ``petsc_use_pressure_nullspace`` before solving. Existing rotated
+        solver settings are retained. No analytical solution enters the updates.
+        """
+        from underworld3.utilities._cylindrical_wall import _solve_with_wall_updates
+        return _solve_with_wall_updates(self, walls, updates)
+
+    def add_cylindrical_zero_slip_transfer(self, *, boundary, radius, sign,
+                                           quadrature):
+        r"""Register a full-vector zero-slip datum shifted to a physical circle.
+
+        Parameters
+        ----------
+        boundary : str
+            Complete exterior circular boundary label on a fixed affine mesh.
+        radius : float
+            Positive physical radius, centered at the origin.
+        sign : int
+            Domain-outward orientation: -1 inner, +1 outer.
+        quadrature : int
+            Gauss points per edge for physical-circle audits, at least three.
+
+        Returns
+        -------
+        object
+            Handle for :meth:`solve_cylindrical_zero_slip_updates`.
+
+        Notes
+        -----
+        Requires nondimensional affine triangles with continuous P2/P1 fields.
+        Replaces ordinary zero-slip registration on this wall. The lagged
+        essential datum is the complete P2 continuation
+        :math:`u_h(x)-u_h(Rx/|x|)`. Both walls receive one joint zero-flux
+        projection; vertex constraints remain zero. Pressure splitting is
+        independent and needs no exterior traction datum on zero-slip walls.
+
+        References
+        ----------
+        Ruas (2019), CAMWA 77(6), 1756--1769,
+        https://doi.org/10.1016/j.camwa.2018.05.029, Sections 2/4, equations
+        (29)--(30), provides a true-boundary trial-constraint precedent.
+        Atallah et al. (2020), https://doi.org/10.1016/j.cma.2020.113341,
+        Section 2.2, motivates the Taylor shift. The lagged symmetric-stress
+        scheme and joint flux projection are adaptations, not their theorems.
+        """
+        from underworld3.utilities._cylindrical_dirichlet import _add_cylindrical_zero_slip_transfer
+        return _add_cylindrical_zero_slip_transfer(self, boundary=boundary,
+            radius=radius, sign=sign, quadrature=quadrature)
+
+    def solve_cylindrical_zero_slip_updates(self, *, walls, updates):
+        """Solve with jointly flux-compatible shifted zero-slip data.
+
+        Parameters
+        ----------
+        walls : mapping
+            Names to this system's inner and outer zero-slip wall handles.
+        updates : int
+            Nonnegative update count; performs ``updates + 1`` standard solves.
+
+        Returns
+        -------
+        list of dict
+            Solver verdict, joint flux projection, update changes and true-circle
+            full-velocity residuals. Inspect these for fixed-point convergence.
+
+        Notes
+        -----
+        Enable ``petsc_use_pressure_nullspace`` before solving. No rotated
+        constraints, torque correction, pressure or traction recovery is added.
+        """
+        from underworld3.utilities._cylindrical_dirichlet import _solve_cylindrical_zero_slip_updates
+        return _solve_cylindrical_zero_slip_updates(self, walls=walls, updates=updates)
+
     def _residual_is_nonlinear(self, tol=1e-8):
         r"""True if the Stokes residual is nonlinear in the unknowns :math:`(v, p)`
         — i.e. the assembled Jacobian depends on the solution, so Newton / Picard
