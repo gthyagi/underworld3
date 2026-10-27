@@ -15,9 +15,7 @@ from underworld3.utilities._cylindrical_wall import (
 pytestmark = pytest.mark.level_1
 
 
-def _stokes():
-    mesh = uw.meshing.Annulus(radiusInner=1.22, radiusOuter=2.22,
-                              cellSize=1/16, qdegree=3, degree=1)
+def _stokes(mesh):
     velocity = uw.discretisation.MeshVariable("WallVelocity", mesh, 2, degree=2)
     pressure = uw.discretisation.MeshVariable("WallPressure", mesh, 1, degree=1)
     stokes = uw.systems.Stokes(mesh, velocityField=velocity, pressureField=pressure)
@@ -25,16 +23,18 @@ def _stokes():
     stokes.constitutive_model.Parameters.shear_viscosity_0 = sp.Integer(1)
     stokes.saddle_preconditioner = sp.Integer(1)
     stokes.petsc_use_pressure_nullspace = True
-    stokes.petsc_use_nullspace = True
     stokes.tolerance = 1e-9
+    stokes.petsc_options["snes_type"] = "ksponly"
+    stokes.petsc_options["ksp_atol"] = 1e-12
     return stokes
 
 
 @pytest.mark.tier_b
 def test_general_dg_lift_has_exact_cell_side_boundary_values():
     """DG P1 lifting is evaluated by the boundary-adjacent cell, without averaging."""
-    stokes = _stokes()
-    mesh = stokes.mesh
+    mesh = uw.meshing.Annulus(radiusInner=1.22, radiusOuter=2.22,
+                              cellSize=1/16, qdegree=3, degree=1)
+    stokes = _stokes(mesh)
     lift = uw.discretisation.MeshVariable("WallLiftDG", mesh, 1, degree=1, continuous=False)
     rows = mesh._cell_node_indices(1, False).reshape(-1, 3)
     # Distinct constants per cell expose accidental continuous interpolation.
@@ -46,7 +46,7 @@ def test_general_dg_lift_has_exact_cell_side_boundary_values():
     np.testing.assert_allclose(actual, expected, atol=1e-10, rtol=1e-12)
     # The expression returned by pressure_split identifies that same DG field.
     expression_wall = _FreeSlipWall(stokes, "Lower", 1.22, -1, 1, lift.sym[0], 6)
-    assert expression_wall.pressure_jump is lift
+    assert expression_wall.pressure_jump.sym[0] == lift.sym[0]
 
 
 @pytest.mark.tier_b
@@ -82,9 +82,12 @@ def test_tangent_mass_projection_preserves_its_exact_nodal_moments():
 @pytest.mark.parametrize("slip", ["free", "zero"])
 def test_wall_iteration_preserves_exact_quiescent_solution(slip):
     """Zero force has u=p=0 on both physical circles at every lagged update."""
-    stokes = _stokes()
+    mesh = uw.meshing.Annulus(radiusInner=1.22, radiusOuter=2.22,
+                              cellSize=1/16, qdegree=3, degree=1)
+    stokes = _stokes(mesh)
     stokes.bodyforce = sp.Matrix([0, 0])
     if slip == "free":
+        stokes.petsc_use_nullspace = True
         add_wall = stokes.add_cylindrical_wall_transfer
         options = dict(viscosity=1, pressure_jump=sp.S.Zero)
         solve = stokes.solve_cylindrical_wall_updates
@@ -105,6 +108,25 @@ def test_wall_iteration_preserves_exact_quiescent_solution(slip):
             key = "true_circle_normal_velocity_rms" if slip == "free" else "true_circle_velocity_rms"
             assert residuals[key] < 1e-12
     assert np.max(np.abs(stokes.u.array), initial=0) < 1e-12
+
+
+@pytest.mark.tier_b
+def test_general_pressure_split_and_zero_slip_preserve_hydrostatic_balance():
+    """A constant prescribed interface jump supports zero flow exactly."""
+    mesh = uw.meshing.AnnulusInternalBoundary(
+        radiusInner=1.22, radiusInternal=2, radiusOuter=2.22,
+        cellSize_Inner=1/16, cellSize_Internal=1/16, cellSize_Outer=1/16,
+        qdegree=3, degree=1)
+    stokes = _stokes(mesh)
+    split = stokes.pressure_split(jumps={"Internal": sp.Integer(1)},
+        normals={"Internal": mesh.CoordinateSystem.unit_e_0})
+    stokes.bodyforce = split.regular_force.sym
+    walls = {name: stokes.add_cylindrical_zero_slip_transfer(
+        boundary=name, radius=radius, sign=sign, quadrature=6)
+        for name, radius, sign in (("Lower", 1.22, -1), ("Upper", 2.22, 1))}
+    stokes.solve_cylindrical_zero_slip_updates(walls=walls, updates=2)
+    velocity_l2 = np.sqrt(abs(uw.maths.Integral(mesh, stokes.u.sym.dot(stokes.u.sym)).evaluate()))
+    assert velocity_l2 < 1e-8
 
 
 @pytest.mark.tier_b
