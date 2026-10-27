@@ -554,12 +554,14 @@ def _solve_cylindrical_gap(
         raise ArithmeticError(f"Cylindrical gap unpinned residual failed: {checks}")
     velocity.array[:, 0, :] = _scatter_values(solution, umap).reshape(-1, 2)
     pressure.array[:, 0, 0] = _scatter_values(solution, pmap + nu)
-    reaction.array[:, 0, 0] = 0.0
     global_node_ids = umap.reshape(-1, 2)[:, 0]
     selected = np.isin(global_node_ids, boundary_uids)
-    reaction.array[selected, 0, 0] = _scatter_values(
+    reaction_values = np.zeros(len(global_node_ids))
+    reaction_values[selected] = _scatter_values(
         solution, nu + npres + np.searchsorted(boundary_uids, global_node_ids[selected])
     )
+    # Full canonical writes synchronize ranks with empty boundary selections too.
+    reaction.array[:, 0, 0] = reaction_values
     for field in (velocity, pressure, reaction):
         field._sync_lvec_to_gvec()
     mesh._stale_lvec = True
