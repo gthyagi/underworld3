@@ -5713,7 +5713,7 @@ class Mesh(Stateful, uw_object):
                 f"{expected} nodes per cell for degree {degree} in {self.dim}D, "
                 f"got {got}")
 
-        self._cell_node_array[key] = numpy.asarray(rows, dtype=numpy.int64)
+        self._cell_node_array[key] = numpy.asarray(rows, dtype=numpy.int64).reshape(-1, expected)
         return self._cell_node_array[key]
 
     def _get_coords_for_basis(self, degree, continuous):
