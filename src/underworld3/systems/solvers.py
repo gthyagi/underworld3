@@ -2465,7 +2465,10 @@ class SNES_Stokes(_ConstitutiveModelStateMixin, SNES_Stokes_SaddlePt):
         essential/natural/rotated conditions as well. Momentum and continuity
         integrate polygon + outer caps - inner caps. A boundary multiplier
         enforces zero normal velocity weakly on the true circles; this is not
-        pointwise rotated free slip. Pressure and reaction shift together;
+        pointwise rotated free slip. The regular-pressure momentum load includes
+        :math:`\int_{\Gamma_R}p_J\,n\cdot v` when the lift is nonzero at a wall,
+        keeping the returned reaction equal to physical normal stress.
+        Pressure and reaction shift together;
         volume pressure and rigid-rotation gauges are imposed after solving.
         This opt-in research method has no claimed uniform inf-sup theorem.
 

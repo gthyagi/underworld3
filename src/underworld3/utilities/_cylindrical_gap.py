@@ -473,6 +473,20 @@ def _solve_cylindrical_gap(
             shape,
             rule["circle_points"] / wall["radius"],
         )
+        # p=q+p_J contributes +integral(p_J n.v) to the regular-pressure
+        # momentum load, so the solved multiplier remains physical -sigma_nn.
+        lift_trace = _coordinate_values(pressure_jump, rule["circle_points"], 1, mesh)[
+            ..., 0
+        ]
+        lift_load = sign * np.einsum(
+            "eq,eqi,eq,eqd->eid",
+            rule["circle_weight"],
+            shape,
+            lift_trace,
+            rule["circle_points"] / wall["radius"],
+        )
+        for u, value in zip(uid[owners], lift_load, strict=True):
+            rhs.setValues(u, value.ravel(), addv=PETSc.InsertMode.ADD_VALUES)
         edge_uids = umap.reshape(-1, 2)[wall["edge_rows"], 0]
         lid = np.asarray(
             nu + npres + np.searchsorted(boundary_uids, edge_uids), dtype=PETSc.IntType

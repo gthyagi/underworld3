@@ -132,3 +132,37 @@ def test_dg_source_reproduces_a_quadratic_at_nonstandard_nodes():
     exact = np.stack((x * x + x * y, y * y - x * y), axis=-1)
     actual = _field_values(force, vertices, points, owned)
     np.testing.assert_allclose(actual, exact, atol=2e-13, rtol=0)
+
+
+@pytest.mark.tier_b
+def test_constant_pressure_lift_keeps_physical_pressure_and_reaction_zero():
+    mesh = uw.meshing.Annulus(
+        radiusInner=1.22, radiusOuter=2.22, cellSize=0.125, qdegree=3
+    )
+    velocity = uw.discretisation.MeshVariable("LiftGapU", mesh, 2, degree=2)
+    pressure = uw.discretisation.MeshVariable("LiftGapP", mesh, 1, degree=1)
+    stokes = uw.systems.Stokes(mesh, velocityField=velocity, pressureField=pressure)
+    stokes.constitutive_model = uw.constitutive_models.ViscousFlowModel
+    stokes.bodyforce = sp.zeros(2, 1)
+    area = uw.maths.Integral(mesh, sp.S.One).evaluate()
+    result = stokes.solve_cylindrical_gap(
+        inner_boundary="Lower",
+        outer_boundary="Upper",
+        radius_inner=1.22,
+        radius_outer=2.22,
+        viscosity=1.0,
+        pressure_jump=sp.S.One,
+        pressure_jump_integral=area,
+        cap_bodyforce=sp.zeros(2, 1),
+        quadrature=8,
+        linear_solver_options={
+            "ksp_type": "preonly",
+            "pc_type": "lu",
+            "pc_factor_mat_solver_type": "mumps",
+        },
+    )
+    np.testing.assert_allclose(np.asarray(velocity.array), 0, atol=1e-11, rtol=0)
+    np.testing.assert_allclose(np.asarray(pressure.array) + 1, 0, atol=1e-10, rtol=0)
+    np.testing.assert_allclose(
+        np.asarray(result.normal_reaction.array), 0, atol=1e-10, rtol=0
+    )
