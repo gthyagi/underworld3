@@ -5717,36 +5717,24 @@ class Mesh(Stateful, uw_object):
         return self._cell_node_array[key]
 
     def _get_coords_for_basis(self, degree, continuous):
-        """
-        This function returns the vertex array for the
-        provided variable. If the array does not already exist,
-        it is first created and then returned.
-        """
+        """Physical FE node coordinates in the basis DM's local-section order.
 
-        dmold = self.dm.getCoordinateDM()
+        PETSc evaluates the coordinate identity using the mesh geometry and
+        target dual space. Local projection includes halo nodes and avoids
+        global interpolation-matrix assembly on ghost-only MPI partitions.
+        """
+        from underworld3.cython.petsc_discretisation import (
+            petsc_dm_project_coordinate_identity,
+        )
+
         dmnew = self._basis_coordinate_dm(degree, continuous)
-
-        matInterp, vecScale = dmold.createInterpolation(dmnew)
-        coordsOld = self.dm.getCoordinates()
         coordsNewL = dmnew.getLocalVec()
-        coordsNewG = dmnew.getGlobalVec()
-        matInterp.mult(coordsOld, coordsNewG)
-        dmnew.globalToLocal(coordsNewG, coordsNewL)
-
-        arr = coordsNewL.array
-        arrcopy = arr.reshape(-1, self.cdim).copy()
-
-        dmnew.restoreGlobalVec(coordsNewG)
-        dmnew.restoreLocalVec(coordsNewL)
-        # Clean up the PETSc interpolation objects built above. Without this
-        # they accumulate until Python GC runs — noticeable in long adapt
-        # loops that re-fill the coord cache per variable.
-        matInterp.destroy()
-        if vecScale is not None:
-            vecScale.destroy()
-        dmnew.destroy()
-
-        return arrcopy
+        try:
+            petsc_dm_project_coordinate_identity(self.dm, dmnew, coordsNewL)
+            return coordsNewL.array.reshape(-1, self.cdim).copy()
+        finally:
+            dmnew.restoreLocalVec(coordsNewL)
+            dmnew.destroy()
 
     def _coord_rows_for_points(self, nav_dm, points):
         """Row indices into the navigation coordinate array (``_nav_coords``)
