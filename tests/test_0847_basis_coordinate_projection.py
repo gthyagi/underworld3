@@ -52,3 +52,26 @@ def test_basis_coordinates_are_affine_simplex_nodes(interface_mesh, degree, cont
         assert actual.shape == expected.shape
         assert np.max(np.min(distances, axis=1)) < 2e-13
         assert np.max(np.min(distances, axis=0)) < 2e-13
+
+
+@pytest.mark.tier_b
+def test_shared_continuous_coordinates_are_identical(interface_mesh):
+    """A shared FE node has exactly one coordinate value across MPI ranks."""
+    mesh = interface_mesh
+    coords = np.asarray(mesh._get_coords_for_basis(1, True))
+    dm = mesh._basis_coordinate_dm(1, True)
+    section, global_section = dm.getLocalSection(), dm.getGlobalSection()
+    local = []
+    for point in range(*dm.getDepthStratum(0)):
+        offset = global_section.getOffset(point)
+        global_offset = -(offset + 1) if offset < 0 else offset
+        local.append((global_offset, coords[section.getOffset(point) // 3].copy()))
+    gathered = uw.mpi.comm.allgather(local)
+    dm.destroy()
+    shared = {}
+    for entries in gathered:
+        for index, value in entries:
+            if index in shared:
+                np.testing.assert_array_equal(value, shared[index])
+            else:
+                shared[index] = value
