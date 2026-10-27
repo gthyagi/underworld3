@@ -75,3 +75,28 @@ def test_circular_cap_area_and_empty_partition():
     np.testing.assert_allclose(rule["cap_weight"].sum(), exact, atol=1e-14, rtol=0)
     empty = _cap_quadrature(np.empty((0, 2, 2)), radius, 8, 4)
     assert empty["cap_points"].shape == (0, 32, 2)
+
+
+@pytest.mark.tier_b
+def test_mixed_element_transpose_is_inserted_in_row_order():
+    """PETSc Mat.setValues must receive C-contiguous rectangular block data."""
+    from petsc4py import PETSc
+    from underworld3.utilities._cylindrical_gap import _insert_blocks
+
+    matrix = PETSc.Mat().createAIJ(size=(15, 15), nnz=15, comm=PETSc.COMM_SELF)
+    b = np.arange(36, dtype=float).reshape(1, 3, 12)
+    _insert_blocks(
+        matrix,
+        np.arange(12, dtype=PETSc.IntType)[None],
+        np.arange(12, 15, dtype=PETSc.IntType)[None],
+        {"A": np.zeros((1, 12, 12)), "B": b},
+        1.0,
+        1,
+    )
+    matrix.assemble()
+    actual = matrix.getValues(
+        np.arange(12, dtype=PETSc.IntType), np.arange(12, 15, dtype=PETSc.IntType)
+    )
+    np.testing.assert_array_equal(actual, b[0].T)
+    assert matrix.isSymmetric(tol=1e-14)
+    matrix.destroy()

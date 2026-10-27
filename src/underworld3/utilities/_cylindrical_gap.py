@@ -216,9 +216,18 @@ def _insert_blocks(matrix, velocity_ids, pressure_ids, blocks, viscosity, sign):
     for u, p, a, b in zip(
         velocity_ids, pressure_ids, blocks["A"], blocks["B"], strict=True
     ):
-        matrix.setValues(u, u, sign * viscosity * a, addv=PETSc.InsertMode.ADD_VALUES)
-        matrix.setValues(p, u, sign * b, addv=PETSc.InsertMode.ADD_VALUES)
-        matrix.setValues(u, p, sign * b.T, addv=PETSc.InsertMode.ADD_VALUES)
+        matrix.setValues(
+            u,
+            u,
+            np.ascontiguousarray(sign * viscosity * a),
+            addv=PETSc.InsertMode.ADD_VALUES,
+        )
+        matrix.setValues(
+            p, u, np.ascontiguousarray(sign * b), addv=PETSc.InsertMode.ADD_VALUES
+        )
+        matrix.setValues(
+            u, p, np.ascontiguousarray(sign * b.T), addv=PETSc.InsertMode.ADD_VALUES
+        )
 
 
 def _scatter_values(vector, indices):
@@ -449,9 +458,15 @@ def _solve_cylindrical_gap(
             nu + npres + np.searchsorted(boundary_uids, edge_uids), dtype=PETSc.IntType
         )
         for u, l, value in zip(uid[owners], lid, c.reshape(-1, 3, 12), strict=True):
-            matrix.setValues(l, u, value, addv=PETSc.InsertMode.ADD_VALUES)
-            matrix.setValues(u, l, value.T, addv=PETSc.InsertMode.ADD_VALUES)
+            matrix.setValues(
+                l, u, np.ascontiguousarray(value), addv=PETSc.InsertMode.ADD_VALUES
+            )
+            matrix.setValues(
+                u, l, np.ascontiguousarray(value.T), addv=PETSc.InsertMode.ADD_VALUES
+            )
     matrix.assemble()
+    if not matrix.isSymmetric(tol=1e-12):
+        raise ArithmeticError("Cylindrical gap mixed assembly lost transpose symmetry")
     for vector in (rhs, pmean, rotation_weights):
         vector.assemble()
     pressure_mode = rhs.duplicate()
