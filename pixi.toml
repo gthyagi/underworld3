@@ -374,7 +374,7 @@ dev         = { features = ["conda-petsc", "runtime", "dev"], solve-group = "def
 
 amr         = { features = ["amr"], solve-group = "amr" }
 amr-runtime = { features = ["amr", "runtime"], solve-group = "amr" }
-amr-dev     = { features = ["amr", "runtime", "dev"], solve-group = "amr" }
+amr-dev     = { features = ["mac-docker"], solve-group = "mac-docker", no-default-feature = true }
 
 # --- Debug PETSc (issue investigation, isolated from optimised build) ---
 amr-debug   = { features = ["amr", "amr-debug", "runtime", "dev"], solve-group = "amr" }
@@ -397,3 +397,86 @@ amr-openmpi-dev = { features = ["amr-openmpi", "runtime", "dev"], solve-group = 
 # Pure Python from pixi; MPI/PETSc/h5py built from source against cluster MPI.
 # UW_CLUSTER (or hostname) selects kaiju/gadi config in build-petsc.sh.
 hpc = { features = ["hpc"], solve-group = "hpc" }
+
+# Native Apple Silicon developer environment matching the pinned Mac Docker stack.
+# Native MPI/HDF5 use one current conda-forge OpenMPI stack. PETSc is built
+# from source at the Docker version with AMR libraries and 32-bit indices.
+[feature.mac-docker]
+platforms = ["osx-arm64"]
+
+[feature.mac-docker.dependencies]
+python = "==3.12.14"
+pip = "==23.2.1"
+setuptools = "==84.0.0"
+cython = "==3.2.3"
+numpy = "==2.4.6"
+wheel = "==0.48.0"
+packaging = ">=26.2"
+openmpi = ">=5.0,<6"
+mpi4py = "==4.1.2"
+hdf5 = { version = "==1.14.6", build = "*openmpi*" }
+h5py = { version = "==3.16.0", build = "*openmpi*" }
+cmake = ">=3.31,<4"
+make = ">=4.4,<5"
+pkg-config = "*"
+bison = ">=3.8,<4"
+llvm-openmp = "*"
+
+[feature.mac-docker.pypi-dependencies]
+scipy = "==1.18.1"
+sympy = "==1.14.0"
+gmsh = "==4.15.2"
+pygmsh = "==7.1.17"
+meshio = "==5.3.5"
+pint = "==0.26.1"
+pydantic = "==2.13.5"
+matplotlib = "==3.11.2"
+pyvista = "==0.49.0"
+vtk = "==9.7.1"
+pytest = "==9.1.1"
+psutil = "==7.2.2"
+setuptools-scm = "==10.3.4"
+pyyaml = "==6.0.3"
+xxhash = "==4.0.1"
+rich = "==13.9.4"
+ipykernel = "==7.4.0"
+ipython = "==9.17.1"
+ipywidgets = "==8.1.9"
+jupyterlab = "==4.6.4"
+jupytext = "==1.19.5"
+trame = "==4.0.0"
+trame-vuetify = "==3.3.0"
+trame-vtk = "==2.11.17"
+# Development-only tools supplement the numerical/runtime version pins.
+black = ">=24"
+mypy = ">=1.8,<2"
+sphinx = "*"
+furo = "*"
+myst-nb = "*"
+sphinx-design = ">=0.6.1"
+sphinx-math-dollar = "*"
+sphinxcontrib-mermaid = "*"
+pytest-mpi = "==0.6.0"
+pytest-timeout = ">=2.3,<3"
+pytest-forked = ">=1.6,<2"
+pytest-xdist = ">=3.8,<4"
+typeguard = ">=4.4,<5"
+pixi-kernel = ">=0.7.1,<0.8"
+
+[feature.mac-docker.activation]
+scripts = ["petsc-custom/activate-mac-docker.sh"]
+
+[feature.mac-docker.activation.env]
+OMP_NUM_THREADS = "1"
+OPENBLAS_NUM_THREADS = "1"
+MKL_NUM_THREADS = "1"
+PYTHONNOUSERSITE = "1"
+UW_JIT_CACHE_DIR = "$PIXI_PROJECT_ROOT/.pixi/envs/amr-dev/var/cache/underworld3/jit"
+PETSC_DIR = "$PIXI_PROJECT_ROOT/.pixi/envs/amr-dev/opt/petsc"
+PETSC_ARCH = ""
+MPICC = "$PIXI_PROJECT_ROOT/.pixi/envs/amr-dev/bin/mpicc"
+HDF5_DIR = "$PIXI_PROJECT_ROOT/.pixi/envs/amr-dev"
+
+[feature.mac-docker.tasks]
+stack-build = "bash petsc-custom/build-mac-docker-stack.sh"
+build = "python -m pip install --no-deps --no-build-isolation --no-cache-dir ."

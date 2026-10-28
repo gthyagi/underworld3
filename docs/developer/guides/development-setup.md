@@ -8,6 +8,10 @@ Underworld3 builds Cython extensions against a specific PETSc, so the build is
 not as forgiving as a pure-Python package. The constraints below are the ones
 that cost real time when they are broken.
 
+For the native Apple Silicon `amr-dev` profile aligned with the Mac Docker
+stack, see [Mac Docker-matched development](mac-docker-amr-dev.md). It uses
+an environment-local PETSc installation and a current native OpenMPI stack.
+
 ## Everyday commands
 
 ```bash
