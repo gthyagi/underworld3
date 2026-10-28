@@ -250,3 +250,53 @@ def test_zero_slip_balances_torque_and_converges_to_azimuthal_solution():
     assert (
         np.log2(errors[0] / errors[1]) > 2.5
     ), "P2 velocity must approach third-order convergence"
+
+
+@pytest.mark.tier_b
+def test_gap_matrix_preallocates_remote_mixed_connectivity():
+    """The known mixed graph must require no numerical insertion reallocations."""
+    from petsc4py import PETSc
+    from underworld3.utilities._cylindrical_gap import (
+        _create_gap_matrix,
+        _insert_blocks,
+    )
+
+    ranks = uw.mpi.size
+    owner = (uw.mpi.rank + 1) % ranks
+    uids = (12 * owner + np.arange(12, dtype=PETSc.IntType))[None]
+    pids = (12 * ranks + 3 * owner + np.arange(3, dtype=PETSc.IntType))[None]
+    lids = (15 * ranks + 3 * owner + np.arange(3, dtype=PETSc.IntType))[None]
+    matrix = _create_gap_matrix(
+        18 * ranks, uids, pids, [(uids, lids)], PETSc.COMM_WORLD
+    )
+    a = np.diag(np.arange(1, 13, dtype=float))[None]
+    b = np.arange(1, 37, dtype=float).reshape(1, 3, 12)
+    c = b[0] / 2
+    _insert_blocks(matrix, uids, pids, {"A": a, "B": b}, 1.0, 1)
+    matrix.setValues(lids[0], uids[0], c, addv=PETSc.InsertMode.ADD_VALUES)
+    matrix.setValues(
+        uids[0], lids[0], np.ascontiguousarray(c.T), addv=PETSc.InsertMode.ADD_VALUES
+    )
+    matrix.assemble()
+    lo, hi = matrix.getOwnershipRange()
+    exact = np.zeros((hi - lo, 18 * ranks))
+    for cell in range(ranks):
+        u = 12 * cell + np.arange(12)
+        p = 12 * ranks + 3 * cell + np.arange(3)
+        l = 15 * ranks + 3 * cell + np.arange(3)
+        for rows, cols, values in (
+            (u, u, a[0]),
+            (p, u, b[0]),
+            (u, p, b[0].T),
+            (l, u, c),
+            (u, l, c.T),
+        ):
+            selected = (rows >= lo) & (rows < hi)
+            exact[np.ix_(rows[selected] - lo, cols)] += values[selected]
+    actual = matrix.getValues(
+        np.arange(lo, hi, dtype=PETSc.IntType),
+        np.arange(18 * ranks, dtype=PETSc.IntType),
+    )
+    np.testing.assert_array_equal(actual, exact)
+    assert matrix.getInfo(PETSc.Mat.InfoType.LOCAL)["mallocs"] == 0
+    matrix.destroy()

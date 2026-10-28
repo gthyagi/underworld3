@@ -270,6 +270,13 @@ def _insert_blocks(matrix, velocity_ids, pressure_ids, blocks, viscosity, sign):
         )
 
 
+def _create_gap_matrix(size, velocity_ids, pressure_ids, wall_couplings, comm):
+    """Allocate the coupled graph before numerical insertion."""
+    matrix = PETSc.Mat().createAIJ(size=(size, size), nnz=100, comm=comm)
+    matrix.setOption(PETSc.Mat.Option.NEW_NONZERO_ALLOCATION_ERR, True)
+    return matrix
+
+
 def _scatter_values(vector, indices):
     """Fetch local/ghost field values without replicating the volume solution."""
     iset = PETSc.IS().createGeneral(
@@ -434,8 +441,22 @@ def _solve_circle_constraints(
         )
     )
     size = nu + npres + ncomponents * len(boundary_uids)
-    matrix = PETSc.Mat().createAIJ(size=(size, size), nnz=100, comm=mesh.dm.comm)
-    matrix.setOption(PETSc.Mat.Option.NEW_NONZERO_ALLOCATION_ERR, False)
+    for wall in walls:
+        edge_uids = umap.reshape(-1, 2)[wall["edge_rows"], 0]
+        wall["multiplier_ids"] = np.asarray(
+            nu
+            + npres
+            + ncomponents * np.searchsorted(boundary_uids, edge_uids)[..., None]
+            + np.arange(ncomponents),
+            dtype=PETSc.IntType,
+        ).reshape(-1, 3 * ncomponents)
+    matrix = _create_gap_matrix(
+        size,
+        uid[owned],
+        pid[owned],
+        [(uid[wall["owners"]], wall["multiplier_ids"]) for wall in walls],
+        mesh.dm.comm,
+    )
     rhs = matrix.createVecRight()
     pmean = rhs.duplicate()
     rotation_weights = rhs.duplicate()
@@ -527,14 +548,7 @@ def _solve_circle_constraints(
         )
         for u, value in zip(uid[owners], lift_load, strict=True):
             rhs.setValues(u, value.ravel(), addv=PETSc.InsertMode.ADD_VALUES)
-        edge_uids = umap.reshape(-1, 2)[wall["edge_rows"], 0]
-        lid = np.asarray(
-            nu
-            + npres
-            + ncomponents * np.searchsorted(boundary_uids, edge_uids)[..., None]
-            + np.arange(ncomponents),
-            dtype=PETSc.IntType,
-        )
+        lid = wall["multiplier_ids"]
         for u, l, value in zip(
             uid[owners],
             lid.reshape(-1, 3 * ncomponents),
