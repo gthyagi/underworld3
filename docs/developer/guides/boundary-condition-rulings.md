@@ -82,6 +82,11 @@ reactions. Rotation is physically constrained, so no rotation gauge is removed;
 nonzero applied torque is balanced by wall reactions. Both gap backends use
 the ordinary mesh FE quadrature for volume forcing and circle-cap quadrature
 for its extension, keeping bulk load conventions matched in comparisons.
+Their distributed matrix graph is preallocated from element and circle-multiplier
+connectivity with PETSc `MATPREALLOCATOR`, including off-process rows. Zero-filling
+that graph prevents storage growth during numerical insertion; allocation errors
+remain enabled to catch a missing coupling. This changes storage, not the weak form.
+
 
 ## Nitsche: only for a condition that must evolve
 

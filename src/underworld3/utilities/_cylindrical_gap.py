@@ -270,10 +270,44 @@ def _insert_blocks(matrix, velocity_ids, pressure_ids, blocks, viscosity, sign):
         )
 
 
-def _create_gap_matrix(size, velocity_ids, pressure_ids, wall_couplings, comm):
-    """Allocate the coupled graph before numerical insertion."""
-    matrix = PETSc.Mat().createAIJ(size=(size, size), nnz=100, comm=comm)
-    matrix.setOption(PETSc.Mat.Option.NEW_NONZERO_ALLOCATION_ERR, True)
+def _create_gap_matrix(
+    size: int,
+    velocity_ids: np.ndarray,
+    pressure_ids: np.ndarray,
+    wall_couplings: list[tuple[np.ndarray, np.ndarray]],
+    comm: PETSc.Comm,
+) -> PETSc.Mat:
+    """Preallocate the distributed mixed graph, including remote circle couplings.
+
+    PETSc's MATPREALLOCATOR routes the known cell connectivity to row owners;
+    filling the graph with zeros prevents storage growth during numeric insertion.
+    See https://petsc.org/release/manualpages/Mat/MatPreallocatorPreallocate/.
+    The graph is the same A/B/B-transpose and circle C/C-transpose pattern used
+    by the variational assembly; no pressure-pressure block is introduced.
+    """
+    graph = PETSc.Mat().create(comm=comm)
+    graph.setSizes((size, size))
+    graph.setType(PETSc.Mat.Type.PREALLOCATOR)
+    graph.setUp()
+    zero_a = np.zeros((12, 12))
+    zero_b = np.zeros((3, 12))
+    zero_bt = np.zeros((12, 3))
+    for u, p in zip(velocity_ids, pressure_ids, strict=True):
+        graph.setValues(u, u, zero_a)
+        graph.setValues(p, u, zero_b)
+        graph.setValues(u, p, zero_bt)
+    for uids, lids in wall_couplings:
+        zero_c = np.zeros((lids.shape[1], 12))
+        zero_ct = np.zeros((12, lids.shape[1]))
+        for u, l in zip(uids, lids, strict=True):
+            graph.setValues(l, u, zero_c)
+            graph.setValues(u, l, zero_ct)
+    graph.assemble()
+    matrix = PETSc.Mat().create(comm=comm)
+    matrix.setSizes((size, size))
+    matrix.setType(PETSc.Mat.Type.AIJ)
+    graph.preallocatorPreallocate(matrix, fill=True)
+    graph.destroy()
     return matrix
 
 

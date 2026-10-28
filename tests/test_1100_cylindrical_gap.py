@@ -253,7 +253,8 @@ def test_zero_slip_balances_torque_and_converges_to_azimuthal_solution():
 
 
 @pytest.mark.tier_b
-def test_gap_matrix_preallocates_remote_mixed_connectivity():
+@pytest.mark.parametrize("empty_partition", [False, True])
+def test_gap_matrix_preallocates_remote_mixed_connectivity(empty_partition):
     """The known mixed graph must require no numerical insertion reallocations."""
     from petsc4py import PETSc
     from underworld3.utilities._cylindrical_gap import (
@@ -266,21 +267,24 @@ def test_gap_matrix_preallocates_remote_mixed_connectivity():
     uids = (12 * owner + np.arange(12, dtype=PETSc.IntType))[None]
     pids = (12 * ranks + 3 * owner + np.arange(3, dtype=PETSc.IntType))[None]
     lids = (15 * ranks + 3 * owner + np.arange(3, dtype=PETSc.IntType))[None]
+    count = int(not empty_partition or uw.mpi.rank == 0)
+    uids, pids, lids = uids[:count], pids[:count], lids[:count]
     matrix = _create_gap_matrix(
         18 * ranks, uids, pids, [(uids, lids)], PETSc.COMM_WORLD
     )
     a = np.diag(np.arange(1, 13, dtype=float))[None]
     b = np.arange(1, 37, dtype=float).reshape(1, 3, 12)
     c = b[0] / 2
-    _insert_blocks(matrix, uids, pids, {"A": a, "B": b}, 1.0, 1)
-    matrix.setValues(lids[0], uids[0], c, addv=PETSc.InsertMode.ADD_VALUES)
-    matrix.setValues(
-        uids[0], lids[0], np.ascontiguousarray(c.T), addv=PETSc.InsertMode.ADD_VALUES
-    )
+    _insert_blocks(matrix, uids, pids, {"A": a[:count], "B": b[:count]}, 1.0, 1)
+    for u, l in zip(uids, lids, strict=True):
+        matrix.setValues(l, u, c, addv=PETSc.InsertMode.ADD_VALUES)
+        matrix.setValues(
+            u, l, np.ascontiguousarray(c.T), addv=PETSc.InsertMode.ADD_VALUES
+        )
     matrix.assemble()
     lo, hi = matrix.getOwnershipRange()
     exact = np.zeros((hi - lo, 18 * ranks))
-    for cell in range(ranks):
+    for cell in ((1 % ranks),) if empty_partition else range(ranks):
         u = 12 * cell + np.arange(12)
         p = 12 * ranks + 3 * cell + np.arange(3)
         l = 15 * ranks + 3 * cell + np.arange(3)
