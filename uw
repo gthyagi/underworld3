@@ -99,6 +99,11 @@ petsc_built() {
     # Check for actual PETSc library, not just the lib directory
     # The lib directory can exist if the build failed partway through
     local env="${1:-$(get_env)}"
+    local installed_prefix="$SCRIPT_DIR/.pixi/envs/$env/opt/petsc"
+    if [ -f "$installed_prefix/.darwin-mpi-common-fixed" ] && \
+       [ -f "$installed_prefix/lib/libpetsc.dylib" ]; then
+        return 0
+    fi
     local arch=$(petsc_arch_for_env "$env")
     [ -z "$arch" ] && return 1  # not an AMR env
     [ -f "$PETSC_CUSTOM/$arch/lib/libpetsc.dylib" ] || \
