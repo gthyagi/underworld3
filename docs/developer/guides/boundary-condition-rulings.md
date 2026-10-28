@@ -76,6 +76,13 @@ identifies the Gap-SBM and weak-slip multiplier references and distinguishes
 the annulus construction from their published methods. No uniform inf-sup
 stability theorem is claimed for this particular P2/P1/P2 space.
 
+`Stokes.solve_cylindrical_gap_zero_slip` adds a tangential circle multiplier
+and enforces both velocity components weakly. It returns normal and tangential
+reactions. Rotation is physically constrained, so no rotation gauge is removed;
+nonzero applied torque is balanced by wall reactions. Both gap backends use
+the ordinary mesh FE quadrature for volume forcing and circle-cap quadrature
+for its extension, keeping bulk load conventions matched in comparisons.
+
 ## Nitsche: only for a condition that must evolve
 
 A hard rotated constraint cannot morph. A condition that changes character

@@ -166,3 +166,85 @@ def test_constant_pressure_lift_keeps_physical_pressure_and_reaction_zero():
     np.testing.assert_allclose(
         np.asarray(result.normal_reaction.array), 0, atol=1e-10, rtol=0
     )
+
+
+@pytest.mark.tier_b
+def test_zero_slip_gradient_load_has_no_rotation_gauge():
+    mesh = uw.meshing.Annulus(
+        radiusInner=1.22, radiusOuter=2.22, cellSize=0.125, qdegree=4
+    )
+    u = uw.discretisation.MeshVariable("ZeroGapU", mesh, 2, degree=2)
+    p = uw.discretisation.MeshVariable("ZeroGapP", mesh, 1, degree=1)
+    stokes = uw.systems.Stokes(mesh, velocityField=u, pressureField=p)
+    stokes.constitutive_model = uw.constitutive_models.ViscousFlowModel
+    stokes.bodyforce = sp.Matrix([1, 0])
+    result = stokes.solve_cylindrical_gap_zero_slip(
+        inner_boundary="Lower",
+        outer_boundary="Upper",
+        radius_inner=1.22,
+        radius_outer=2.22,
+        viscosity=1.0,
+        pressure_jump=sp.S.Zero,
+        pressure_jump_integral=0.0,
+        cap_bodyforce=sp.Matrix([1, 0]),
+        quadrature=8,
+        linear_solver_options={
+            "ksp_type": "preonly",
+            "pc_type": "lu",
+            "pc_factor_mat_solver_type": "mumps",
+        },
+    )
+    np.testing.assert_allclose(np.asarray(u.array), 0, atol=2e-8, rtol=0)
+    np.testing.assert_allclose(
+        np.asarray(p.array)[:, 0, 0], p.coords[:, 0], atol=1e-7, rtol=0
+    )
+    assert result.checks["rotation_is_null"] is False
+    assert result.checks["relative_residual"] < 1e-10
+
+
+@pytest.mark.tier_b
+def test_zero_slip_balances_torque_and_converges_to_azimuthal_solution():
+    errors = []
+    for h in (0.25, 0.125):
+        mesh = uw.meshing.Annulus(
+            radiusInner=1.22, radiusOuter=2.22, cellSize=h, qdegree=4
+        )
+        u = uw.discretisation.MeshVariable("TorqueGapU", mesh, 2, degree=2)
+        p = uw.discretisation.MeshVariable("TorqueGapP", mesh, 1, degree=1)
+        stokes = uw.systems.Stokes(mesh, velocityField=u, pressureField=p)
+        stokes.constitutive_model = uw.constitutive_models.ViscousFlowModel
+        x, y = mesh.N.x, mesh.N.y
+        force = sp.Matrix([-y, x])
+        stokes.bodyforce = force
+        result = stokes.solve_cylindrical_gap_zero_slip(
+            inner_boundary="Lower",
+            outer_boundary="Upper",
+            radius_inner=1.22,
+            radius_outer=2.22,
+            viscosity=1.0,
+            pressure_jump=sp.S.Zero,
+            pressure_jump_integral=0.0,
+            cap_bodyforce=force,
+            quadrature=8,
+            linear_solver_options={
+                "ksp_type": "preonly",
+                "pc_type": "lu",
+                "pc_factor_mat_solver_type": "mumps",
+            },
+        )
+        rr = x * x + y * y
+        ri, ro = sp.Rational(122, 100), sp.Rational(222, 100)
+        profile = (ri**2 + ro**2 - ri**2 * ro**2 / rr - rr) / 8
+        exact = sp.Matrix([[-y * profile, x * profile]])
+        error = u.sym - exact
+        errors.append(
+            np.sqrt(
+                uw.maths.Integral(mesh, error.dot(error)).evaluate()
+                / uw.maths.Integral(mesh, exact.dot(exact)).evaluate()
+            )
+        )
+        assert result.checks["relative_residual"] < 1e-10
+    assert errors[1] < 1e-3, "Manufactured azimuthal no-slip velocity must be accurate"
+    assert (
+        np.log2(errors[0] / errors[1]) > 2.5
+    ), "P2 velocity must approach third-order convergence"

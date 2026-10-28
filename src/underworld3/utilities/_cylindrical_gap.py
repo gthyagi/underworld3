@@ -1,7 +1,8 @@
 r"""Coupled signed-domain Stokes integration for affine P2/P1 annuli.
 
 Solution and test polynomials extend into outer circular caps; inner caps
-are removed. Both viscous and incompressibility blocks use this same domain.
+are removed. Zero slip adds a second multiplier for the tangential velocity;
+its rotation is constrained rather than removed as a gauge. Both viscous and incompressibility blocks use this same domain.
 A continuous P2-in-angle multiplier enforces the physical-circle normal trace
 weakly and solves lambda=-sigma_nn in the coupled system. This differs from
 nodal rotated free slip and from lagged stress-derivative wall transfer.
@@ -193,6 +194,29 @@ def _ordered_rows(mesh, field, vertices):
     return np.take_along_axis(rows, distance.argmin(axis=1), axis=1)
 
 
+def _native_force_rule(mesh, vertices):
+    """Use the ordinary UW3 source quadrature for a matched bulk load."""
+    fe = PETSc.FE().createDefault(2, 1, True, mesh.qdegree, "gap_source_")
+    points, weights = fe.getQuadrature().getData()
+    xy = (np.asarray(points).reshape(-1, 2) + 1) / 2
+    bary = np.column_stack((1 - xy.sum(axis=1), xy))
+    area = (
+        abs(
+            np.linalg.det(
+                np.stack(
+                    (vertices[:, 1] - vertices[:, 0], vertices[:, 2] - vertices[:, 0]),
+                    axis=-1,
+                )
+            )
+        )
+        / 2
+    )
+    physical = np.einsum("qi,eid->eqd", bary, vertices)
+    measure = area[:, None] * np.asarray(weights).reshape(1, -1) / 2
+    fe.destroy()
+    return physical, measure
+
+
 def _field_values(field, vertices, points, cells):
     """Continue a P1/P2 source from its actual PETSc interpolation nodes.
 
@@ -266,7 +290,7 @@ def _scatter_values(vector, indices):
     return values
 
 
-def _solve_cylindrical_gap(
+def _solve_circle_constraints(
     stokes,
     inner_boundary,
     outer_boundary,
@@ -278,7 +302,9 @@ def _solve_cylindrical_gap(
     cap_bodyforce,
     quadrature,
     linear_solver_options,
+    constraint_components,
 ):
+    ncomponents = len(constraint_components)
     mesh, velocity, pressure = stokes.mesh, stokes.u, stokes.p
     if (
         mesh.dim != 2
@@ -330,7 +356,17 @@ def _solve_cylindrical_gap(
             degree=2,
             continuous=True,
         )
-    reaction = stokes._cylindrical_gap_reaction
+    reactions = [stokes._cylindrical_gap_reaction]
+    if "tangent" in constraint_components:
+        if not hasattr(stokes, "_cylindrical_gap_tangent_reaction"):
+            stokes._cylindrical_gap_tangent_reaction = uw.discretisation.MeshVariable(
+                f"CylindricalTangentReaction_{stokes.instance_number}",
+                mesh,
+                1,
+                degree=2,
+                continuous=True,
+            )
+        reactions.append(stokes._cylindrical_gap_tangent_reaction)
     if stokes.constraints != sp.Matrix((stokes.div_u,)):
         raise ValueError(
             "Cylindrical gap Stokes requires the standard zero-divergence constraint"
@@ -397,7 +433,7 @@ def _solve_cylindrical_gap(
             uw.mpi.comm.allgather(np.asarray(boundary_uids, dtype=PETSc.IntType))
         )
     )
-    size = nu + npres + len(boundary_uids)
+    size = nu + npres + ncomponents * len(boundary_uids)
     matrix = PETSc.Mat().createAIJ(size=(size, size), nnz=100, comm=mesh.dm.comm)
     matrix.setOption(PETSc.Mat.Option.NEW_NONZERO_ALLOCATION_ERR, False)
     rhs = matrix.createVecRight()
@@ -408,6 +444,7 @@ def _solve_cylindrical_gap(
     points, weights = _triangle_rule(vertices[owned], 4)
     blocks = _volume_blocks(vertices[owned], points, weights)
     _insert_blocks(matrix, uid[owned], pid[owned], blocks, viscosity, 1)
+    load_points, load_weights = _native_force_rule(mesh, vertices[owned])
     bodyforce = uw.function.expressions._unwrap_for_compilation(
         stokes.bodyforce, keep_constants=False, return_self=False
     )
@@ -431,11 +468,11 @@ def _solve_cylindrical_gap(
             raise ValueError(
                 "Use the unmodified P1/P2 vector source field on the Stokes mesh"
             )
-        force = _field_values(field, vertices, points, owned)
+        force = _field_values(field, vertices, load_points, owned)
     else:
-        force = _coordinate_values(bodyforce, points, 2, mesh)
-    shape, _, _ = _p2_basis(vertices[owned], points)
-    load = np.einsum("eq,eqi,eqd->eid", weights, shape, force)
+        force = _coordinate_values(bodyforce, load_points, 2, mesh)
+    shape, _, _ = _p2_basis(vertices[owned], load_points)
+    load = np.einsum("eq,eqi,eqd->eid", load_weights, shape, force)
     for ids, value in zip(uid[owned], load, strict=True):
         rhs.setValues(ids, value.ravel(), addv=PETSc.InsertMode.ADD_VALUES)
     for ids, mass in zip(pid[owned], blocks["pressure_mean"], strict=True):
@@ -466,12 +503,15 @@ def _solve_cylindrical_gap(
         multiplier = np.array(
             [(1 - t) * (1 - 2 * t), t * (2 * t - 1), 4 * t * (1 - t)]
         ).T
-        c = sign * np.einsum(
-            "eq,ql,eqi,eqd->elid",
+        radial = rule["circle_points"] / wall["radius"]
+        tangent = np.stack((-radial[..., 1], radial[..., 0]), axis=-1)
+        directions = np.stack((sign * radial, tangent), axis=-2)[..., :ncomponents, :]
+        c = np.einsum(
+            "eq,ql,eqi,eqcd->elcid",
             rule["circle_weight"],
             multiplier,
             shape,
-            rule["circle_points"] / wall["radius"],
+            directions,
         )
         # p=q+p_J contributes +integral(p_J n.v) to the regular-pressure
         # momentum load, so the solved multiplier remains physical -sigma_nn.
@@ -489,9 +529,18 @@ def _solve_cylindrical_gap(
             rhs.setValues(u, value.ravel(), addv=PETSc.InsertMode.ADD_VALUES)
         edge_uids = umap.reshape(-1, 2)[wall["edge_rows"], 0]
         lid = np.asarray(
-            nu + npres + np.searchsorted(boundary_uids, edge_uids), dtype=PETSc.IntType
+            nu
+            + npres
+            + ncomponents * np.searchsorted(boundary_uids, edge_uids)[..., None]
+            + np.arange(ncomponents),
+            dtype=PETSc.IntType,
         )
-        for u, l, value in zip(uid[owners], lid, c.reshape(-1, 3, 12), strict=True):
+        for u, l, value in zip(
+            uid[owners],
+            lid.reshape(-1, 3 * ncomponents),
+            c.reshape(-1, 3 * ncomponents, 12),
+            strict=True,
+        ):
             matrix.setValues(
                 l, u, np.ascontiguousarray(value), addv=PETSc.InsertMode.ADD_VALUES
             )
@@ -508,7 +557,12 @@ def _solve_cylindrical_gap(
     pressure_mode.set(0.0)
     rotation_mode.set(0.0)
     lo, hi = pressure_mode.getOwnershipRange()
-    indices = np.arange(max(lo, nu), hi, dtype=PETSc.IntType)
+    pressure_indices = np.arange(max(lo, nu), min(hi, nu + npres), dtype=PETSc.IntType)
+    normal_indices = (
+        nu + npres + ncomponents * np.arange(len(boundary_uids), dtype=PETSc.IntType)
+    )
+    normal_indices = normal_indices[(normal_indices >= lo) & (normal_indices < hi)]
+    indices = np.concatenate((pressure_indices, normal_indices))
     pressure_mode.setValues(indices, np.ones(len(indices)))
     pressure_mode.assemble()
     rotation = np.column_stack(
@@ -521,7 +575,7 @@ def _solve_cylindrical_gap(
     pn = work.norm() / (matrix.norm() * pressure_mode.norm())
     matrix.mult(rotation_mode, work)
     rn = work.norm() / (matrix.norm() * rotation_mode.norm())
-    if max(pn, rn) > 1e-12:
+    if pn > 1e-12 or (ncomponents == 1 and rn > 1e-12):
         raise ArithmeticError(
             f"Cylindrical gap null-mode assembly failed: pressure={pn}, rotation={rn}"
         )
@@ -529,7 +583,7 @@ def _solve_cylindrical_gap(
         abs(rhs.dot(pressure_mode)) / pressure_mode.norm(),
         abs(rhs.dot(rotation_mode)) / rotation_mode.norm(),
     )
-    if compatibility > 1e-10 * max(rhs.norm(), 1.0):
+    if ncomponents == 1 and compatibility > 1e-10 * max(rhs.norm(), 1.0):
         raise ValueError(
             "The prescribed volume/cap forces have incompatible net rotation torque"
         )
@@ -540,7 +594,9 @@ def _solve_cylindrical_gap(
         np.min(umap[np.isclose(abs(rotation), maximum, rtol=0, atol=1e-13)], initial=nu)
     )
     rotation_pin = uw.mpi.comm.allreduce(candidate, op=MPI.MIN)
-    pins = np.array([rotation_pin, nu], dtype=PETSc.IntType)
+    pins = np.asarray(
+        ([rotation_pin] if ncomponents == 1 else []) + [nu], dtype=PETSc.IntType
+    )
     pinned = matrix.copy()
     pinned.zeroRowsColumns(pins, diag=1.0)
     pinned_rhs = rhs.copy()
@@ -566,10 +622,11 @@ def _solve_cylindrical_gap(
         float(lift_cap_integral), op=MPI.SUM
     )
     solution.axpy(-(pmean.dot(solution) + lift_integral) / pmean.sum(), pressure_mode)
-    solution.axpy(
-        -rotation_weights.dot(solution) / rotation_weights.dot(rotation_mode),
-        rotation_mode,
-    )
+    if ncomponents == 1:
+        solution.axpy(
+            -rotation_weights.dot(solution) / rotation_weights.dot(rotation_mode),
+            rotation_mode,
+        )
     matrix.mult(solution, work)
     work.axpy(-1.0, rhs)
     relative = work.norm() / max(rhs.norm(), np.finfo(float).tiny)
@@ -583,6 +640,8 @@ def _solve_cylindrical_gap(
         unknowns=size,
         ksp_reason=int(ksp.getConvergedReason()),
         ranks=uw.mpi.size,
+        constraint_components=constraint_components,
+        rotation_is_null=ncomponents == 1,
     )
     if relative > 1e-9:
         raise ArithmeticError(f"Cylindrical gap unpinned residual failed: {checks}")
@@ -590,13 +649,18 @@ def _solve_cylindrical_gap(
     pressure.array[:, 0, 0] = _scatter_values(solution, pmap + nu)
     global_node_ids = umap.reshape(-1, 2)[:, 0]
     selected = np.isin(global_node_ids, boundary_uids)
-    reaction_values = np.zeros(len(global_node_ids))
-    reaction_values[selected] = _scatter_values(
-        solution, nu + npres + np.searchsorted(boundary_uids, global_node_ids[selected])
-    )
-    # Full canonical writes synchronize ranks with empty boundary selections too.
-    reaction.array[:, 0, 0] = reaction_values
-    for field in (velocity, pressure, reaction):
+    for component, reaction in enumerate(reactions):
+        reaction_values = np.zeros(len(global_node_ids))
+        reaction_values[selected] = _scatter_values(
+            solution,
+            nu
+            + npres
+            + ncomponents * np.searchsorted(boundary_uids, global_node_ids[selected])
+            + component,
+        )
+        # Full canonical writes synchronize empty boundary selections too.
+        reaction.array[:, 0, 0] = reaction_values
+    for field in (velocity, pressure, *reactions):
         field._sync_lvec_to_gvec()
     mesh._stale_lvec = True
     for key in linear_solver_options:
@@ -615,4 +679,70 @@ def _solve_cylindrical_gap(
         matrix,
     ):
         obj.destroy()
-    return _GapResult(reaction, checks)
+    return tuple(reactions), checks
+
+
+class _ZeroSlipGapResult(NamedTuple):
+    normal_reaction: object
+    tangential_reaction: object
+    checks: dict
+
+
+def _solve_cylindrical_gap(
+    stokes,
+    inner_boundary,
+    outer_boundary,
+    radius_inner,
+    radius_outer,
+    viscosity,
+    pressure_jump,
+    pressure_jump_integral,
+    cap_bodyforce,
+    quadrature,
+    linear_solver_options,
+):
+    fields, checks = _solve_circle_constraints(
+        stokes,
+        inner_boundary,
+        outer_boundary,
+        radius_inner,
+        radius_outer,
+        viscosity,
+        pressure_jump,
+        pressure_jump_integral,
+        cap_bodyforce,
+        quadrature,
+        linear_solver_options,
+        ("normal",),
+    )
+    return _GapResult(fields[0], checks)
+
+
+def _solve_cylindrical_gap_zero_slip(
+    stokes,
+    inner_boundary,
+    outer_boundary,
+    radius_inner,
+    radius_outer,
+    viscosity,
+    pressure_jump,
+    pressure_jump_integral,
+    cap_bodyforce,
+    quadrature,
+    linear_solver_options,
+):
+    fields, checks = _solve_circle_constraints(
+        stokes,
+        inner_boundary,
+        outer_boundary,
+        radius_inner,
+        radius_outer,
+        viscosity,
+        pressure_jump,
+        pressure_jump_integral,
+        cap_bodyforce,
+        quadrature,
+        linear_solver_options,
+        ("normal", "tangent"),
+    )
+    return _ZeroSlipGapResult(fields[0], fields[1], checks)

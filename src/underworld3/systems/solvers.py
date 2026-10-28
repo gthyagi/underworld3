@@ -2490,6 +2490,42 @@ class SNES_Stokes(_ConstitutiveModelStateMixin, SNES_Stokes_SaddlePt):
             quadrature, linear_solver_options,
         )
 
+    def solve_cylindrical_gap_zero_slip(
+        self, *, inner_boundary, outer_boundary, radius_inner, radius_outer,
+        viscosity, pressure_jump, pressure_jump_integral, cap_bodyforce,
+        quadrature, linear_solver_options,
+    ):
+        r"""Enforce zero velocity on both true circles in a coupled gap solve.
+
+        Parameters and domain restrictions are those of
+        :meth:`solve_cylindrical_gap`. Normal and tangential velocity are now
+        constrained weakly, with two P2-in-angle multipliers. Rigid rotation
+        is constrained physically and is not removed as a nullspace gauge.
+        Net applied torque is balanced by the tangential wall reactions.
+
+        Returns
+        -------
+        named tuple
+            ``normal_reaction``, ``tangential_reaction`` and ``checks``.
+            The reactions are :math:`-n\cdot\sigma n` and
+            :math:`-e_\theta\cdot\sigma n`, with boundary-only coefficients.
+
+        References
+        ----------
+        Collins et al. (2025), https://arxiv.org/abs/2508.09613, motivate gap
+        trial/test integration. Burman, Hansbo & Larson (2020),
+        https://doi.org/10.1007/s10543-019-00773-4, study related boundary
+        correction with multipliers for Dirichlet conditions. The signed
+        circles, P2/P1/P2 spaces and normal/tangential multiplier pair are this
+        UW3 adaptation; their theorems do not prove this particular method.
+        """
+        from underworld3.utilities._cylindrical_gap import _solve_cylindrical_gap_zero_slip
+        return _solve_cylindrical_gap_zero_slip(
+            self, inner_boundary, outer_boundary, radius_inner, radius_outer,
+            viscosity, pressure_jump, pressure_jump_integral, cap_bodyforce,
+            quadrature, linear_solver_options,
+        )
+
     @property
     def bodyforce(self):
         r"""Body force vector (source term).
