@@ -447,6 +447,7 @@ jupytext = "==1.19.5"
 trame = "==4.0.0"
 trame-vuetify = "==3.3.0"
 trame-vtk = "==2.11.17"
+trame-pyvista = "==0.2.3"
 # Development-only tools supplement the numerical/runtime version pins.
 black = ">=24"
 mypy = ">=1.8,<2"

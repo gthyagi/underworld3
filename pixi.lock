@@ -3070,6 +3070,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/84/e5/bdb34e21523e01dceda064d63713f3bdec91388af24fba1eca7ea5e85864/kiwisolver-1.5.1-cp312-cp312-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/82/3d/14ce75ef66813643812f3093ab17e46d3a206942ce7376d31ec2d36229e7/lark-1.3.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/fd/0c/ab8ed3dab0085931aec4a792c7eaac8dc6c5ff4691fda3a5360d9d8a9cd2/librt-0.16.0-cp312-cp312-macosx_11_0_arm64.whl
+      - pypi: https://files.pythonhosted.org/packages/0c/29/0348de65b8cc732daa3e33e67806420b2ae89bdce2b04af740289c5c6c8c/loguru-0.7.3-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/b3/81/4da04ced5a082363ecfa159c010d200ecbd959ae410c10c0264a38cac0f5/markdown_it_py-4.2.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/a2/f0/d6613774d86fbf6d145751d43c59875e47a6f9f17daee0aef173bd36d90e/markupsafe-3.0.4-cp312-cp312-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/a6/c4/7f5f3601ee69baf072c0c7d3ce60c03e0618621c5a56c34a62a460e29d11/matplotlib-3.11.2-cp312-cp312-macosx_11_0_arm64.whl
@@ -3167,8 +3168,12 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/4c/a8/137edd4bd17081244dbafd3ebcb35612d791b605eaf9a0c57e47200abd24/trame-4.0.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/c4/7f/dc3b12c0cde2523b72cea905e0fc421e50a4f5d0decea73175969c9f60e0/trame_client-4.1.4-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/7c/ad/c1cc127e7cf4fd00d2bb7ebd6bec0252d681628626e034a8a8e8ffd13c07/trame_common-1.2.9-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/15/90/83eab5f5009ce36b35c2b963901725f7ad0b1368924dda08e915cc3a5587/trame_dataclass-2.2.2-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/7e/60/b9d551737cae9cd428d5a8c72eef00e8539597e1e9b9d0ff47f3ab7bf18f/trame_pyvista-0.2.3-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/8f/ae/1c9aa48198c9bb824766a6bc3b0527db9831d67c1faf1e3f1927b18afa92/trame_rca-2.11.8-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/f7/30/d6ee48a182e09ca6d66f2e48e91ac7c3efbc5f323d6a50c591a2b4f27840/trame_server-4.1.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/c8/f1/d9b1119bad9c3018b2cc801032447e0f5cf942859845a1eaf03aff9c0905/trame_vtk-2.11.17-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/a6/51/41b023de8ad30bd1411aef6349bb1471437cd302735a1a6d5c2d2ebf813a/trame_vtklocal-1.8.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/db/77/a2479f57944ea1df8dd52cabdf00b1988dfc4c5b609f27573530fbc1cfc1/trame_vuetify-3.3.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/8f/eb/461d5f167b6f5c7d97696f397c82f82e3480e003fce3f0a1cd1dd26e2eb2/typeguard-4.6.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/49/d3/b8441a820a491ddfc024b0b0cf0393375b75ea13866d9c66727e54c2fc80/typing_extensions-4.16.0-py3-none-any.whl
@@ -38126,6 +38131,39 @@ packages:
   - pkg:pypi/locket?source=hash-mapping
   size: 8250
   timestamp: 1650660473123
+- pypi: https://files.pythonhosted.org/packages/0c/29/0348de65b8cc732daa3e33e67806420b2ae89bdce2b04af740289c5c6c8c/loguru-0.7.3-py3-none-any.whl
+  name: loguru
+  version: 0.7.3
+  sha256: 31a33c10c8e1e10422bfd431aeb5d351c7cf7fa671e3c4df004162264b28220c
+  requires_dist:
+  - colorama>=0.3.4 ; sys_platform == 'win32'
+  - aiocontextvars>=0.2.0 ; python_full_version < '3.7'
+  - win32-setctime>=1.0.0 ; sys_platform == 'win32'
+  - pre-commit==4.0.1 ; python_full_version >= '3.9' and extra == 'dev'
+  - tox==3.27.1 ; python_full_version < '3.8' and extra == 'dev'
+  - tox==4.23.2 ; python_full_version >= '3.8' and extra == 'dev'
+  - pytest==6.1.2 ; python_full_version < '3.8' and extra == 'dev'
+  - pytest==8.3.2 ; python_full_version >= '3.8' and extra == 'dev'
+  - pytest-cov==2.12.1 ; python_full_version < '3.8' and extra == 'dev'
+  - pytest-cov==5.0.0 ; python_full_version == '3.8.*' and extra == 'dev'
+  - pytest-cov==6.0.0 ; python_full_version >= '3.9' and extra == 'dev'
+  - pytest-mypy-plugins==1.9.3 ; python_full_version >= '3.6' and python_full_version < '3.8' and extra == 'dev'
+  - pytest-mypy-plugins==3.1.0 ; python_full_version >= '3.8' and extra == 'dev'
+  - colorama==0.4.5 ; python_full_version < '3.8' and extra == 'dev'
+  - colorama==0.4.6 ; python_full_version >= '3.8' and extra == 'dev'
+  - freezegun==1.1.0 ; python_full_version < '3.8' and extra == 'dev'
+  - freezegun==1.5.0 ; python_full_version >= '3.8' and extra == 'dev'
+  - exceptiongroup==1.1.3 ; python_full_version >= '3.7' and python_full_version < '3.11' and extra == 'dev'
+  - mypy==0.910 ; python_full_version < '3.6' and extra == 'dev'
+  - mypy==0.971 ; python_full_version == '3.6.*' and extra == 'dev'
+  - mypy==1.4.1 ; python_full_version == '3.7.*' and extra == 'dev'
+  - mypy==1.13.0 ; python_full_version >= '3.8' and extra == 'dev'
+  - sphinx==8.1.3 ; python_full_version >= '3.11' and extra == 'dev'
+  - sphinx-rtd-theme==3.0.2 ; python_full_version >= '3.11' and extra == 'dev'
+  - myst-parser==4.0.0 ; python_full_version >= '3.11' and extra == 'dev'
+  - build==1.2.2 ; python_full_version >= '3.11' and extra == 'dev'
+  - twine==6.0.1 ; python_full_version >= '3.11' and extra == 'dev'
+  requires_python: '>=3.5,<4.0'
 - conda: https://conda.anaconda.org/conda-forge/noarch/loguru-0.7.3-pyh707e725_0.conda
   sha256: e4a07f357a4cf195a2345dabd98deab80f4d53574abe712a9cc7f22d3f2cc2c3
   md5: 49647ac1de4d1e4b49124aedf3934e02
@@ -47615,6 +47653,88 @@ packages:
   - pkg:pypi/trame-common?source=hash-mapping
   size: 30742
   timestamp: 1781144524072
+- pypi: https://files.pythonhosted.org/packages/15/90/83eab5f5009ce36b35c2b963901725f7ad0b1368924dda08e915cc3a5587/trame_dataclass-2.2.2-py3-none-any.whl
+  name: trame-dataclass
+  version: 2.2.2
+  sha256: 528e45564d2f5c9f52bd299124371986ca92593365476abd42fc55b557d3183d
+  requires_dist:
+  - loguru
+  - trame-client>=3.10
+  - typing-extensions ; python_full_version == '3.13.*'
+  - nox ; extra == 'dev'
+  - pre-commit ; extra == 'dev'
+  - pytest-asyncio ; extra == 'dev'
+  - pytest-cov>=3 ; extra == 'dev'
+  - pytest>=6 ; extra == 'dev'
+  - ruff ; extra == 'dev'
+  - trame ; extra == 'dev'
+  requires_python: '>=3.10'
+- pypi: https://files.pythonhosted.org/packages/7e/60/b9d551737cae9cd428d5a8c72eef00e8539597e1e9b9d0ff47f3ab7bf18f/trame_pyvista-0.2.3-py3-none-any.whl
+  name: trame-pyvista
+  version: 0.2.3
+  sha256: 219f085ce5334bd594df8d8224a7f79407f2f7b268e39611ab4db29f0f3992a7
+  requires_dist:
+  - pyvista>=0.48
+  - trame-client>=3.10,<4.1.5
+  - trame-common>=1.2.4,<1.2.10
+  - trame-dataclass>=2.2.1,<2.2.3
+  - trame-rca>=2.11.6,<2.11.9
+  - trame-server>=3.9,<4.1.1
+  - trame-vtk>=2.11.16,<2.11.18
+  - trame-vtklocal>=1.7.1,<1.8.1
+  - trame-vuetify>=3.2.5,<3.3.1
+  - trame>=3.9.1,<4.0.1
+  - wslink>=2.5,<2.6.1
+  - ipywidgets ; extra == 'jupyter'
+  - jupyter-server-proxy ; extra == 'jupyter'
+  - nest-asyncio2 ; extra == 'jupyter'
+  - docutils ; extra == 'sphinx'
+  - sphinx ; extra == 'sphinx'
+  - mypy>=1.10 ; extra == 'dev'
+  - pre-commit ; extra == 'dev'
+  - ruff==0.17.1 ; extra == 'dev'
+  - trame-pyvista[jupyter,playwright,sphinx,test] ; extra == 'dev'
+  - matplotlib ; extra == 'playwright'
+  - numpydoc ; extra == 'playwright'
+  - playwright ; extra == 'playwright'
+  - sphinx ; extra == 'playwright'
+  - sphinx-book-theme ; extra == 'playwright'
+  - sphinx-design ; extra == 'playwright'
+  - sphinx-gallery ; extra == 'playwright'
+  - ipython ; extra == 'test'
+  - ipywidgets ; extra == 'test'
+  - nest-asyncio2 ; extra == 'test'
+  - numpy<2.5 ; extra == 'test'
+  - pytest-cov>=7.0 ; extra == 'test'
+  - pytest>=8.0 ; extra == 'test'
+  - trame-pyvista[sphinx] ; extra == 'test'
+  requires_python: '>=3.10'
+- pypi: https://files.pythonhosted.org/packages/8f/ae/1c9aa48198c9bb824766a6bc3b0527db9831d67c1faf1e3f1927b18afa92/trame_rca-2.11.8-py3-none-any.whl
+  name: trame-rca
+  version: 2.11.8
+  sha256: 59fd897ff8ac42147dcf067f08fd42cdc1b7ecdd357681c5295806209fc2815a
+  requires_dist:
+  - numpy
+  - packaging
+  - pillow
+  - trame-client>=3.4,<5
+  - trame-common>=1.2.2
+  - wslink>=2.1.3
+  - pillow-avif-plugin ; extra == 'avif'
+  - pixelmatch ; extra == 'dev'
+  - pre-commit ; extra == 'dev'
+  - pytest ; extra == 'dev'
+  - pytest-asyncio ; extra == 'dev'
+  - pytest-benchmark ; extra == 'dev'
+  - pytest-playwright ; extra == 'dev'
+  - pytest-xprocess ; extra == 'dev'
+  - ruff ; extra == 'dev'
+  - trame-vuetify>=3.2.6 ; extra == 'dev'
+  - trame>=4 ; extra == 'dev'
+  - pyturbojpeg ; extra == 'turbo'
+  - vtk ; extra == 'vtkstreaming'
+  - vtk-streaming>=0.4.0 ; extra == 'vtkstreaming'
+  requires_python: '>=3.9'
 - pypi: https://files.pythonhosted.org/packages/f7/30/d6ee48a182e09ca6d66f2e48e91ac7c3efbc5f323d6a50c591a2b4f27840/trame_server-4.1.0-py3-none-any.whl
   name: trame-server
   version: 4.1.0
@@ -47726,6 +47846,26 @@ packages:
   - pkg:pypi/trame-vtk?source=hash-mapping
   size: 595077
   timestamp: 1785288823641
+- pypi: https://files.pythonhosted.org/packages/a6/51/41b023de8ad30bd1411aef6349bb1471437cd302735a1a6d5c2d2ebf813a/trame_vtklocal-1.8.0-py3-none-any.whl
+  name: trame-vtklocal
+  version: 1.8.0
+  sha256: 810f0d4eba4f2fd5b9b35ff00b69cc4d9480ef5bd7ae566e0bd5c123eccb4eb1
+  requires_dist:
+  - packaging
+  - trame
+  - trame-common
+  - coverage ; extra == 'dev'
+  - pre-commit ; extra == 'dev'
+  - pytest ; extra == 'dev'
+  - pytest-asyncio ; extra == 'dev'
+  - pytest-cov>=3 ; extra == 'dev'
+  - pytest-playwright ; extra == 'dev'
+  - ruff ; extra == 'dev'
+  - trame-client[test] ; extra == 'dev'
+  - trame-vuetify ; extra == 'dev'
+  - vtk==9.7.20260913.dev0 ; extra == 'dev'
+  - vtk>=9.6.1 ; extra == 'vtk'
+  requires_python: '>=3.10'
 - pypi: https://files.pythonhosted.org/packages/db/77/a2479f57944ea1df8dd52cabdf00b1988dfc4c5b609f27573530fbc1cfc1/trame_vuetify-3.3.0-py3-none-any.whl
   name: trame-vuetify
   version: 3.3.0
