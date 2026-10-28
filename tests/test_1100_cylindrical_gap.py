@@ -270,7 +270,7 @@ def test_gap_matrix_preallocates_remote_mixed_connectivity(empty_partition):
     count = int(not empty_partition or uw.mpi.rank == 0)
     uids, pids, lids = uids[:count], pids[:count], lids[:count]
     matrix = _create_gap_matrix(
-        18 * ranks, uids, pids, [(uids, lids)], PETSc.COMM_WORLD
+        18 * ranks, 12 * ranks, uids, pids, [(uids, lids)], PETSc.COMM_WORLD
     )
     a = np.diag(np.arange(1, 13, dtype=float))[None]
     b = np.arange(1, 37, dtype=float).reshape(1, 3, 12)

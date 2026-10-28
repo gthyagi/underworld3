@@ -272,6 +272,7 @@ def _insert_blocks(matrix, velocity_ids, pressure_ids, blocks, viscosity, sign):
 
 def _create_gap_matrix(
     size: int,
+    pressure_pin: int,
     velocity_ids: np.ndarray,
     pressure_ids: np.ndarray,
     wall_couplings: list[tuple[np.ndarray, np.ndarray]],
@@ -283,7 +284,8 @@ def _create_gap_matrix(
     filling the graph with zeros prevents storage growth during numeric insertion.
     See https://petsc.org/release/manualpages/Mat/MatPreallocatorPreallocate/.
     The graph is the same A/B/B-transpose and circle C/C-transpose pattern used
-    by the variational assembly; no pressure-pressure block is introduced.
+    by the variational assembly. A zero pressure diagonal reserves the algebraic
+    gauge pin; it adds no pressure stabilization or physical matrix term.
     """
     graph = PETSc.Mat().create(comm=comm)
     graph.setSizes((size, size))
@@ -302,6 +304,7 @@ def _create_gap_matrix(
         for u, l in zip(uids, lids, strict=True):
             graph.setValues(l, u, zero_c)
             graph.setValues(u, l, zero_ct)
+    graph.setValue(pressure_pin, pressure_pin, 0.0)
     graph.assemble()
     matrix = PETSc.Mat().create(comm=comm)
     matrix.setSizes((size, size))
@@ -486,6 +489,7 @@ def _solve_circle_constraints(
         ).reshape(-1, 3 * ncomponents)
     matrix = _create_gap_matrix(
         size,
+        nu,
         uid[owned],
         pid[owned],
         [(uid[wall["owners"]], wall["multiplier_ids"]) for wall in walls],
