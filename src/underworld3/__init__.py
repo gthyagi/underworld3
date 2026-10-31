@@ -202,7 +202,6 @@ import underworld3.function
 import underworld3.maths
 import underworld3.swarm
 import underworld3.systems
-import underworld3.postprocessing
 import underworld3.maths
 import underworld3.utilities
 import underworld3.model
@@ -213,6 +212,7 @@ import underworld3.level_set
 
 # After underworld3.function: the analytic suite still sources SolCx from it.
 import underworld3.analytic
+import underworld3.postprocessing
 
 from .model import (
     Model,

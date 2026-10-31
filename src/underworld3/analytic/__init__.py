@@ -35,7 +35,7 @@ from ._base import (
 
 from .barr_houseman_96 import FaultedMedium
 from .inclusion import EllipticalInclusion
-from .kramer import CylindricalStokes
+from .cylindrical.kramer import KramerCylindricalStokes as CylindricalStokes
 from .richards import GardnerSteady, GardnerTransient
 from .transport import AdvectedFront, ErfcDiffusion, Poisson1D, RotatingGaussian, TwoLayerDarcy
 from .velic import (
