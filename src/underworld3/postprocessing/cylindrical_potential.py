@@ -160,6 +160,7 @@ def solve_cylindrical_sheet_potential(
         inner_sheet_density=float(inner_sheet_density)*cosine,
         internal_sheet_density=float(internal_sheet_density)*cosine,
         outer_sheet_density=float(outer_sheet_density)*cosine, volume_density=sp.S.Zero,
+        inner_feedback_density=0., outer_feedback_density=0.,
         gravitational_constant=gravitational_constant, potential_degree=int(potential_degree),
         tolerance=float(tolerance), boundary_samples=int(boundary_samples),
         inner_boundary=inner_boundary, internal_boundary=internal_boundary,
@@ -173,7 +174,8 @@ def solve_cylindrical_spatial_potential(
     *, gravity_mesh, field_name: str, radius_inner: float, radius_internal: float,
     radius_outer: float, radius_exterior: float, radius_interior: float | None,
     continuation_wavenumber: int, inner_sheet_density, internal_sheet_density,
-    outer_sheet_density, volume_density, gravitational_constant: float,
+    outer_sheet_density, volume_density, inner_feedback_density: float,
+    outer_feedback_density: float, gravitational_constant: float,
     potential_degree: int, tolerance: float, boundary_samples: int,
     inner_boundary: str, internal_boundary: str, outer_boundary: str,
     exterior_boundary: str, interior_boundary: str, solver_options: dict,
@@ -189,7 +191,12 @@ def solve_cylindrical_spatial_potential(
 
     Robin continuation uses continuation_wavenumber at the truncations. It is
     exact for that angular mode and an approximation for other modes in a
-    numerical spatial field. The returned coefficients are post-solve diagnostics
+    numerical spatial field. inner_feedback_density and outer_feedback_density
+    specify additional sheet density per unit potential, normally Delta_rho/g;
+    use zero for no feedback. The solve includes sigma=sigma_0+alpha*Phi on each
+    wall, retaining the original Stokes traction without another Stokes solve.
+    This is the spatial form of the analytical two-interface feedback equation.
+    The returned coefficients are post-solve diagnostics
     in that mode, not sources. Use exterior-domain controls when assessing error.
 
     The PDE sign follows analytic.cylindrical.gravity and Simons (1996), Appendix
@@ -207,15 +214,19 @@ def solve_cylindrical_spatial_potential(
         raise ValueError("gravitational_constant must be finite and positive")
     if potential_degree < 1 or boundary_samples < 16:
         raise ValueError("Require positive potential degree and at least 16 boundary samples")
+    if not np.all(np.isfinite([inner_feedback_density, outer_feedback_density])):
+        raise ValueError("Feedback density coefficients must be finite")
     phi = uw.discretisation.MeshVariable(field_name, gravity_mesh, 1, degree=potential_degree)
     poisson = uw.systems.Poisson(gravity_mesh, u_Field=phi)
     poisson.constitutive_model = uw.constitutive_models.DiffusionModel
     poisson.constitutive_model.Parameters.diffusivity = 1.
     scale = 4*sp.pi*float(gravitational_constant)
     poisson.f = scale*volume_density
-    for boundary, density in ((inner_boundary, inner_sheet_density),
-                              (internal_boundary, internal_sheet_density),
-                              (outer_boundary, outer_sheet_density)):
+    for boundary, density in (
+        (inner_boundary, inner_sheet_density+inner_feedback_density*phi.sym[0]),
+        (internal_boundary, internal_sheet_density),
+        (outer_boundary, outer_sheet_density+outer_feedback_density*phi.sym[0]),
+    ):
         if density != 0:
             poisson.add_natural_bc(sp.Matrix([-scale*density]), boundary)
     poisson.add_natural_bc(sp.Matrix([mode*phi.sym[0]/radius_exterior]), exterior_boundary)

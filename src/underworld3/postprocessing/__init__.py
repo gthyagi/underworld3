@@ -5,6 +5,6 @@ The post-processing package contains derived diagnostics that are useful across
 multiple model scripts but do not belong in a solver implementation.
 """
 
-from . import geoid, cylindrical_gap, cylindrical_potential
+from . import geoid, cylindrical_gap, cylindrical_potential, stress
 
-__all__ = ["geoid", "cylindrical_gap", "cylindrical_potential"]
+__all__ = ["geoid", "cylindrical_gap", "cylindrical_potential", "stress"]
