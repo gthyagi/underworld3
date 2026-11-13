@@ -22,28 +22,27 @@ import underworld3 as uw
 pytestmark = [pytest.mark.level_1, pytest.mark.tier_b]
 
 
-def _annulus_stokes(tag, mesh, T):
+def _box_stokes(tag, mesh, T):
     v = uw.discretisation.MeshVariable(f"V{tag}", mesh, 2, degree=2)
     p = uw.discretisation.MeshVariable(f"P{tag}", mesh, 1, degree=1)
     stokes = uw.systems.Stokes(mesh, velocityField=v, pressureField=p)
     stokes.constitutive_model = uw.constitutive_models.ViscousFlowModel
     stokes.constitutive_model.Parameters.shear_viscosity_0 = 1.0 + T.sym[0]
     X = mesh.X
-    r = sympy.sqrt(X[0] ** 2 + X[1] ** 2)
-    th = sympy.atan2(X[1], X[0])
-    stokes.bodyforce = (sympy.cos(3 * th) * sympy.sin(sympy.pi * (r - 0.5) / 0.5)
-                        * sympy.Matrix([X[0] / r, X[1] / r]))
-    stokes.add_rotated_freeslip_bc(0, "Lower")
-    stokes.add_rotated_freeslip_bc(0, "Upper")
+    stokes.bodyforce = sympy.Matrix([0, sympy.sin(sympy.pi*X[0])*sympy.sin(sympy.pi*X[1])])
+    for wall in ("Left", "Right", "Bottom", "Top"):
+        stokes.add_rotated_freeslip_bc(0, wall)
     stokes.petsc_use_pressure_nullspace = True
     stokes.tolerance = 1.0e-8
     return v, stokes
 
 
 def test_a_workspace_from_other_kernels_reads_its_coefficients_again():
-    mesh = uw.meshing.Annulus(radiusOuter=1.0, radiusInner=0.5, cellSize=0.2, qdegree=3)
+    # Planar walls isolate cache validity from weak circular rotation modes.
+    mesh = uw.meshing.UnstructuredSimplexBox(minCoords=(0., 0.), maxCoords=(1., 1.),
+                                             cellSize=.2, qdegree=3)
     T = uw.discretisation.MeshVariable("T1158", mesh, 1, degree=1)
-    v, stokes = _annulus_stokes("a", mesh, T)
+    v, stokes = _box_stokes("a", mesh, T)
     stokes.solve()
     cache = stokes._rotated_linear_cache
     assert [var.name for var in cache["coefficient_variables"]] == ["T1158"]
@@ -62,7 +61,7 @@ def test_a_workspace_from_other_kernels_reads_its_coefficients_again():
     stokes.solve(zero_init_guess=False)
     v_reused = np.asarray(v.array).copy()
 
-    v_fresh, fresh = _annulus_stokes("b", mesh, T)
+    v_fresh, fresh = _box_stokes("b", mesh, T)
     fresh.solve()
     reference = np.asarray(v_fresh.array)
     info = stokes._rotated_freeslip_info

@@ -224,18 +224,6 @@ def _slid_mixed(name, upper_normal):
     return stokes
 
 
-def _rotation_content(stokes):
-    """|U . m| / (|U| |m|) for the rotation m, on the composite global vector: no
-    ghost copies, so the same on every rank."""
-    from underworld3.utilities import rotated_bc
-
-    U = stokes._rotated_freeslip_info["U"]
-    (m,) = rotated_bc._rigid_rotation_modes(stokes)
-    content = abs(U.dot(m)) / (U.norm() * m.norm())
-    stokes.dm.restoreGlobalVec(m)
-    return content
-
-
 def test_mixed_normals_retain_the_physical_weak_mode_on_every_rank():
     # #968: the exemption covers the facet-averaged wall, the given wall is tested
     # against its own normal, and every rank reaches the same verdict

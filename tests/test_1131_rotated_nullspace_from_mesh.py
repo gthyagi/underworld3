@@ -193,15 +193,9 @@ def test_a_wall_moved_off_its_circle_loses_the_exemption(amplitude, exempt):
     assert _normal_velocity(info) < 1.0e-12
 
 
-def test_mixed_given_and_default_normals_remove_the_rotation():
-    # one wall takes the analytic normal, the other the facet-averaged one (#968). On an
-    # annulus whose vertices have slid along their circles the default-normal wall is
-    # faceted unevenly, so a rotation fails the constraint test there by the faceting
-    # error. The exemption covers that wall; the given-normal wall is tested on its own
-    # rows, which the exact normal passes. Development refused the exemption for the
-    # whole set, kept the rotation and warned. (On the annulus as built its edges are
-    # equal, the facet-averaged normal is radial at the vertices, and the rotation
-    # passes the test anyway.)
+def test_mixed_given_and_default_normals_check_the_constrained_operator():
+    # A radial given normal passes its wall check, while a projected rotation
+    # on the uneven default wall has strain and must satisfy the original equations.
     mesh, v, stokes = _annulus_stokes("1131x", mesh=_slid_annulus())
     x, y = mesh.X
     r = sympy.sqrt(x ** 2 + y ** 2)
@@ -214,11 +208,11 @@ def test_mixed_given_and_default_normals_remove_the_rotation():
     info = stokes._rotated_freeslip_info
     assert info["converged"], info
     assert info["declared_modes_exempt"] == [True]
-    assert info["rotation_gauge"]["orthonormal"] == 1, info["rotation_gauge"]
+    assert info["rotation_gauge"]["orthonormal"] == 0, info["rotation_gauge"]
     mode = info["rotation_gauge"]["modes"][0]
     # faceted on the default wall, exact on the given one
     assert mode["viol"] > 1.0e-8 and mode["given_viol"] < 1.0e-12, mode
-    assert abs(_rotation_rate_2d(v)) < 1.0e-10 * _v_rms(v)
+    _assert_original_constrained_equations(stokes, info)
     assert _normal_velocity(info) < 1.0e-12
     assert not any("take a given normal" in str(w.message) for w in record)
 
@@ -254,9 +248,8 @@ def test_a_wrong_given_normal_beside_a_default_wall_rejects_the_rotation():
                 "The declared rotation mode is not removed"), messages
 
 
-def test_the_direct_lu_route_warns_when_a_given_wall_rejects_the_rotation():
-    # the LU route builds no null space, so its gauge verdict is the only place to say
-    # that the rotation stays (review round 2, N1: 5.5e-3 of v_rms left, unannounced)
+def test_the_direct_lu_route_refuses_a_physical_pressure_pin():
+    # A tilted wall makes pressure physical; no equation may be dropped as a gauge.
     mesh, v, stokes = _annulus_stokes("1131u", mesh=_slid_annulus())
     x, y = mesh.X
     r = sympy.sqrt(x ** 2 + y ** 2)
@@ -265,24 +258,13 @@ def test_the_direct_lu_route_warns_when_a_given_wall_rejects_the_rotation():
     stokes.add_rotated_freeslip_bc(0, "Upper")
     stokes.petsc_use_pressure_nullspace = True
     stokes._rotated_use_lu = True
-    with warnings.catch_warnings(record=True) as record:
-        warnings.simplefilter("always")
+    with pytest.raises(NotImplementedError, match="constant pressure"):
         stokes.solve()
-    gauge = stokes._rotated_freeslip_info["rotation_gauge"]
-    assert gauge["modes"][0]["rejected_by"] == "given_wall", gauge
-    messages = [str(w.message) for w in record if "not tangent to" in str(w.message)]
-    with uw.selective_ranks(0) as selected:
-        if selected:
-            assert len(messages) == 1 and messages[0].startswith(
-                "The declared rotation mode is not removed"), messages
 
 
 def test_a_given_normal_wall_off_its_circle_is_tested_against_its_normal():
-    # the sphere test covers the facet-averaged walls only: the given-normal wall here
-    # is pushed off its circle, but the radial normal it is given is still tangent to
-    # the rotation, so the rotation is removed. Taking the sphere test on that wall
-    # refuses the exemption, and the slid default wall's faceting then keeps the
-    # rotation in the answer.
+    # The given wall remains kinematically tangent after moving; the constrained
+    # operator still rejects the non-null projection on the default wall.
     moved = _slid_annulus()
     X = np.array(moved.X.coords)
     r = np.linalg.norm(X, axis=1)
@@ -299,8 +281,8 @@ def test_a_given_normal_wall_off_its_circle_is_tested_against_its_normal():
     stokes.solve()
     info = stokes._rotated_freeslip_info
     assert info["declared_modes_exempt"] == [True]
-    assert info["rotation_gauge"]["orthonormal"] == 1, info["rotation_gauge"]
-    assert abs(_rotation_rate_2d(v)) < 1.0e-10 * _v_rms(v)
+    assert info["rotation_gauge"]["orthonormal"] == 0, info["rotation_gauge"]
+    _assert_original_constrained_equations(stokes, info)
     assert _normal_velocity(info) < 1.0e-12
 
 
@@ -349,8 +331,9 @@ def test_a_seam_between_a_given_and_a_default_wall_keeps_the_rotation_exempt():
     stokes.solve()
     info = stokes._rotated_freeslip_info
     mode = info["rotation_gauge"]["modes"][0]
-    assert mode["accepted"] and mode["given_viol"] < 1.0e-12, mode
-    assert abs(_rotation_rate_2d(v)) < 1.0e-10 * _v_rms(v)
+    assert not mode["accepted"] and mode["rejected_by"] == "operator", mode
+    assert mode["given_viol"] < 1.0e-12, mode
+    _assert_original_constrained_equations(stokes, info)
 
 
 def test_the_direct_lu_route_records_its_verdict_on_the_declared_mode():
@@ -383,13 +366,6 @@ def test_a_mesh_that_declares_no_rotation_is_not_warned_about():
     assert info["converged"], info
     assert info["declared_modes_exempt"] == []
     assert info["rotation_gauge"]["offered"] == 0, info["rotation_gauge"]
-
-
-def _rotation_rate_2d(v):
-    """Least-squares rigid rotation rate of a 2-D nodal velocity."""
-    X = np.asarray(v.coords_nd)
-    V = np.asarray(v.array).reshape(X.shape)
-    return float(np.sum(X[:, 0] * V[:, 1] - X[:, 1] * V[:, 0])) / float(np.sum(X * X))
 
 
 def _slid_annulus():
