@@ -13,7 +13,8 @@ import underworld3 as uw
 from .graph import (_tri_cells, _tet_cells, _signed_areas, _signed_volumes,
                     _owned_cell_mask,
                     _owned_vertex_mask, _min_incident_edge_nd,
-                    _global_sum, _global_min, _global_max, _global_mean)
+                    _global_sum, _global_min, _global_max,
+                    _reduce_over_sharing_ranks)
 
 
 def _spd_sanitise(M):
@@ -89,8 +90,8 @@ def _mmpde_mover(mesh, metric, pinned_labels, verbose,
                    n_outer=150, p=1.5, theta=1.0 / 3.0, tau=1.0,
                    step_frac=0.2, area_floor_frac=0.01,
                    boundary_slip=False, outer_tol=1.0e-7, tol=1.0e-3,
-                   stol=None, stol_k=3,
-                   fd_eps=1.0e-6, metric_eval="rbf", rbf_k=None,
+                   stol=3.0e-4, stol_k=3,
+                   fd_eps=1.0e-6, metric_eval="frozen", rbf_k=None,
                    accel="cg", momentum=0.0,
                    resolution_ratio=None, reference="mesh",
                    **_unknown_kwargs):
@@ -168,11 +169,23 @@ def _mmpde_mover(mesh, metric, pinned_labels, verbose,
       criterion. Same metric, same grading, same non-folding guarantee;
       only the shape target moves.
 
+    ``metric_eval`` selects how the metric is read at moved points. ``"frozen"``
+    (default) holds it as a P1 field on a copy of the starting mesh and reads it there
+    with ``uw.function.evaluate`` (``global_evaluate`` in parallel): a function of
+    space, continuous, and the same at any rank count. ``"rbf"`` interpolates its
+    nodal values by inverse distance from the nearest nodes, which is cheaper, but the
+    energy jumps where the nearest nodes change and the line search stalls far from
+    the minimum. ``"sympy"`` evaluates the metric expression on the moving mesh, where
+    a metric built from a mesh variable rides the nodes.
+
     ``resolution_ratio`` is accepted but unused: the strategy dispatch in
     ``_smooth_mesh_interior_bare`` injects it into ``method_kwargs`` for
     every mover, and MMPDE's clustering intensity comes from the metric
     tensor itself. Any other unexpected keyword is warned about (READ-11:
     it is a caller typo, not a tunable) rather than silently swallowed.
+
+    Returns the energy of the starting mesh followed by the energy of each accepted
+    step, every one read with the metric at that mesh's own centroids.
     """
     import sympy
     from petsc4py import PETSc
@@ -210,9 +223,11 @@ def _mmpde_mover(mesh, metric, pinned_labels, verbose,
             f"_mmpde_mover metric must be {cdim}x{cdim} (or a scalar "
             f"density), got {Msym.shape}")
 
-    def _eval_M_analytic(pts):
+    def _eval_M_analytic(pts, evaluate=uw.function.evaluate):
         """Exact Eulerian metric via sympy evaluate → (n, cdim, cdim).
-        Correct but slow (sympy symbolic processing dominates the cost)."""
+        Correct but slow (sympy symbolic processing dominates the cost).
+        ``evaluate`` is ``uw.function.global_evaluate`` where ``pts`` need
+        not lie in this rank's cells; it is collective then."""
         n = pts.shape[0]
         out = np.empty((n, cdim, cdim))
         for a in range(cdim):
@@ -220,7 +235,7 @@ def _mmpde_mover(mesh, metric, pinned_labels, verbose,
                 e = Msym[a, b]
                 if getattr(e, "free_symbols", None):
                     out[:, a, b] = np.asarray(
-                        uw.function.evaluate(e, pts)).reshape(-1)
+                        evaluate(e, pts)).reshape(-1)
                 else:
                     out[:, a, b] = float(e)
         return out
@@ -235,16 +250,15 @@ def _mmpde_mover(mesh, metric, pinned_labels, verbose,
     # keeps the move valid for whatever M it is handed).
     _eval_M = _eval_M_analytic
 
-    def _dM_dx(cen):
-        """∂M/∂x at centroids via centred FD on the analytic metric →
-        (n, cdim, cdim, cdim) indexed [cell, a, b, component]."""
+    def _dM_dx(cen, M_at_cen):
+        """∂M/∂x at centroids by forward differences from ``M_at_cen``, the metric
+        already read there → (n, cdim, cdim, cdim) indexed [cell, a, b, component].
+        One read per direction: the metric is a guide, and first order is enough."""
         n = cen.shape[0]
         d = np.zeros((n, cdim, cdim, cdim))
         for c in range(cdim):
             sh = np.zeros(cdim); sh[c] = fd_eps
-            Mp = _eval_M(cen + sh)
-            Mm = _eval_M(cen - sh)
-            d[:, :, :, c] = (Mp - Mm) / (2.0 * fd_eps)
+            d[:, :, :, c] = (_eval_M(cen + sh) - M_at_cen) / fd_eps
         return d
 
     # --- topology / parallel scaffolding ---------------------------
@@ -256,13 +270,19 @@ def _mmpde_mover(mesh, metric, pinned_labels, verbose,
     # signed-measure primitive and d! volume factor.
     cells_all = _tri_cells(dm) if cdim == 2 else _tet_cells(dm)
     signed_vol = _signed_areas if cdim == 2 else _signed_volumes
-    if cells_all is None:
-        # TODO(BUG): rank-LOCAL early return — under MPI a rank with zero
-        # local cells (or a non-simplex local patch) returns here while the
-        # other ranks enter the collective energy/line-search reductions
-        # below, hanging the job. Pre-existing 2D posture, inherited by 3D
-        # (2026-07 review note); the fix is a collective emptiness check.
-        return
+    # The cell list is None for two reasons, decided collectively (#1082),
+    # because every step below the return is collective:
+    # - no local cells (a small mesh, or an uneven partition): this rank
+    #   takes part with an empty cell array, contributing nothing to the sums;
+    # - cells that are not all simplices: the mover does not apply, and every
+    #   rank returns together.
+    cStart, cEnd = dm.getHeightStratum(0)
+    if cells_all is None and cEnd == cStart:
+        cells_all = np.zeros((0, cdim + 1), dtype=np.int64)
+    from mpi4py import MPI
+
+    if uw.mpi.comm.allreduce(cells_all is None, op=MPI.LOR):
+        return []
     fact = float(math.factorial(cdim))         # d! → |K| = |detE|/d!
     owned_cell = _owned_cell_mask(dm)
     cells_own = cells_all[owned_cell]
@@ -310,6 +330,40 @@ def _mmpde_mover(mesh, metric, pinned_labels, verbose,
             w = 1.0 / np.maximum(dist, 1.0e-12) ** 2
             w /= w.sum(axis=1, keepdims=True)
             return np.einsum('nk,nkab->nab', w, M_src[idx])
+    elif metric_eval == "frozen" and any(
+            getattr(e, "free_symbols", None) for e in Msym):
+        # (A constant metric, as Mesh.relax gives, needs no field: the exact read
+        # below is free.)
+        # The metric is a function of space, so it lives on a copy of the mesh
+        # that does not move and uw.function.evaluate reads it there. Evaluated
+        # on the moving mesh, a metric built from a mesh variable rides the
+        # nodes, and the energy the line search compares changes under it.
+        _frozen_dm = mesh.dm.clone()
+        _frozen_dm.setCoordinatesLocal(mesh.dm.getCoordinatesLocal().copy())
+        _frozen_mesh = uw.discretisation.Mesh(
+            _frozen_dm, simplex=True, qdegree=mesh.qdegree,
+            coordinate_system_type=mesh.CoordinateSystem.coordinate_type,
+            boundaries=mesh.boundaries)
+        _frozen_M = uw.discretisation.MeshVariable(
+            "M_frozen", _frozen_mesh, vtype=uw.VarType.TENSOR, degree=1)
+        # Mesh() repartitions the frozen copy when PETSc reports it as not
+        # distributed (every cell on one rank), so its nodes need not lie in
+        # this rank's cells of the live mesh: read the metric where they lie
+        # (#1082). global_evaluate is collective; every rank reaches it.
+        _frozen_M.array[...] = _eval_M_analytic(
+            np.asarray(_frozen_M.coords_nd),
+            evaluate=(uw.function.global_evaluate if parallel else uw.function.evaluate),
+        ).reshape(_frozen_M.array.shape)
+
+        # A moved centroid can leave this rank's frozen patch, where the rank-local
+        # evaluate extrapolates: global_evaluate answers from the owning rank. Every
+        # rank reaches this collective: the energy and gradient are collective.
+        _evaluate = (uw.function.global_evaluate if parallel
+                     else uw.function.evaluate)
+
+        def _eval_M(pts):
+            return np.asarray(_evaluate(
+                _frozen_M.sym, pts)).reshape(-1, cdim, cdim)
     else:
         _eval_M = _eval_M_analytic
 
@@ -422,8 +476,14 @@ def _mmpde_mover(mesh, metric, pinned_labels, verbose,
     # outer_tol=1e-7 never fired — dx~1e-6 ≫ 1e-7 yet ≪ h0~0.08 — so every
     # adapt ran to the n_outer cap.)
     _ecols = np.linalg.norm(Eh, axis=1)            # (n_own, cdim) edge lengths
-    h0_scale = float(np.mean(_ecols)) if _ecols.size else 1.0
-    h0_scale = _global_mean(h0_scale)
+    # The mean over every owned edge of the mesh, the same at any rank count.
+    # (A mean of per-rank means let a rank with no cells vote 1.0, #1082.)
+    if parallel:
+        _esum = uw.mpi.comm.allreduce(float(_ecols.sum()))
+        _ecount = uw.mpi.comm.allreduce(int(_ecols.size))
+        h0_scale = _esum / _ecount if _ecount else 1.0
+    else:
+        h0_scale = float(np.mean(_ecols)) if _ecols.size else 1.0
 
     def _halo_sync(X):
         """Make ghost vertices exact copies of their owners."""
@@ -434,15 +494,17 @@ def _mmpde_mover(mesh, metric, pinned_labels, verbose,
         coord_dm.globalToLocal(global_vec, local_vec)
         return np.asarray(local_vec.array).reshape(-1, cdim).copy()
 
-    def _energy(X):
-        """I_h = Σ_owned |K| G (collective)."""
+    def _energy(X, M=None):
+        """I_h = Σ_owned |K| G (collective). ``M``, the metric per owned cell, is
+        read at the centroids of ``X`` unless given."""
         E = _edge_mats(X, cells_own)
         detE = np.linalg.det(E)
         Einv = np.linalg.inv(E)
         J = np.einsum('mij,mjk->mik', Eh, Einv)
         r = detEh / detE
-        cen = X[cells_own].mean(axis=1)
-        M = _eval_M(cen); Minv = np.linalg.inv(M); detM = np.linalg.det(M)
+        if M is None:
+            M = _eval_M(X[cells_own].mean(axis=1))
+        Minv = np.linalg.inv(M); detM = np.linalg.det(M)
         JMi = np.einsum('mij,mjk->mik', J, Minv)
         S = np.einsum('mij,mij->m', JMi, J)
         G = (theta * np.sqrt(detM) * S ** q
@@ -457,7 +519,9 @@ def _mmpde_mover(mesh, metric, pinned_labels, verbose,
             (signed_vol(X, cells_own) * orient / a0_own).min(initial=np.inf))
 
     prevI = _energy(coords)
+    _M_next = None      # the metric at the accepted centroids, read by the line search
     _Iwin = [prevI]   # accepted-energy history for the stol stagnation test
+    energies = [prevI]
     # Acceleration of the first-order steepest-descent direction (``accel``).
     # The energy+min-area line-search below stays the fold guard, so any
     # accelerator overshoot is backtracked — never tangles (verified fold-proof
@@ -503,13 +567,20 @@ def _mmpde_mover(mesh, metric, pinned_labels, verbose,
         J = np.einsum('mij,mjk->mik', Eh, Einv)
         r = detEh / detE
         cen = coords[cells_own].mean(axis=1)
-        M = _eval_M(cen); Minv = np.linalg.inv(M); detM = np.linalg.det(M)
+        M = _M_next if _M_next is not None else _eval_M(cen)
+        Minv = np.linalg.inv(M); detM = np.linalg.det(M)
         sdetM = np.sqrt(detM)
         JMi = np.einsum('mij,mjk->mik', J, Minv)
         S = np.einsum('mij,mij->m', JMi, J)
         G = (theta * sdetM * S ** q
              + (1.0 - 2.0 * theta) * dq * r ** p * detM ** ((1 - p) / 2))
         K = np.abs(detE) / fact
+        # The line search screens each trial with M carried from the current
+        # centroids to first order with this step's ∂M/∂x, which costs no metric
+        # read, and confirms a trial that passes with the metric read at its own
+        # centroids: the linear carry can overshoot where the metric changes fast.
+        # That read is the next step's M, so the step costs no extra read.
+        I_step = _global_sum(np.sum(K * G))
         # ∂G/∂𝕁 = 2qθ√detM S^{q-1} M⁻¹ 𝕁ᵀ ; ∂G/∂r = p(1-2θ)dq detM^{(1-p)/2} r^{p-1}
         MinvJT = np.einsum('mij,mkj->mik', Minv, J)
         dGdJ = (2.0 * q * theta * sdetM * S ** (q - 1.0))[:, None, None] * MinvJT
@@ -539,7 +610,7 @@ def _mmpde_mover(mesh, metric, pinned_labels, verbose,
         dGdM += ((1.0 - 2.0 * theta) * dq * r ** p
                  * ((1.0 - p) / 2.0) * detM ** ((1 - p) / 2)
                  )[:, None, None] * Minv
-        dMdx = _dM_dx(cen)                                # (Nc,d,d,c)
+        dMdx = _dM_dx(cen, M)                             # (Nc,d,d,c)
         # grad contribution per centroid component c, shared 1/(d+1) per vert
         gmet = np.einsum('mab,mabc->mc', dGdM, dMdx)      # tr(dGdM·∂_cM)
         gmet = (K / (cdim + 1.0))[:, None] * gmet
@@ -579,18 +650,13 @@ def _mmpde_mover(mesh, metric, pinned_labels, verbose,
             v = v + _beta_cg * _prev_dir
             _prev_dir = v.copy()
 
-        # Per-node step cap from the min incident edge over rank-local
-        # cells. NOTE (parallel): a partition-boundary owned vertex may not
-        # see every incident edge from rank-local cells, so its cap differs
-        # slightly from serial → an ~0.006%-level serial/parallel drift in
-        # the final mesh. The velocity ASSEMBLY itself is bit-identical
-        # serial vs parallel (localToGlobal(ADD_VALUES) is exact); only this
-        # cap is rank-dependent. The drift is below the move's own
-        # non-determinism, so we accept it rather than force a ghost-complete
-        # MIN reduction (PETSc localToGlobal has no portable MIN/MAX mode
-        # here — MAX_VALUES errors on this DM). Left as a known small
-        # non-reproducibility; revisit only if a bit-exact mesh is required.
-        h = _min_incident_edge_nd(cells_all, coords)
+        # Per-node step cap from the shortest incident edge. A vertex on a
+        # partition seam sees only its own rank's cells,
+        # so its shortest edge is taken over every rank that holds it (#1086):
+        # without that its cap, and so its first step, came out longer than in
+        # serial, and the mesh drifted from serial by up to 1e-2.
+        h = _reduce_over_sharing_ranks(
+            dm, _min_incident_edge_nd(cells_all, coords), MPI.MIN)
         mag = np.linalg.norm(v, axis=1)
         cap = step_frac * h
         sc = np.ones_like(mag)
@@ -622,7 +688,7 @@ def _mmpde_mover(mesh, metric, pinned_labels, verbose,
         # energy line-search backtrack (monotone, fold-free; collective)
         scale = 1.0
         accepted = coords
-        Inew = prevI
+        Inew = I_step
         for _bt in range(24):
             trial = coords.copy()
             trial[free_owned] += scale * step[free_owned]
@@ -632,12 +698,27 @@ def _mmpde_mover(mesh, metric, pinned_labels, verbose,
             # could still introduce inf/NaN) so `_energy` never queries NaN.
             if (np.all(np.isfinite(trial))
                     and _min_area_frac(trial) > float(area_floor_frac)):
-                Itr = _energy(trial)
-                if Itr < prevI:
-                    accepted = trial; Inew = Itr; break
+                trial_cen = trial[cells_own].mean(axis=1)
+                M_carried = _spd_sanitise(
+                    M + np.einsum('mabc,mc->mab', dMdx, trial_cen - cen))
+                if _energy(trial, M_carried) < I_step:
+                    M_read = _eval_M(trial_cen)
+                    Itr = _energy(trial, M_read)
+                    if Itr < I_step:
+                        accepted = trial; Inew = Itr; _M_next = M_read; break
             scale *= 0.5
         else:
-            accepted = coords; Inew = prevI; scale = 0.0
+            accepted = coords; Inew = I_step; scale = 0.0; _M_next = M
+        # A conjugate direction need not descend: the per-node step cap and the
+        # inexact line search both break conjugacy, and on a sharp metric every
+        # backtrack can then fail far from the minimum. That says nothing about
+        # the minimum, so retry along steepest descent; only a failure there
+        # ends the sweep. Collective: scale comes from allreduced predicates.
+        if scale == 0.0 and _accel == "cg" and _beta_cg > 0.0:
+            _M_next = M
+            _prev_v = np.zeros_like(coords)
+            _prev_dir = np.zeros_like(coords)
+            continue
         dmax = _global_max(np.linalg.norm(
             (accepted - coords)[is_owned_v], axis=1).max(initial=0.0))
         _prev_disp = accepted - coords   # accepted move, for next-iter momentum
@@ -654,14 +735,16 @@ def _mmpde_mover(mesh, metric, pinned_labels, verbose,
         # The legacy absolute `outer_tol` is retained as an additional, even
         # tighter floor for callers that set it.
         prevI = Inew
+        energies.append(Inew)
         # Stagnation (residual stol) exit: PETSc-`stol`-style "give up when the
         # meshing functional stops dropping well below the last steps". The
         # node-step `dmax` is capped and never shrinks on this descent mover, so
         # a step-test can't fire; instead test the *energy* (the residual) drop
         # over the last `stol_k` accepted iterations -- a WINDOW (not single
         # step), which is immune to the line-search per-iteration noise and to
-        # the occasional big drop after a scale reduction. Opt-in: stol=None/0
-        # preserves the previous behaviour bit-for-bit.
+        # the occasional big drop after a scale reduction. On by default: near
+        # its minimum the mover otherwise spends its whole iteration budget on
+        # moves too small to matter. stol=None or 0 turns it off.
         if stol is not None and stol > 0.0:
             _Iwin.append(Inew)
             if len(_Iwin) > stol_k:
@@ -679,3 +762,4 @@ def _mmpde_mover(mesh, metric, pinned_labels, verbose,
 
     coord_dm.restoreLocalVec(vloc)
     coord_dm.restoreGlobalVec(vglob)
+    return energies

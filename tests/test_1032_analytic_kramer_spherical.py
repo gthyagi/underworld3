@@ -8,7 +8,7 @@ from underworld3.analytic.kramer import assess_available
 from underworld3.analytic import _validation
 from underworld3.maths.spherical_harmonics import real_harmonic_values, solid_harmonic_sympy
 
-pytestmark = [pytest.mark.level_1, pytest.mark.tier_a]
+pytestmark = [pytest.mark.level_1, pytest.mark.tier_b]
 
 @pytest.fixture
 def mesh():
@@ -84,3 +84,64 @@ def test_cartesian_harmonics(mesh,ell,m,component):
 @pytest.mark.parametrize('kwargs', [dict(ell=1),dict(m=3),dict(k=1,density='smooth'),dict(r_int=3),dict(viscosity=0),dict(m=0,component='sin')])
 def test_rejects_invalid_and_resonant(mesh,kwargs):
     with pytest.raises((ValueError,NotImplementedError)):SphericalStokes(mesh,**kwargs)
+
+
+def test_every_relative_import_in_the_analytic_package_resolves():
+    """A deferred import of a module that does not exist fails only when its
+    branch runs. Every ``from .name import`` in the package, at any depth of
+    nesting, must name a module that is there."""
+    import ast
+    import importlib.util
+    from pathlib import Path
+
+    import underworld3.analytic as package
+
+    root = Path(package.__file__).parent
+    missing = []
+    for path in sorted(root.rglob("*.py")):
+        relative = path.relative_to(root).with_suffix("")
+        owner = ["underworld3", "analytic", *relative.parts[:-1]]
+        for node in ast.walk(ast.parse(path.read_text())):
+            if not isinstance(node, ast.ImportFrom) or node.level == 0 or node.module is None:
+                continue
+            base = owner[:len(owner) - (node.level - 1)]
+            name = ".".join([*base, node.module])
+            try:
+                found = importlib.util.find_spec(name) is not None
+            except ModuleNotFoundError:
+                # find_spec imports the parent package, which is itself missing
+                found = False
+            if not found:
+                missing.append(f"{path.relative_to(root)}: {name}")
+    assert missing == []
+
+
+@pytest.mark.parametrize('density', ['delta', 'smooth'])
+def test_geoid_response_topography_is_the_wall_normal_stress_over_the_buoyancy(mesh, density):
+    """h_outer = -sigma_rr/(drho g) and h_inner = +sigma_rr/(drho g), both radially
+    outward, with sigma_rr read from the Cartesian stress field at a wall point and
+    divided by the harmonic there."""
+    sol = SphericalStokes(mesh, ell=3, m=2, component='sin', normalization='real_orthonormal',
+                          density=density, k=4, viscosity=2.3, forcing=.61)
+    direction = np.array([[.36, .48, .8]])
+    harmonic = real_harmonic_values(direction, degree=3, order=2, component='sin',
+                                    normalization='real_orthonormal')
+    contrasts, wall_gravity = (1.3, -2.1), (.9, 1.7)
+    response = sol.geoid_response(
+        outer_density_contrast=contrasts[0], inner_density_contrast=contrasts[1],
+        outer_reference_gravity=wall_gravity[0], inner_reference_gravity=wall_gravity[1],
+        gravitational_constant=.37, source_density_coefficient=.61)
+    for name, radius, sign, contrast, g in (('outer', sol.r_outer, -1, contrasts[0], wall_gravity[0]),
+                                            ('inner', sol.r_inner, 1, contrasts[1], wall_gravity[1])):
+        stress = sol.evaluate('stress', radius*direction)[0]
+        normal_stress = direction[0] @ stress @ direction[0] / harmonic[0]
+        np.testing.assert_allclose(response[f'{name}_topography'],
+                                   sign*normal_stress/(contrast*g), rtol=1e-11)
+
+
+def test_geoid_response_refuses_zero_slip_walls(mesh):
+    sol = SphericalStokes(mesh, boundary='zero')
+    with pytest.raises(ValueError):
+        sol.geoid_response(outer_density_contrast=1., inner_density_contrast=1.,
+                           outer_reference_gravity=1., inner_reference_gravity=1.,
+                           gravitational_constant=1., source_density_coefficient=1.)

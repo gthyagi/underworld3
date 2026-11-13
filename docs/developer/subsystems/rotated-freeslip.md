@@ -484,11 +484,17 @@ keeps them. A mesh reloaded from a file declares nothing, like a gmsh import.
 A declared mode is exempt from the test against the constraint rows when the
 faceting is the only reason it could fail it (`_declared_mode_flags`):
 
-- every rotated wall takes the facet-averaged normal (`normal=None`). A wall with
-  a given normal is tested, and an exact normal passes;
+- the exemption covers the walls that take the facet-averaged normal
+  (`normal=None`). A wall with a given normal is tested on its own constrained
+  rows, which an exact normal passes to round-off and a wrong one fails
+  (`_declared_mode_test_rows`; the rows come from `build_rotation`, grouped by
+  wall). When every wall takes a given normal nothing is exempt, and the modes
+  take the whole test. Until #968 a mix of given and facet-averaged walls refused
+  the exemption for every wall, so on a faceted wall the rotation stayed in the
+  answer (rate 0.084 in a v_rms of 0.105 on a shell at cell size 0.35);
 - the declared modes rotate about one point, their centre (all of `A c = -m0` at
   once; a single declared rotation in 3-D leaves a line, and is not exempt);
-- each rotated wall's vertices, the closure of its labelled facets, are
+- each facet-averaged wall's vertices, the closure of its labelled facets, are
   equidistant from that centre to 1e-9 relative: the wall is a sphere (a circle in
   2-D) about it. Faceting keeps the vertices on the sphere and only the edge
   midpoints off it. Any other surface of revolution is tested.
@@ -532,10 +538,23 @@ gauges, where the forcing must be compatible with the singular operator.
 - All row surgery on vectors uses ownership-relative indices
   (`_zero_rows_local` / `_set_rows_local`); indexing a local slice with global
   rows is the np>1 crash class.
-- Direct LU per increment (`solver._rotated_use_lu = True`) is a **serial**
-  preconditioner-free diagnostic (the pressure-gauge pin is a naive per-rank
-  scan, marked `TODO(BUG)`); use it to separate "the operator/constraint is
-  wrong" from "the preconditioner is struggling".
+- Direct LU per increment (`solver._rotated_use_lu = True`) is a
+  preconditioner-free diagnostic; use it to separate "the operator/constraint is
+  wrong" from "the preconditioner is struggling". It fixes the pressure gauge by
+  pinning one pressure DOF, the lowest global pressure row, chosen over all ranks
+  (`_global_pressure_pin`). Each rank used to pin the first pressure DOF of its
+  own chart, so at np > 1 the gauge was over-constrained and the answer depended
+  on the partition (#348). The pin is a valid gauge only where constant pressure
+  is an exact null mode of the constrained operator. A pressure Dirichlet
+  condition already fixes the gauge, so nothing is pinned. On an open boundary
+  or a given normal that is not the wall's, a pin would replace a physical
+  equation. This branch verifies left/right nullity before pinning and raises
+  `NotImplementedError` when it cannot establish that gauge; use the iterative
+  path for that operator.
+  A split fault inside closed walls keeps the null mode. The LU residual
+  excludes the same verified datum row as the operator and does not project
+  the pressure mean. Such a projection beside a pinned row spread its residual
+  over the other pressure rows and stalled a fault solve (#899).
 
 ## Result and reaction
 

@@ -24,6 +24,26 @@ stokes.solve()                                      # geometric multigrid, no se
 mesh = child.add_fault([("Flt", trace)], split_levels=False)   # the welded tail
 ```
 
+A second `add_fault` call on a mesh that already carries split faults keeps them
+(#1099). The earlier faults' pairing is recorded by mesh point, and a cut renumbers
+the points, so the call marks every recorded point with a label before it cuts, reads
+the label back afterwards, and hands the renumbered pairing to the new mesh and to
+each add-on level that carried it. If a recorded point was refined or removed, or a
+recorded node moved, the new fault has changed an earlier one and the call is refused:
+the check is collective. Only the faults the call adds are replayed onto the tail.
+`add_conforming_surface` and `add_conforming_sheet` carry the record through their cut
+the same way. In 3-D the sheet clip leaves the two sides of an earlier fault out of the
+domain boundary it clips against; they stay walls to the cavity, which is what keeps a
+new sheet clear of them. The outcrop frame skips their vertices: they are on no wall
+region, so an outcrop neither deletes them nor counts them as near. Both apply only to
+a mesh that carries a split fault (`place_sheet(split_faults_are_interior=True)`); on
+any other mesh a wall vertex missing from the boundary complex is still an error.
+
+The add-on partition restamps the pairing through its move. It does not carry the
+seam normals of a fault split through the partition seams (`across_seams`), and
+refuses to move a mesh that holds any: a second call on such a mesh is refused, not
+handed normals that name other points.
+
 In 3-D a fault is a triangulated sheet (`("Flt", points, triangles)` or a
 `FaultSurface`), placed with the sheet placement and split; the levels are replayed
 the same way. The extruded thick twin of a faulted sheet (`mesh.extrude`) extrudes the
@@ -200,10 +220,21 @@ fetches each fine cell's parent through one star forest (its record carries
 `fetched_remote`). Nothing on that pair is located across partitions; a fine node in
 no recorded cell is a collective refusal.
 
+The record is read in the geometry the mesh was made in. A move of the mesh
+(`mesh.deform`, the MMPDE mover, the Laplacian smoother) changes the finest level
+and none of the levels below, so the parents are located from the vertices the
+mesh was built with (`mesh._as_built_vertices`, taken when the mesh is constructed
+and read once it has moved), and the transfer takes each node back to those
+vertices before it weights it: the transfer of a moved pair is the one it had
+unmoved. A cut, placed or split mesh made on a moved one reaches the level below
+through its host's map (`mesh._addon_reference`, set by `inherit_provenance` with
+the level it is valid against). A periodic mesh keeps no such record (#1091).
+
 A coincident pairing rides a redistribution as a pair of DM labels
 (`fault_split.stamp_point_pairs` / `collect_point_pairs`), and a per-cell field as
 a cell-wise section through `distributeField` on the migration star forest
-(`redistribute_by_assignment(fields=...)`). `extrude_sheet` builds the layer on
+(`redistribute_by_assignment(fields=...)`); a per-vertex field rides the same way
+(`vertex_fields=...`), which is how a moved level keeps its as-built coordinates. `extrude_sheet` builds the layer on
 one rank and distributes it with the labels on; its fault stars are then made
 rank-interior by the older per-fault move, which remains for that path.
 
