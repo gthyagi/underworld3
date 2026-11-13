@@ -62,8 +62,12 @@ workflow. Component, serial/MPI, isolated-source and full-workflow evidence is
 tracked separately in the benchmark integration plan. Coupled multiplier
 stability remains subject to the base formulation's documented limitations.
 
-Initial Mac Linux ARM64/int32 gates: 120 serial tests (27 optional-oracle
-skips), 93 tests on every MPI8 rank, and two serial physical spherical
-reaction-to-topography checks pass. Complete spherical gravity workflows and
-Gadi validation are separate pending gates; the earlier unprepared h8 serial
-hydrostatic gate reached its 180-second test timeout and is not counted.
+Mac Linux ARM64/int32 and Gadi Linux x86_64/int32 component gates pass,
+including actual free/zero-slip spherical reaction extraction in serial/MPI.
+Small delta/smooth spherical workflows complete in serial and MPI8; isolated
+source, weak-feedback and explicit legacy controls retain separate evidence.
+The benchmark repository's
+[measured integration results](https://github.com/gthyagi/uw3-mantle-convection-benchmarks/blob/main/topography_geoid/docs/topography_geoid_integration_results_2026-11-13.md)
+record exact package generations, norms and remaining coarse-grid gravity
+regressions. These controls do not establish full-ball FE accuracy, strong
+feedback stability, or asymptotic convergence on general mesh families.
