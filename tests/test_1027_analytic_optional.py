@@ -1,20 +1,8 @@
-r"""Solutions behind an optional dependency.
+r"""The native cylindrical reference works without the optional assess oracle.
 
-`assess` (Kramer et al. 2021) is imported by four curved-geometry benchmark
-scripts under `docs/examples/` and declared in no dependency list — so those
-scripts fail with a bare `ModuleNotFoundError` on a normal install. It is now an
-optional extra with a wrapper that says what to do about it.
-
-Both paths run everywhere. The present case needs the package, which pixi.toml
-now supplies to the dev environments; the missing case is *simulated* rather
-than waited for, because once `assess` is installed the path that mattered most
-would otherwise never be exercised again — least of all in CI.
-
-The solution itself is numeric, so none of the six SymPy gates reach it. What
-can still be checked is checked by finite differences: incompressibility, and
-the boundary condition each case claims. Both carry their own controls.
-
-Run: pixi run python -m pytest tests/test_1027_analytic_optional.py -v
+Legacy numerical-oracle checks use analytic.kramer.CylindricalStokes explicitly;
+the public analytic.CylindricalStokes is the native symbolic implementation.
+Absence is simulated so dependency independence is checked on every install.
 """
 
 import pytest
@@ -27,6 +15,7 @@ import sys
 import numpy as np
 import underworld3 as uw
 
+from underworld3.analytic import kramer
 from underworld3.analytic.kramer import assess_available
 
 _real_find_spec = importlib.util.find_spec
@@ -41,25 +30,13 @@ def test_importing_underworld_does_not_need_the_optional_package():
 
     import underworld3.analytic.kramer  # noqa: F401
 
-    assert uw.analytic.CylindricalStokes is not None
+    assert kramer.CylindricalStokes is not None
 
 
-def test_the_solution_is_listed_even_when_it_cannot_be_built():
-    """Listed, and marked — not omitted.
-
-    Omitting it would make `available()` truthful about what constructs and
-    silent about what exists, which leaves a user who wants a curved-geometry
-    benchmark with no way to discover that one is a `pip install` away.
-    """
-
+def test_native_solution_is_listed_without_the_optional_oracle():
     assert "CylindricalStokes" in uw.analytic.available()
-    assert uw.analytic.is_available("CylindricalStokes") == assess_available()
-
-    installed = uw.analytic.available(installed_only=True)
-    assert ("CylindricalStokes" in installed) == assess_available()
-
-    # The missing case is covered unconditionally by the `without_assess`
-    # tests below, which simulate absence rather than waiting for it.
+    assert uw.analytic.is_available("CylindricalStokes")
+    assert "CylindricalStokes" in uw.analytic.available(installed_only=True)
 
 
 def test_every_other_solution_is_unconditionally_available():
@@ -109,28 +86,28 @@ def test_the_absence_simulation_actually_blocks(without_assess):
 
     from underworld3.analytic import kramer
 
-    assert not uw.analytic.is_available("CylindricalStokes")
+    assert uw.analytic.is_available("CylindricalStokes")
     with pytest.raises(ImportError):
         kramer.require_assess()
 
 
-def test_describe_says_what_is_missing(without_assess):
+def test_describe_identifies_native_reference_without_missing_dependency(without_assess):
     summary = uw.analytic.describe("CylindricalStokes")
 
-    assert "unavailable" in summary
-    assert "assess" in summary
+    assert "unavailable" not in summary
+    assert "assess" not in summary
 
 
-def test_it_is_dropped_from_the_installed_only_listing(without_assess):
+def test_native_reference_remains_in_installed_only_listing(without_assess):
     assert "CylindricalStokes" in uw.analytic.available()
-    assert "CylindricalStokes" not in uw.analytic.available(installed_only=True)
+    assert "CylindricalStokes" in uw.analytic.available(installed_only=True)
 
 
 def test_constructing_it_explains_rather_than_tracebacks(without_assess):
     mesh = uw.meshing.Annulus(radiusOuter=1.0, radiusInner=0.5, cellSize=0.2)
 
     with pytest.raises(ImportError) as raised:
-        uw.analytic.CylindricalStokes(mesh)
+        kramer.CylindricalStokes(mesh)
 
     message = str(raised.value)
     assert "pip install" in message
@@ -139,7 +116,14 @@ def test_constructing_it_explains_rather_than_tracebacks(without_assess):
     assert "Kramer" in message
 
 
-def test_it_declares_that_the_residual_gates_cannot_reach_it():
+def test_native_reference_constructs_with_assess_blocked(without_assess):
+    mesh = uw.meshing.Annulus(radiusOuter=1.0, radiusInner=0.5, cellSize=0.2)
+    solution = uw.analytic.CylindricalStokes(mesh)
+    assert solution.symbolic and solution.requires is None
+    assert np.isfinite(solution.evaluate("pressure", np.array([[.7, 0.]]))).all()
+
+
+def test_legacy_oracle_declares_its_optional_dependency():
     """A numeric oracle is not a validated solution, and must not pass as one.
 
     Every other solution is SymPy and clears the physics residual. This one
@@ -148,8 +132,8 @@ def test_it_declares_that_the_residual_gates_cannot_reach_it():
     pass it never earned.
     """
 
-    assert uw.analytic.CylindricalStokes.symbolic is False
-    assert uw.analytic.CylindricalStokes.requires == "assess"
+    assert kramer.CylindricalStokes.symbolic is False
+    assert kramer.CylindricalStokes.requires == "assess"
 
     for name in uw.analytic.available():
         if name != "CylindricalStokes":
@@ -166,10 +150,10 @@ def test_it_rejects_unknown_cases_before_reaching_the_dependency(monkeypatch):
     mesh = uw.meshing.Annulus(radiusOuter=1.0, radiusInner=0.5, cellSize=0.2)
 
     with pytest.raises(ValueError, match="density must be"):
-        uw.analytic.CylindricalStokes(mesh, density="gaussian")
+        kramer.CylindricalStokes(mesh, density="gaussian")
 
     with pytest.raises(ValueError, match="boundary must be"):
-        uw.analytic.CylindricalStokes(mesh, boundary="sticky")
+        kramer.CylindricalStokes(mesh, boundary="sticky")
 
 
 @pytest.fixture(scope="module")
@@ -219,7 +203,7 @@ def _divergence(sol, points, step=1e-6):
 @pytest.mark.parametrize("density", ["delta", "smooth"])
 @pytest.mark.parametrize("boundary", ["free", "zero"])
 def test_all_four_cases_construct_and_evaluate(annulus, density, boundary):
-    sol = uw.analytic.CylindricalStokes(
+    sol = kramer.CylindricalStokes(
         annulus, n=2, k=2, density=density, boundary=boundary
     )
 
@@ -237,7 +221,7 @@ def test_all_four_cases_construct_and_evaluate(annulus, density, boundary):
 @pytest.mark.parametrize("density", ["delta", "smooth"])
 @pytest.mark.parametrize("boundary", ["free", "zero"])
 def test_the_velocity_is_incompressible(annulus, density, boundary):
-    sol = uw.analytic.CylindricalStokes(
+    sol = kramer.CylindricalStokes(
         annulus, n=2, k=2, density=density, boundary=boundary
     )
 
@@ -275,7 +259,7 @@ def test_free_slip_stops_wall_normal_flow_but_not_tangential(annulus, density):
     this one.
     """
 
-    sol = uw.analytic.CylindricalStokes(
+    sol = kramer.CylindricalStokes(
         annulus, n=2, k=2, density=density, boundary="free"
     )
 
@@ -291,7 +275,7 @@ def test_free_slip_stops_wall_normal_flow_but_not_tangential(annulus, density):
 @needs_assess
 @pytest.mark.parametrize("density", ["delta", "smooth"])
 def test_zero_slip_stops_the_wall_entirely(annulus, density):
-    sol = uw.analytic.CylindricalStokes(
+    sol = kramer.CylindricalStokes(
         annulus, n=2, k=2, density=density, boundary="zero"
     )
 
@@ -307,7 +291,7 @@ def test_zero_slip_stops_the_wall_entirely(annulus, density):
 def test_the_delta_case_is_genuinely_two_sided(annulus):
     """The branch selection is the benchmark, so it has to actually branch."""
 
-    sol = uw.analytic.CylindricalStokes(annulus, density="delta", r_int=0.8)
+    sol = kramer.CylindricalStokes(annulus, density="delta", r_int=0.8)
     assert sol._above is not sol._below
 
     radii = np.array([[0.6, 0.0], [0.9, 0.0]])
@@ -317,7 +301,7 @@ def test_the_delta_case_is_genuinely_two_sided(annulus):
 
 @needs_assess
 def test_it_rejects_fields_it_does_not_have(annulus):
-    sol = uw.analytic.CylindricalStokes(annulus)
+    sol = kramer.CylindricalStokes(annulus)
 
     with pytest.raises(ValueError, match="velocity"):
         sol.evaluate("temperature", annulus.X.coords)

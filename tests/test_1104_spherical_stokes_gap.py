@@ -92,6 +92,17 @@ def test_constant_lift_hydrostatic_gauge_and_physical_reactions(shell, zero_slip
     tangent_rms = np.sqrt(abs(uw.maths.Integral(shell, result.tangential_reaction.sym.dot(result.tangential_reaction.sym)).evaluate())/physical_volume)
     assert normal_rms < 1e-7
     assert tangent_rms < 1e-7
+    fields = (velocity, pressure, result.normal_reaction, result.tangential_reaction)
+    before = [np.asarray(field.array).copy() for field in fields]
+    topography = stokes.spherical_gap_topography(
+        gap_result=result, inner_boundary="Lower", outer_boundary="Upper",
+        radius_inner=.55, radius_outer=1., inner_density_contrast=3.,
+        outer_density_contrast=2., inner_reference_gravity=5., outer_reference_gravity=7.)
+    for trace in (topography.inner, topography.outer):
+        coefficient, mean = trace.harmonic_coefficient(2, 1, "cos", "real_orthonormal", 8)
+        assert max(abs(coefficient), abs(mean)) < 1e-7
+    for field, snapshot in zip(fields, before, strict=True):
+        np.testing.assert_array_equal(field.array, snapshot)
     checks = result.checks
     assert checks["surface_quadrature_order"] == 6
     assert checks["radial_quadrature_order"] == 7

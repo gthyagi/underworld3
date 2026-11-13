@@ -2843,6 +2843,41 @@ class SNES_Stokes(_StressHistoryMixin, _ConstitutiveModelStateMixin, SNES_Stokes
         symval = sympify(constraints_matrix)
         self._constraints = symval
 
+    def spherical_gap_topography(self, *, gap_result, inner_boundary, outer_boundary,
+            radius_inner, radius_outer, inner_density_contrast, outer_density_contrast,
+            inner_reference_gravity, outer_reference_gravity):
+        r"""Recover physical-sphere topography from this solver's coupled reactions.
+
+        Retain the original scalar or mapped-vector surface multiplier and its
+        joint pressure gauge. Radial-outward displacement uses opposite inner
+        and outer buoyancy signs. The returned traces support direct spatial
+        evaluation and harmonic integration without changing the Stokes fields.
+        """
+        from underworld3.postprocessing.spherical_gap import spherical_gap_topography
+        return spherical_gap_topography(
+            stokes=self, gap_result=gap_result, inner_boundary=inner_boundary,
+            outer_boundary=outer_boundary, radius_inner=radius_inner, radius_outer=radius_outer,
+            inner_density_contrast=inner_density_contrast, outer_density_contrast=outer_density_contrast,
+            inner_reference_gravity=inner_reference_gravity, outer_reference_gravity=outer_reference_gravity,
+        )
+
+    def cylindrical_gap_topography(self, *, gap_result, inner_boundary, outer_boundary,
+            radius_inner, radius_outer, inner_density_contrast, outer_density_contrast,
+            inner_reference_gravity, outer_reference_gravity):
+        r"""Recover both-wall spatial topography from this solver's circle reactions.
+
+        The normal multiplier is :math:`\lambda=-\sigma_{nn}`. Displacement is
+        radial-outward with opposite inner/outer buoyancy signs. Preserve the
+        coupled physical-pressure gauge; no projected stress enters this recovery.
+        """
+        from underworld3.postprocessing.cylindrical_gap import cylindrical_gap_topography
+        return cylindrical_gap_topography(
+            stokes=self, gap_result=gap_result, inner_boundary=inner_boundary,
+            outer_boundary=outer_boundary, radius_inner=radius_inner, radius_outer=radius_outer,
+            inner_density_contrast=inner_density_contrast, outer_density_contrast=outer_density_contrast,
+            inner_reference_gravity=inner_reference_gravity, outer_reference_gravity=outer_reference_gravity,
+        )
+
     def solve_cylindrical_gap(
         self, *, inner_boundary, outer_boundary, radius_inner, radius_outer,
         viscosity, pressure_jump, pressure_jump_integral, cap_bodyforce,

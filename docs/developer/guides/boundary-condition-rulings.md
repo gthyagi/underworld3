@@ -201,3 +201,12 @@ given as `None` (or `sympy.oo`) are left free. Three things to know:
 The optional [spherical diagnostics API](../subsystems/spherical-stokes-diagnostics.md)
 provides physical error/reaction integration and shared cylindrical/spherical `Stokes.observe_stokes`
 callbacks. Observations do not change wall constraints or the original equations.
+
+## Coupled-reaction topography
+
+The opt-in coupled circle/sphere solves expose physical reactions to
+`Stokes.cylindrical_gap_topography` and `Stokes.spherical_gap_topography`.
+These retain the paired pressure gauge and the native surface multiplier
+space. Spatial transfer and spectral gravity use those reactions, independently
+of volume stress projection. See [coupled topography and gravity](coupled-topography-gravity.md)
+for signs, units, continuation conditions and validation scope.
