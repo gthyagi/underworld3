@@ -556,6 +556,13 @@ gauges, where the forcing must be compatible with the singular operator.
   the pressure mean. Such a projection beside a pinned row spread its residual
   over the other pressure rows and stalled a fault solve (#899).
 
+Cold/warm field comparisons need a well-conditioned reference. With non-null
+weak rotations retained, two small-residual states can differ along that weak
+component. Verify the original equations independently and require convergence
+before using a direct-LU result as a reference. The coefficient-cache and
+large-forcing regression fixtures use planar walls to isolate those contracts
+from circular weak-mode conditioning.
+
 ## Result and reaction
 
 The solve fills the solver's fields and stores a result dict
