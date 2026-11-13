@@ -62,3 +62,9 @@ def test_physical_sphere_harmonic_projection_has_declared_normalization(monkeypa
     coefficient, mean = spherical_potential.spherical_potential_coefficient(
         SimpleNamespace(sym=(sp.Symbol("Phi"),)), radius, 2, 1, "cos", "real_orthonormal", 16)
     np.testing.assert_allclose([coefficient, mean], [2.3, .17], rtol=1e-13, atol=1e-14)
+    errors = spherical_potential.spherical_potential_errors(
+        SimpleNamespace(sym=(sp.Symbol("Phi"),)), radius, 2, 1, "cos", "real_orthonormal", 16, 2.3)
+    expected_rms = np.sqrt(.17**2+.2**2/3)
+    np.testing.assert_allclose(errors["absolute_rms"], expected_rms, rtol=1e-13)
+    np.testing.assert_allclose(errors["relative_l2_fraction"], np.sqrt(4*np.pi)*expected_rms/2.3, rtol=1e-13)
+    assert errors["coefficient_absolute_error"] < 1e-13

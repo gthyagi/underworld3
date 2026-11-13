@@ -18,17 +18,13 @@ from underworld3.maths.spherical_harmonics import real_harmonic_values, validate
 from ._density_potential import _solve_density_potential
 from .cylindrical_potential import PhysicalPotentialSolve
 
-__all__ = ["solve_spherical_spatial_potential", "spherical_potential_coefficient"]
+__all__ = ["solve_spherical_spatial_potential", "spherical_potential_coefficient",
+           "spherical_potential_errors"]
 
 
-def spherical_potential_coefficient(field, radius: float, degree: int, order: int,
-    component: str, normalization: str, angular_order: int) -> tuple[float, float]:
-    """Project the solved field on a physical sphere; coefficients are diagnostics.
-
-    Gauss-Legendre polar and uniform azimuthal quadrature integrates the declared
-    real harmonic. Evaluate through global owning-cell lookup, including when
-    the target sphere cuts the surrounding gravity elements.
-    """
+def _physical_sphere_samples(field, radius, degree, order, component, normalization, angular_order):
+    """Gauss polar/uniform azimuthal samples with owning-cell evaluation."""
+    validate_harmonic(degree, order, component, normalization)
     if isinstance(angular_order, bool) or not isinstance(angular_order, Integral) or not np.isfinite(radius) or radius <= 0 or angular_order < 2*degree+2:
         raise ValueError("Require positive radius and angular_order at least 2*degree+2")
     z, weights = np.polynomial.legendre.leggauss(angular_order)
@@ -40,7 +36,40 @@ def spherical_potential_coefficient(field, radius: float, degree: int, order: in
                                     component=component, normalization=normalization)
     values = np.asarray(uw.function.global_evaluate(field.sym[0], points)).reshape(-1)
     measure = np.broadcast_to(weights[:, None]*np.pi/angular_order, zz.shape).ravel()
+    return harmonic, values, measure
+
+
+def spherical_potential_coefficient(field, radius: float, degree: int, order: int,
+    component: str, normalization: str, angular_order: int) -> tuple[float, float]:
+    """Integrate a target coefficient and mean on the unfiltered physical sphere."""
+    harmonic, values, measure = _physical_sphere_samples(field, radius, degree,
+        order, component, normalization, angular_order)
     return float(np.sum(measure*values*harmonic)/np.sum(measure*harmonic**2)), float(np.sum(measure*values)/(4*np.pi))
+
+
+def spherical_potential_errors(field, radius: float, degree: int, order: int,
+    component: str, normalization: str, angular_order: int, reference_coefficient: float) -> dict:
+    """Keep full-trace errors separate from target-coefficient errors.
+
+    Integrate against ``reference_coefficient*Y`` without removing means or
+    off-target modes. RMS has potential units; relative errors are fractions.
+    A zero reference leaves the relative errors undefined, represented by None.
+    """
+    if not np.isfinite(reference_coefficient):
+        raise ValueError("Require a finite reference potential coefficient")
+    harmonic, values, measure = _physical_sphere_samples(field, radius, degree,
+        order, component, normalization, angular_order)
+    exact = reference_coefficient*harmonic
+    squared_error = float(np.sum(measure*(values-exact)**2))
+    squared_reference = float(np.sum(measure*exact**2))
+    coefficient = float(np.sum(measure*values*harmonic)/np.sum(measure*harmonic**2))
+    return dict(coefficient=coefficient, reference_coefficient=float(reference_coefficient),
+        signed_coefficient_error=coefficient-reference_coefficient,
+        coefficient_absolute_error=abs(coefficient-reference_coefficient),
+        coefficient_relative_error_fraction=abs((coefficient-reference_coefficient)/reference_coefficient) if reference_coefficient != 0 else None,
+        absolute_rms=float(np.sqrt(squared_error/(4*np.pi))),
+        relative_l2_fraction=float(np.sqrt(squared_error/squared_reference)) if squared_reference > 0 else None,
+        mean=float(np.sum(measure*values)/(4*np.pi)))
 
 
 def solve_spherical_spatial_potential(*, gravity_mesh, field_name: str,
