@@ -22,6 +22,11 @@ from underworld3.utilities._cylindrical_dirichlet import _edge_key, _labelled_ed
 from underworld3.utilities._cylindrical_gap import _ordered_rows
 
 
+def _p2_basis(t):
+    """Endpoint, endpoint and midpoint basis on a unit interval."""
+    return np.stack(((1-t)*(1-2*t), t*(2*t-1), 4*t*(1-t)), axis=-1)
+
+
 @dataclass
 class CircularTopographyTrace:
     """Owned arc endpoints and three angle-P2 topography values per arc.
@@ -38,18 +43,31 @@ class CircularTopographyTrace:
     values: np.ndarray
     comm: object
 
+    def _quadrature_values(self, t):
+        return self.values @ _p2_basis(t).T
+
+    def _interpolation_coordinate(self, theta, starts, widths):
+        return (theta-starts)/widths
+
+    def quadrature_samples(self, quadrature: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Return owned angles, original trace values and angular integration weights.
+
+        Shapes are ``(owned_arcs, quadrature)``. The weights integrate ``dtheta``;
+        multiply by radius for physical-circle arclength. Empty ranks return
+        empty arrays with the same second dimension. No volume fields are gathered.
+        """
+        if int(quadrature) != quadrature or quadrature < 3:
+            raise ValueError("quadrature must be an integer at least three")
+        nodes, weights = np.polynomial.legendre.leggauss(quadrature)
+        t = (nodes+1)/2
+        angles = self.starts[:,None]+self.widths[:,None]*t
+        return angles, self._quadrature_values(t), self.widths[:,None]*weights[None,:]/2
+
     def cosine_coefficient(self, wavenumber: int, quadrature: int) -> tuple[float, float]:
         """Integrate the unnormalized cos(n theta) coefficient and constant mean."""
         if isinstance(wavenumber, bool) or int(wavenumber) != wavenumber or wavenumber < 1:
             raise ValueError("wavenumber must be a positive integer")
-        if int(quadrature) != quadrature or quadrature < 3:
-            raise ValueError("quadrature must be an integer at least three")
-        nodes, weights = np.polynomial.legendre.leggauss(quadrature)
-        t = (nodes + 1) / 2
-        basis = np.stack(((1-t)*(1-2*t), t*(2*t-1), 4*t*(1-t)), axis=-1)
-        angles = self.starts[:, None] + self.widths[:, None] * t
-        samples = self.values @ basis.T
-        measure = self.widths[:, None] * weights[None, :] / 2
+        angles, samples, measure = self.quadrature_samples(quadrature)
         sums = np.array([np.sum(measure*samples*np.cos(wavenumber*angles)),
                          np.sum(measure*samples)])
         cosine, mean = self.comm.allreduce(sums, op=MPI.SUM)
@@ -72,8 +90,8 @@ class CircularTopographyTrace:
             raise ValueError("Owned trace arcs must cover one complete circle exactly once")
         theta = np.mod(np.asarray(angles, dtype=float)-table[0, 0], 2*np.pi)+table[0, 0]
         index = np.searchsorted(table[:, 0], theta, side="right")-1
-        t = (theta-table[index, 0])/table[index, 1]
-        basis = np.stack(((1-t)*(1-2*t), t*(2*t-1), 4*t*(1-t)), axis=-1)
+        t = self._interpolation_coordinate(theta, table[index, 0], table[index, 1])
+        basis = _p2_basis(t)
         return np.sum(table[index, 2:]*basis, axis=-1)
 
 

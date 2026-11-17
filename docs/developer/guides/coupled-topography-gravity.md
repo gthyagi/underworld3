@@ -27,6 +27,25 @@ mapped Cartesian multiplier before taking its physical normal component.
 exact radial-cone containment and bounded sparse exchanges, including empty
 surface ranks; the complete surface or volume mesh is not replicated.
 
+## Rotated annulus reactions
+
+`Stokes.cylindrical_rotated_topography` recovers complete P2 chord traces from
+the cached rotated-constraint reaction, using the existing boundary mass. Pass
+the single pressure constant removed after that solve as `pressure_shift=c`.
+It pairs $p'=p-c$ with $\lambda'=\lambda-c$ at both walls. Separate wall-mean
+removal would change this comparison and is not performed. Stokes fields and
+the original reaction remain unchanged.
+
+The cached normal load is $\lambda=-\sigma_{nn}$; the legacy weak-traction API's
+stress wording must not be used to reverse that physical sign. A manufactured
+$u=0,p=x-1/2$ control fixes the convention independently of Kramer data.
+The adapter evaluates the original chord polynomial through the exact radial
+map $t=[1+\tan(\theta-\theta_c)/\tan(\Delta\theta/2)]/2$, where $\theta_c$ is the
+arc midpoint and $\Delta\theta$ its width. It retains all spatial modes and is
+distinct from the coupled method's angle-P2 multiplier. Use `mass="lumped"`
+for linear-cost P2-line recovery. This does not add a wall correction, change
+the Stokes solve, or establish full-field accuracy from a harmonic coefficient.
+
 ## Independent gravity methods
 
 Spectral gravity integrates numerical topography coefficients and applies the

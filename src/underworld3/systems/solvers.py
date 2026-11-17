@@ -2894,6 +2894,53 @@ class SNES_Stokes(_StressHistoryMixin, _ConstitutiveModelStateMixin, SNES_Stokes
             inner_reference_gravity=inner_reference_gravity, outer_reference_gravity=outer_reference_gravity,
         )
 
+    def cylindrical_rotated_topography(self, *, inner_boundary, outer_boundary,
+            radius_inner, radius_outer, inner_density_contrast, outer_density_contrast,
+            inner_reference_gravity, outer_reference_gravity, pressure_shift, mass):
+        r"""Recover full annulus topography from the last rotated Stokes reaction.
+
+        Parameters
+        ----------
+        inner_boundary, outer_boundary : str
+            Complete affine polygonal walls with vertices on the physical circles.
+        radius_inner, radius_outer : float
+            Positive, ordered circle radii centred at the origin.
+        inner_density_contrast, outer_density_contrast : float
+            Nonzero smaller-radius-side minus larger-radius-side density contrasts.
+        inner_reference_gravity, outer_reference_gravity : float
+            Positive reference-gravity magnitudes in consistent nondimensional units.
+        pressure_shift : float
+            One constant subtracted from the pressure of the cached solve. For
+            :math:`p'=p-c`, pair the reactions as :math:`\lambda'=\lambda-c`.
+        mass : str
+            Existing boundary-mass recovery policy; ``"lumped"`` is the linear-cost
+            P2 line policy. No independent wall mean is removed.
+
+        Returns
+        -------
+        CylindricalRotatedTopography
+            Both complete spatial traces. Radial-outward heights are
+            :math:`h_o=\lambda'_o/(\Delta\rho_o g_o)` and
+            :math:`h_i=-\lambda'_i/(\Delta\rho_i g_i)`, with
+            :math:`\lambda=-\sigma_{nn}`. Evaluation radially maps the original
+            chord P2 polynomial; it does not reconstruct a selected harmonic.
+
+        Notes
+        -----
+        Call collectively after solving the full momentum problem, including any
+        prescribed pressure-jump terms. Fields and cached reactions are unchanged.
+        CBF recovery follows Zhong, Gurnis & Hulbert (1993),
+        doi:10.1016/0031-9201(93)90078-N. The radial pullback and paired pressure
+        datum are this adapter's implementation, not a circular-wall correction.
+        """
+        from underworld3.postprocessing.cylindrical_rotated import _cylindrical_rotated_topography
+        return _cylindrical_rotated_topography(stokes=self,
+            inner_boundary=inner_boundary, outer_boundary=outer_boundary,
+            radius_inner=radius_inner, radius_outer=radius_outer,
+            inner_density_contrast=inner_density_contrast, outer_density_contrast=outer_density_contrast,
+            inner_reference_gravity=inner_reference_gravity, outer_reference_gravity=outer_reference_gravity,
+            pressure_shift=pressure_shift, mass=mass)
+
     def cylindrical_gap_topography(self, *, gap_result, inner_boundary, outer_boundary,
             radius_inner, radius_outer, inner_density_contrast, outer_density_contrast,
             inner_reference_gravity, outer_reference_gravity):
