@@ -530,6 +530,16 @@ gauges, where the forcing must be compatible with the singular operator.
 
 ### Parallel notes
 
+- PETSc 3.25.4's default-DS FEM callback can omit the operator's matrix
+  assembly on a rank with no cells when operator and preconditioner are
+  distinct. The next PtAP then encounters mismatched collectives. UW3's
+  `UW_DMPlexSetSNESLocalFEM` compatibility wrapper supplies that empty rank's
+  missing collective assembly, leaving nonempty-rank integration and kernels
+  unchanged. This correction covers one unlabelled DS; labelled/multiple-region
+  callbacks retain PETSc's implementation. The regression
+  `tests/parallel/test_1124_stokes_empty_rank_jacobian.py` checks exact linear
+  pressure with both rotated free slip and zero slip on a four-cell mesh.
+
 - Every branch the loop takes is decided **collectively**. The datum-activity
   flag rides a PETSc `Vec` norm of the lift vector (the datum bookkeeping
   itself is rank-local — only owners of datum boundary nodes hold entries —

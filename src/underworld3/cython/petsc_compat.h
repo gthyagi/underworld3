@@ -227,10 +227,60 @@ PetscErrorCode UW_DMSetTime(DM dm, PetscReal time)
     return PETSC_SUCCESS;
 }
 
+#if PETSC_VERSION_EQ(3, 25, 4)
+// PETSc 3.25.4 DMPlexComputeJacobianByKey tests local hasJac/hasPrec at
+// assembly, although it computes their collective verdict (gassOp). An empty
+// cell range therefore misses the operator assembly when Jac != JacP.
+// Match the native end-of-integration sequence on empty default-DS ranks;
+// all element/boundary kernels and all nonempty-rank integration stay native.
+// Reference: petsc/petsc v3.25.4 src/dm/impls/plex/plexfem.c,
+// DMPlexComputeJacobianByKey (the end: assembly block).
+static PetscErrorCode UW_DMPlexSNESComputeJacobianFEM(DM dm, Vec X, Mat Jac, Mat JacP, void *ctx)
+{
+    PetscInt    cStart, cEnd, Nds;
+    PetscMPIInt local[2], global[2];
+    PetscDS     ds = NULL;
+    DMLabel     label = NULL;
+    PetscBool   hasJac, hasPrec, assOp = PETSC_FALSE, gassOp = PETSC_FALSE;
+    MPI_Comm    comm = PetscObjectComm((PetscObject)dm);
+
+    PetscFunctionBeginUser;
+    if (Jac == JacP) PetscFunctionReturn(DMPlexSNESComputeJacobianFEM(dm, X, Jac, JacP, ctx));
+    PetscCall(DMGetNumDS(dm, &Nds));
+    if (Nds == 1) PetscCall(DMGetRegionNumDS(dm, 0, &label, NULL, &ds, NULL));
+    PetscCall(DMPlexGetSimplexOrBoxCells(dm, 0, &cStart, &cEnd));
+    local[0] = cStart == cEnd;
+    local[1] = Nds != 1 || label != NULL;
+    PetscCallMPI(MPI_Allreduce(local, global, 2, MPI_INT, MPI_MAX, comm));
+    // Keep labelled/multiple-region handling in PETSc. The compatibility
+    // correction is for its ordinary single, unlabelled FEM system only.
+    if (!global[0] || global[1] || !local[0]) PetscFunctionReturn(DMPlexSNESComputeJacobianFEM(dm, X, Jac, JacP, ctx));
+
+    PetscCall(PetscDSHasJacobian(ds, &hasJac));
+    PetscCall(PetscDSHasJacobianPreconditioner(ds, &hasPrec));
+    if (hasJac && hasPrec) PetscCall(MatZeroEntries(Jac));
+    PetscCall(MatZeroEntries(JacP));
+    // Pair with the native ByKey assembly verdict on ranks holding cells.
+    PetscCallMPI(MPI_Allreduce(&assOp, &gassOp, 1, MPI_C_BOOL, MPI_LOR, comm));
+    if (gassOp) {
+        PetscCall(MatAssemblyBegin(Jac, MAT_FINAL_ASSEMBLY));
+        PetscCall(MatAssemblyEnd(Jac, MAT_FINAL_ASSEMBLY));
+    }
+    PetscCall(MatAssemblyBegin(JacP, MAT_FINAL_ASSEMBLY));
+    PetscCall(MatAssemblyEnd(JacP, MAT_FINAL_ASSEMBLY));
+    PetscFunctionReturn(PETSC_SUCCESS);
+}
+#endif
+
 PetscErrorCode UW_DMPlexSetSNESLocalFEM(DM dm, PetscBool flag, void *ctx)
 {
 
-#if PETSC_VERSION_LE(3, 20, 5)
+#if PETSC_VERSION_EQ(3, 25, 4)
+    PetscFunctionBeginUser;
+    PetscCall(DMPlexSetSNESLocalFEM(dm, flag, NULL));
+    PetscCall(DMSNESSetJacobianLocal(dm, UW_DMPlexSNESComputeJacobianFEM, NULL));
+    PetscFunctionReturn(PETSC_SUCCESS);
+#elif PETSC_VERSION_LE(3, 20, 5)
     return DMPlexSetSNESLocalFEM(dm, NULL, NULL, NULL);
 #else
     return DMPlexSetSNESLocalFEM(dm, flag, NULL);

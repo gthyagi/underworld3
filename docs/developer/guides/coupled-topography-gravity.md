@@ -11,6 +11,10 @@ solve's result, both physical radii, boundary labels, signed density contrasts
 and positive reference-gravity magnitudes explicitly. The adapters preserve
 the solver's pressure/reaction gauge and leave its fields unchanged.
 
+Runtime gates include default-DS Stokes assembly on empty MPI partitions,
+including PETSc 3.25.4's two-matrix assembly correction; see the
+[parallel contract](../subsystems/rotated-freeslip.md#parallel-notes).
+
 For normal reaction $\lambda=-\sigma_{nn}$ and radial-outward displacement,
 
 $$h_o=\lambda_o/(\Delta\rho_o g_o),\qquad
