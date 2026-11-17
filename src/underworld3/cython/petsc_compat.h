@@ -239,8 +239,14 @@ static PetscErrorCode UW_DMPlexSNESComputeJacobianFEM(DM dm, Vec X, Mat Jac, Mat
 {
     PetscInt    cStart, cEnd, Nds;
     PetscMPIInt local[2], global[2];
-    PetscDS     ds = NULL;
+    PetscDS     ds = NULL, auxDS = NULL;
     DMLabel     label = NULL;
+    DM          auxDM = NULL, auxPlex = NULL;
+    Vec         aux = NULL;
+    PetscSection section;
+    DMField     coordinateField;
+    DMEnclosureType enclosure;
+    PetscInt    auxDimension;
     PetscBool   hasJac, hasPrec, assOp = PETSC_FALSE, gassOp = PETSC_FALSE;
     MPI_Comm    comm = PetscObjectComm((PetscObject)dm);
 
@@ -260,6 +266,22 @@ static PetscErrorCode UW_DMPlexSNESComputeJacobianFEM(DM dm, Vec X, Mat Jac, Mat
     PetscCall(PetscDSHasJacobianPreconditioner(ds, &hasPrec));
     if (hasJac && hasPrec) PetscCall(MatZeroEntries(Jac));
     PetscCall(MatZeroEntries(JacP));
+    // Preserve the native empty-cell prelude as well as its assembly calls.
+    // Lazy coordinate/auxiliary objects consume communicator tags. Skipping
+    // their creation desynchronises later point-to-point traffic (e.g. GAMG).
+    PetscCall(DMGetLocalSection(dm, &section));
+    PetscCall(DMGetGlobalSection(dm, &section));
+    PetscCall(DMGetAuxiliaryVec(dm, NULL, 0, 0, &aux));
+    if (aux) {
+        PetscCall(VecGetDM(aux, &auxDM));
+        PetscCall(DMGetEnclosureRelation(auxDM, dm, &enclosure));
+        PetscCall(DMConvert(auxDM, DMPLEX, &auxPlex));
+        PetscCall(DMGetLocalSection(auxPlex, &section));
+        PetscCall(DMGetDS(auxDM, &auxDS));
+        PetscCall(PetscDSGetTotalDimension(auxDS, &auxDimension));
+    }
+    PetscCall(DMGetCoordinateField(dm, &coordinateField));
+    if (auxDM) PetscCall(DMDestroy(&auxPlex));
     // Pair with the native ByKey assembly verdict on ranks holding cells.
     PetscCallMPI(MPI_Allreduce(&assOp, &gassOp, 1, MPI_C_BOOL, MPI_LOR, comm));
     if (gassOp) {
