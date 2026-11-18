@@ -32,6 +32,10 @@ class _CellField:
 
     def __init__(self, field, vertices):
         self.field, self.vertices = field, vertices
+        # Read all fields on every rank before cell-dependent work. This also
+        # keeps the frozen density nondimensional and avoids lazy vector setup
+        # or unit conversion inside unequal per-rank quadrature loops.
+        self.nodal_values = np.asarray(field.data).copy()
         self.rows = field.mesh._cell_node_indices(field.degree, field.continuous)
         self.powers = [(i, degree-i) for degree in range(field.degree+1) for i in range(degree+1)]
         self.inverse = [np.linalg.inv(_polynomials(np.asarray(field.coords)[row], triangle, self.powers))
@@ -41,7 +45,7 @@ class _CellField:
         return _polynomials(points, self.vertices[cell], self.powers)@self.inverse[cell]
 
     def values(self, cell, points, component):
-        return self.basis(cell, points)@np.asarray(self.field.array)[self.rows[cell], 0, component]
+        return self.basis(cell, points)@self.nodal_values[self.rows[cell], component]
 
 
 def _density(expression, mesh, vertices):
@@ -59,8 +63,17 @@ def _density(expression, mesh, vertices):
         if field.mesh is not mesh:
             raise ValueError("Circular density fields must belong to the gravity mesh")
         sources.append((_CellField(field, vertices), function.component))
-    evaluate = sp.lambdify((mesh.N.x, mesh.N.y, *symbols), expression.xreplace(dict(zip(functions, symbols))),
-                          modules="numpy", dummify=True, cse=True)
+    coordinates = sp.symbols("source_x source_y")
+    replacements = dict(zip(functions, symbols))
+    replacements.update(zip((mesh.N.x, mesh.N.y), coordinates))
+    for coordinate, symbol in zip(mesh.X, coordinates):
+        replacements[uw.function.expressions._unwrap_for_compilation(
+            coordinate, keep_constants=False, return_self=False)] = symbol
+    expression = expression.xreplace(replacements)
+    unknown = expression.free_symbols-set((*coordinates, *symbols))
+    if unknown:
+        raise ValueError(f"Circular density contains unresolved symbols: {unknown}")
+    evaluate = sp.lambdify((*coordinates, *symbols), expression, modules="numpy", cse=True)
 
     def values(cell, points):
         extra = [field.values(cell, points, component) for field, component in sources]

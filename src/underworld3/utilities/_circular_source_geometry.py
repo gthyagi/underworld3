@@ -3,7 +3,7 @@
 The circle-specific construction clips polar rays against each triangle's
 half-planes. Angular panels end at edge/circle intersections and vertices;
 radial integration is split at prescribed material radii. Every point belongs
- to its actual containing triangle, including the thin circular crescents.
+to its actual containing triangle, including the thin circular crescents.
 It follows the geometry-resolving principle of Saye (2015),
 doi:10.1137/140966290, rather than applying that paper's Cartesian algorithm.
 """
