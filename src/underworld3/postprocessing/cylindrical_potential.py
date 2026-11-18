@@ -180,6 +180,7 @@ def solve_cylindrical_spatial_potential(
     potential_degree: int, tolerance: float, boundary_samples: int,
     inner_boundary: str, internal_boundary: str, outer_boundary: str,
     exterior_boundary: str, interior_boundary: str, solver_options: dict,
+    source_integration: str = "mesh", source_quadrature: int = 8,
 ) -> PhysicalPotentialSolve:
     r"""Solve -laplacian(Phi)=4*pi*G*rho using spatial density expressions.
 
@@ -189,6 +190,17 @@ def solve_cylindrical_spatial_potential(
     -4*pi*G*sigma in UW3's weak convention. volume_density must already be zero
     outside its intended source region. Parameters are explicit, nondimensional
     or consistently scaled; this API performs no unit conversion.
+
+    ``source_integration="mesh"`` retains the conforming polygon load. Select
+    ``"circular"`` to integrate sheets on their physical circles and volume
+    density inside radius_inner<r<radius_outer, clipped to each containing
+    affine triangle with positive Gauss rules of order source_quadrature.
+    This supports coordinate expressions and gravity-mesh FE density values;
+    the native diffusion/Robin operator is unchanged. The resulting linear
+    system is frozen: recreate it after changing sources, mesh or coefficients.
+    Coverage, signed loads and assembly timing are available through
+    poisson_system.circular_source_checks. See Saye (2015),
+    doi:10.1137/140966290, for geometry-resolving quadrature principles.
 
     Robin continuation uses continuation_wavenumber at the truncations. It is
     exact for that angular mode and an approximation for other modes in a
@@ -204,6 +216,10 @@ def solve_cylindrical_spatial_potential(
     B. Conforming finite-element spatial loading is a UW3 implementation; the
     circular Stokes gap correction is not automatically a Poisson correction.
     """
+    if source_integration not in ("mesh", "circular"):
+        raise ValueError("source_integration must be 'mesh' or 'circular'")
+    if isinstance(source_quadrature, bool) or not isinstance(source_quadrature, int) or source_quadrature < 2:
+        raise ValueError("source_quadrature must be an integer >= 2")
     mode = continuation_wavenumber
     if isinstance(mode, bool) or not isinstance(mode, Integral) or mode < 2:
         raise ValueError("continuation_wavenumber must be an integer at least two")
@@ -220,6 +236,13 @@ def solve_cylindrical_spatial_potential(
     continuation = [(exterior_boundary, mode/radius_exterior)]
     if radius_interior is not None:
         continuation.append((interior_boundary, mode/radius_interior))
+    circular_sources = None
+    if source_integration == "circular":
+        circular_sources = dict(radii=(radius_inner, radius_internal, radius_outer),
+            sheets=((radius_inner, inner_sheet_density, inner_feedback_density),
+                    (radius_internal, internal_sheet_density, 0.),
+                    (radius_outer, outer_sheet_density, outer_feedback_density)),
+            quadrature_order=source_quadrature)
     phi, poisson = _solve_density_potential(gravity_mesh=gravity_mesh,
         field_name=field_name, potential_degree=potential_degree,
         volume_density=volume_density, sheets=(
@@ -227,7 +250,7 @@ def solve_cylindrical_spatial_potential(
             (internal_boundary, internal_sheet_density, 0),
             (outer_boundary, outer_sheet_density, outer_feedback_density)),
         continuation=continuation, gravitational_constant=gravitational_constant,
-        tolerance=tolerance, solver_options=solver_options)
+        tolerance=tolerance, solver_options=solver_options, circular_sources=circular_sources)
     outer, outer_mean = _interface_coefficient(phi, radius_outer, mode, boundary_samples)
     inner, inner_mean = _interface_coefficient(phi, radius_inner, mode, boundary_samples)
     return PhysicalPotentialSolve(phi, poisson, outer, inner, outer_mean, inner_mean)

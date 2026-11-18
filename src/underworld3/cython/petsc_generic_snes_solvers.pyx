@@ -3374,11 +3374,12 @@ class SolverBaseClass(uw_object):
             _destroy_rotated_linear_cache(cache)
 
     def _release_linear_spherical_sheet_rhs(self):
-        """Release the restricted load after its owning SNES is destroyed."""
-        sheet_rhs = getattr(self, "_linear_spherical_sheet_rhs", None)
-        self._linear_spherical_sheet_rhs = None
-        if sheet_rhs is not None:
-            sheet_rhs.destroy()
+        """Release installed linear loads after their owning SNES is destroyed."""
+        for attribute in ("_linear_spherical_sheet_rhs", "_linear_assembled_rhs"):
+            rhs = getattr(self, attribute, None)
+            setattr(self, attribute, None)
+            if rhs is not None:
+                rhs.destroy()
 
     def _reset(self):
 
