@@ -10,7 +10,7 @@ from underworld3.postprocessing._cylindrical_potential_jump import NormalDerivat
 pytestmark = [pytest.mark.level_1, pytest.mark.tier_a]
 
 
-@pytest.mark.parametrize("feedback,use_lifting", [(0.,False), (.01,False), (0.,True)])
+@pytest.mark.parametrize("feedback,use_lifting", [(0.,False), (.01,False), (0.,True), (0.,"buffer")])
 def test_spatial_field_and_coordinate_loads_agree(feedback, use_lifting):
     mesh = uw.meshing.UnstructuredSimplexBox(minCoords=(-2.5, -2.5), maxCoords=(2.5, 2.5),
         cellSize=.4, qdegree=4, regular=True)
@@ -21,7 +21,7 @@ def test_spatial_field_and_coordinate_loads_agree(feedback, use_lifting):
     solutions = []
     for name, density in (("CoordinateLoad", x*x+y*y), ("FieldLoad", field.sym[0])):
         sheets = ((1.1,density,feedback),(1.5,-density,0.),(2.1,density,feedback))
-        lifting = NormalDerivativeJump(mesh,sheets,.01) if use_lifting else None
+        lifting = NormalDerivativeJump(mesh,sheets,.01,{1.1:-1,1.5:0,2.1:1} if use_lifting == "buffer" else None) if use_lifting else None
         phi, poisson = _solve_density_potential(gravity_mesh=mesh, field_name=name,
             potential_degree=2, volume_density=density, sheets=(),
             continuation=[(label, 1.) for label in ("Left", "Right", "Top", "Bottom")],

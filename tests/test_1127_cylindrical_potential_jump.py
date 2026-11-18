@@ -14,17 +14,22 @@ from underworld3.postprocessing._density_potential import _solve_density_potenti
 pytestmark = [pytest.mark.level_1, pytest.mark.tier_a]
 
 
-def test_prescribed_radial_derivative_jump_and_gradient():
+@pytest.mark.parametrize("side", [0, -1, 1])
+def test_prescribed_radial_derivative_jump_and_gradient(side):
     coordinates=CoordSys3D('JumpCoordinates');x,y=coordinates.x,coordinates.y
     mesh=SimpleNamespace(N=coordinates,X=(x,y))
     density=(x*x-y*y)/(x*x+y*y)
-    lifting=NormalDerivativeJump(mesh,((1.5,density,0.),),.7)
+    lifting=NormalDerivativeJump(mesh,((1.5,density,0.),),.7,{1.5:side})
     vertices=np.array([[[1.,0.],[2.,0.],[1.,1.]]])
     lifting.prepare(mesh,vertices)
     normal=np.array([np.cos(.2),np.sin(.2)])
     points=np.array([(1.5-1e-7)*normal,(1.5+1e-7)*normal])
     gradient=lifting.gradient(0,points)
     jump=(gradient[1]-gradient[0])@normal
+    if side:
+        mantle_point=(1.6 if side == -1 else 1.4)*normal
+        assert lifting.gradient(0,mantle_point[None])[0]==pytest.approx([0.,0.],abs=1e-14)
+        assert float(lifting.expression.subs({x:mantle_point[0],y:mantle_point[1]}))==pytest.approx(0.,abs=1e-14)
     assert jump==pytest.approx(-4*np.pi*.7*np.cos(.4),abs=1e-8)
     evaluate=sp.lambdify((x,y),lifting.expression,modules='numpy',dummify=True)
     for point in np.array([[1.3,.1],[1.6,.2]]):

@@ -191,7 +191,7 @@ def solve_cylindrical_spatial_potential(
     inner_boundary: str, internal_boundary: str, outer_boundary: str,
     exterior_boundary: str, interior_boundary: str, solver_options: dict,
     source_integration: str = "mesh", source_quadrature: int = 8,
-    normal_derivative_jump: bool = False,
+    normal_derivative_jump: bool = False, jump_lifting_support: str = "global",
 ) -> PhysicalPotentialSolve:
     r"""Solve -laplacian(Phi)=4*pi*G*rho using spatial density expressions.
 
@@ -222,7 +222,12 @@ def solve_cylindrical_spatial_potential(
     regular remainder; potential_expression includes L and must be used for
     physical evaluation. Never reconstruct the total as a plain nodal FE
     projection. See Guzman, Sanchez & Sarkis (2016), doi:10.1051/m2an/2015093;
-    the present global distance lifting/Robin adaptation needs its own tests.
+    these distance lifting/Robin adaptations need their own tests.
+    ``jump_lifting_support="buffer"`` confines wall lifts to the core/vacuum
+    side: L_j=-2*pi*G*sigma_j*(abs(r-R_j)+s_j*(r-R_j)), s_inner=-1,
+    s_outer=+1. L=0 in the mantle, preserving its original trial space.
+    Internal sheets still use the two-sided distance lift. The default
+    ``"global"`` preserves the original representation.
 
     Robin continuation uses continuation_wavenumber at the truncations. It is
     exact for that angular mode and an approximation for other modes in a
@@ -245,6 +250,10 @@ def solve_cylindrical_spatial_potential(
     if normal_derivative_jump and (source_integration != "circular" or radius_interior is None
                                   or inner_feedback_density != 0 or outer_feedback_density != 0):
         raise ValueError("Normal-derivative correction requires circular integration, an annular gravity domain and prescribed sheets without feedback")
+    if jump_lifting_support not in ("global", "buffer"):
+        raise ValueError("jump_lifting_support must be 'global' or 'buffer'")
+    if not normal_derivative_jump and jump_lifting_support != "global":
+        raise ValueError("Buffer-side lifting requires normal_derivative_jump=True")
     mode = continuation_wavenumber
     if isinstance(mode, bool) or not isinstance(mode, Integral) or mode < 2:
         raise ValueError("continuation_wavenumber must be an integer at least two")
@@ -270,7 +279,8 @@ def solve_cylindrical_spatial_potential(
                     (radius_outer, outer_sheet_density, outer_feedback_density)),
             quadrature_order=source_quadrature)
         if normal_derivative_jump:
-            lifting = NormalDerivativeJump(gravity_mesh, circular_sources["sheets"], gravitational_constant)
+            sides = {radius_inner: -1, radius_internal: 0, radius_outer: 1} if jump_lifting_support == "buffer" else None
+            lifting = NormalDerivativeJump(gravity_mesh, circular_sources["sheets"], gravitational_constant, sides)
             circular_sources["potential_lifting"] = lifting
     phi, poisson = _solve_density_potential(gravity_mesh=gravity_mesh,
         field_name=field_name, potential_degree=potential_degree,

@@ -223,6 +223,7 @@ def install_circular_sources(*, poisson, radii, volume_density, sheets,
     poisson.circular_source_checks = dict(
         integration="circular", quadrature_order=quadrature_order,
         normal_derivative_jump=potential_lifting is not None,
+        lifting_radial_sides=getattr(potential_lifting, "sides", None),
         potential_representation="regular_plus_jump_lifting" if potential_lifting is not None else "ordinary_fe",
         robin_lifting="native polygonal boundary residual" if potential_lifting is not None else None,
         measured_area_and_lengths=measures.tolist(), expected_area_and_lengths=expected.tolist(),
