@@ -11,6 +11,7 @@ import underworld3 as uw
 
 from .geoid import cylindrical_cosine_boundary_coefficient
 from ._density_potential import _solve_density_potential
+from ._cylindrical_potential_jump import NormalDerivativeJump
 
 
 __all__ = ["PhysicalPotentialSolve", "solve_cylindrical_sheet_potential", "solve_cylindrical_spatial_potential"]
@@ -23,7 +24,9 @@ class PhysicalPotentialSolve:
     Attributes
     ----------
     potential_field : underworld3.discretisation.MeshVariable
-        Scalar potential field on the caller's gravity mesh.
+        Scalar FE field on the caller's gravity mesh; the regular remainder
+        when potential_lifting is present. Use potential_expression for the
+        total physical potential.
     poisson_system : underworld3.systems.Poisson
         System used to compute ``potential_field``.
     outer_potential, inner_potential : float
@@ -38,12 +41,19 @@ class PhysicalPotentialSolve:
     inner_potential: float
     outer_mean: float
     inner_mean: float
+    potential_lifting: object = None
+
+    @property
+    def potential_expression(self):
+        """Total physical potential; potential_field is regular when lifted."""
+        return self.potential_field.sym[0]+(sp.S.Zero if self.potential_lifting is None else self.potential_lifting.expression)
 
 
-def _interface_coefficient(field, radius, wavenumber, samples):
+def _interface_coefficient(field, radius, wavenumber, samples, lifting=None):
     theta = np.linspace(0.0, 2.0 * np.pi, samples, endpoint=False)
     coords = np.column_stack((radius * np.cos(theta), radius * np.sin(theta)))
-    values = np.asarray(uw.function.global_evaluate(field.sym[0], coords), dtype=float).reshape(-1)
+    expression = field.sym[0]+(sp.S.Zero if lifting is None else lifting.expression)
+    values = np.asarray(uw.function.global_evaluate(expression, coords), dtype=float).reshape(-1)
     return cylindrical_cosine_boundary_coefficient(coords, values, wavenumber)
 
 
@@ -181,6 +191,7 @@ def solve_cylindrical_spatial_potential(
     inner_boundary: str, internal_boundary: str, outer_boundary: str,
     exterior_boundary: str, interior_boundary: str, solver_options: dict,
     source_integration: str = "mesh", source_quadrature: int = 8,
+    normal_derivative_jump: bool = False,
 ) -> PhysicalPotentialSolve:
     r"""Solve -laplacian(Phi)=4*pi*G*rho using spatial density expressions.
 
@@ -202,6 +213,17 @@ def solve_cylindrical_spatial_potential(
     poisson_system.circular_source_checks. See Saye (2015),
     doi:10.1137/140966290, for geometry-resolving quadrature principles.
 
+    ``normal_derivative_jump=True`` solves for the regular remainder after
+    extracting L=-2*pi*G*sum(sigma_j(x)*abs(r-R_j)). It enforces [Phi]=0 and
+    [d_r Phi]=-4*pi*G*sigma on the physical circles (outside minus inside).
+    Both -int grad(L).grad(test) and the native -int beta*L*test Robin load
+    enter the right-hand side. This currently supports prescribed sheets on
+    annular gravity meshes, without feedback. potential_field stores the
+    regular remainder; potential_expression includes L and must be used for
+    physical evaluation. Never reconstruct the total as a plain nodal FE
+    projection. See Guzman, Sanchez & Sarkis (2016), doi:10.1051/m2an/2015093;
+    the present global distance lifting/Robin adaptation needs its own tests.
+
     Robin continuation uses continuation_wavenumber at the truncations. It is
     exact for that angular mode and an approximation for other modes in a
     numerical spatial field. inner_feedback_density and outer_feedback_density
@@ -220,6 +242,9 @@ def solve_cylindrical_spatial_potential(
         raise ValueError("source_integration must be 'mesh' or 'circular'")
     if isinstance(source_quadrature, bool) or not isinstance(source_quadrature, int) or source_quadrature < 2:
         raise ValueError("source_quadrature must be an integer >= 2")
+    if normal_derivative_jump and (source_integration != "circular" or radius_interior is None
+                                  or inner_feedback_density != 0 or outer_feedback_density != 0):
+        raise ValueError("Normal-derivative correction requires circular integration, an annular gravity domain and prescribed sheets without feedback")
     mode = continuation_wavenumber
     if isinstance(mode, bool) or not isinstance(mode, Integral) or mode < 2:
         raise ValueError("continuation_wavenumber must be an integer at least two")
@@ -237,12 +262,16 @@ def solve_cylindrical_spatial_potential(
     if radius_interior is not None:
         continuation.append((interior_boundary, mode/radius_interior))
     circular_sources = None
+    lifting = None
     if source_integration == "circular":
         circular_sources = dict(radii=(radius_inner, radius_internal, radius_outer),
             sheets=((radius_inner, inner_sheet_density, inner_feedback_density),
                     (radius_internal, internal_sheet_density, 0.),
                     (radius_outer, outer_sheet_density, outer_feedback_density)),
             quadrature_order=source_quadrature)
+        if normal_derivative_jump:
+            lifting = NormalDerivativeJump(gravity_mesh, circular_sources["sheets"], gravitational_constant)
+            circular_sources["potential_lifting"] = lifting
     phi, poisson = _solve_density_potential(gravity_mesh=gravity_mesh,
         field_name=field_name, potential_degree=potential_degree,
         volume_density=volume_density, sheets=(
@@ -251,6 +280,6 @@ def solve_cylindrical_spatial_potential(
             (outer_boundary, outer_sheet_density, outer_feedback_density)),
         continuation=continuation, gravitational_constant=gravitational_constant,
         tolerance=tolerance, solver_options=solver_options, circular_sources=circular_sources)
-    outer, outer_mean = _interface_coefficient(phi, radius_outer, mode, boundary_samples)
-    inner, inner_mean = _interface_coefficient(phi, radius_inner, mode, boundary_samples)
-    return PhysicalPotentialSolve(phi, poisson, outer, inner, outer_mean, inner_mean)
+    outer, outer_mean = _interface_coefficient(phi, radius_outer, mode, boundary_samples, lifting)
+    inner, inner_mean = _interface_coefficient(phi, radius_inner, mode, boundary_samples, lifting)
+    return PhysicalPotentialSolve(phi, poisson, outer, inner, outer_mean, inner_mean, lifting)

@@ -44,8 +44,26 @@ class _CellField:
     def basis(self, cell, points):
         return _polynomials(points, self.vertices[cell], self.powers)@self.inverse[cell]
 
+    def basis_gradients(self, cell, points):
+        triangle = self.vertices[cell]
+        inverse = np.linalg.inv((triangle[1:]-triangle[0]).T)
+        local = (points-triangle[0])@inverse.T
+        derivatives = []
+        for axis in (0, 1):
+            terms = []
+            for i, j in self.powers:
+                power = (i, j)[axis]
+                terms.append(np.zeros(len(points)) if power == 0 else
+                    power*local[:, 0]**(i-(axis == 0))*local[:, 1]**(j-(axis == 1)))
+            derivatives.append(np.column_stack(terms)@self.inverse[cell])
+        return np.stack(derivatives, axis=-1)@inverse
+
     def values(self, cell, points, component):
         return self.basis(cell, points)@self.nodal_values[self.rows[cell], component]
+
+    def gradients(self, cell, points, component):
+        return np.einsum("qid,i->qd", self.basis_gradients(cell, points),
+                         self.nodal_values[self.rows[cell], component])
 
 
 def _density(expression, mesh, vertices):
@@ -75,15 +93,33 @@ def _density(expression, mesh, vertices):
         raise ValueError(f"Circular density contains unresolved symbols: {unknown}")
     evaluate = sp.lambdify((*coordinates, *symbols), expression, modules="numpy", cse=True)
 
-    def values(cell, points):
-        extra = [field.values(cell, points, component) for field, component in sources]
-        value = np.asarray(evaluate(points[:, 0], points[:, 1], *extra), dtype=float)
-        return np.broadcast_to(value, (len(points),))
-    return values
+    return _SpatialDensity(evaluate, expression, coordinates, symbols, sources)
+
+
+class _SpatialDensity:
+    """Frozen values and chain-rule gradients of a coordinate/FE expression."""
+
+    def __init__(self, evaluate, expression, coordinates, symbols, sources):
+        self.evaluate, self.sources = evaluate, sources
+        self.derivatives = sp.lambdify((*coordinates, *symbols),
+            [sp.diff(expression, v) for v in (*coordinates, *symbols)], modules="numpy", cse=True)
+
+    def __call__(self, cell, points):
+        extra = [field.values(cell, points, component) for field, component in self.sources]
+        return np.broadcast_to(np.asarray(self.evaluate(points[:, 0], points[:, 1], *extra), dtype=float), (len(points),))
+
+    def gradient(self, cell, points):
+        extra = [field.values(cell, points, component) for field, component in self.sources]
+        partials = [np.broadcast_to(np.asarray(v, dtype=float), (len(points),))
+                    for v in self.derivatives(points[:, 0], points[:, 1], *extra)]
+        gradient = np.column_stack(partials[:2]).copy()
+        for partial, (field, component) in zip(partials[2:], self.sources):
+            gradient += partial[:, None]*field.gradients(cell, points, component)
+        return gradient
 
 
 def install_circular_sources(*, poisson, radii, volume_density, sheets,
-                             gravitational_constant, quadrature_order):
+                             gravitational_constant, quadrature_order, potential_lifting=None):
     """Install a frozen linear residual with distributed, geometry-aware loads.
 
     Owned triangles alone contribute. Ghost-node loads are added by PETSc's
@@ -100,6 +136,10 @@ def install_circular_sources(*, poisson, radii, volume_density, sheets,
     test = _CellField(phi, vertices)
     density = _density(volume_density, mesh, vertices)
     sheet_fields = [(radius, _density(sigma, mesh, vertices), float(alpha)) for radius, sigma, alpha in sheets]
+    if potential_lifting is not None:
+        if any(alpha for _, _, alpha in sheets):
+            raise ValueError("Normal-derivative lifting currently requires prescribed sheets without feedback")
+        potential_lifting.prepare(mesh, vertices)
     poisson._build(False, False, None)
     mesh.update_lvec()
     poisson.dm.setAuxiliaryVec(mesh.lvec, None)
@@ -109,6 +149,13 @@ def install_circular_sources(*, poisson, radii, volume_density, sheets,
     zero.set(0.)
     jacobian, preconditioner = poisson.snes.getJacobian()[:2]
     poisson.snes.computeJacobian(zero, jacobian, preconditioner)
+    # The native residual at zero contains beta*Phi_J on the unchanged
+    # polygonal Robin facets. Subtract it, with native boundary quadrature.
+    boundary_lift = zero.duplicate()
+    if potential_lifting is not None:
+        poisson.snes.computeFunction(zero, boundary_lift)
+    else:
+        boundary_lift.set(0.)
     zero.destroy()
     mapping, size = _layout(phi)
     rhs = poisson.dm.createGlobalVec()
@@ -116,6 +163,8 @@ def install_circular_sources(*, poisson, radii, volume_density, sheets,
         rhs.destroy()
         raise ValueError("Circular load numbering differs from the native scalar operator")
     rhs.set(0.)
+    rhs.axpy(-1., boundary_lift)
+    boundary_lift.destroy()
     scale = 4*np.pi*gravitational_constant
     measures = np.zeros(1+len(sheets))
     load_integrals = np.zeros_like(measures)
@@ -129,6 +178,14 @@ def install_circular_sources(*, poisson, radii, volume_density, sheets,
                 rhs.setValues(indices, scale*(weights*values)@basis, addv=PETSc.InsertMode.ADD_VALUES)
                 measures[0] += weights.sum()
                 load_integrals[0] += weights@values
+        if potential_lifting is not None:
+            # Integrate over the complete gravity element, including buffers;
+            # split at each physical sheet where grad(Phi_J) jumps.
+            limit = radii[-1]+float(np.linalg.norm(vertices[cell], axis=1).max())+1.
+            points, weights = annulus_rule(vertices[cell], (0., *radii, limit), quadrature_order)
+            gradient = potential_lifting.gradient(cell, points)
+            rhs.setValues(indices, -np.einsum("q,qd,qid->i", weights, gradient,
+                test.basis_gradients(cell, points)), addv=PETSc.InsertMode.ADD_VALUES)
         for k, (radius, values_at, alpha) in enumerate(sheet_fields, start=1):
             points, weights = circle_rule(vertices[cell], radius, quadrature_order)
             if not len(weights):
@@ -165,6 +222,9 @@ def install_circular_sources(*, poisson, radii, volume_density, sheets,
     poisson.u._set_vec(available=True)
     poisson.circular_source_checks = dict(
         integration="circular", quadrature_order=quadrature_order,
+        normal_derivative_jump=potential_lifting is not None,
+        potential_representation="regular_plus_jump_lifting" if potential_lifting is not None else "ordinary_fe",
+        robin_lifting="native polygonal boundary residual" if potential_lifting is not None else None,
         measured_area_and_lengths=measures.tolist(), expected_area_and_lengths=expected.tolist(),
         signed_density_integrals=load_integrals.tolist(), coverage_relative_error=coverage,
         assembly_wall_seconds=uw.mpi.comm.allreduce(time.perf_counter()-start, op=MPI.MAX),

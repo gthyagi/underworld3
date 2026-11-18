@@ -23,8 +23,10 @@ def _solve_density_potential(*, gravity_mesh, field_name, potential_degree,
         source = density+sp.nsimplify(feedback, rational=True)*phi.sym[0]
         if source != 0:
             poisson.add_natural_bc(sp.Matrix([-scale*source]), boundary)
+    lifting = None if circular_sources is None else circular_sources.get("potential_lifting")
+    lifting_expression = sp.S.Zero if lifting is None else lifting.expression
     for boundary, coefficient in continuation:
-        poisson.add_natural_bc(sp.Matrix([sp.nsimplify(coefficient, rational=True)*phi.sym[0]]), boundary)
+        poisson.add_natural_bc(sp.Matrix([sp.nsimplify(coefficient, rational=True)*(phi.sym[0]+lifting_expression)]), boundary)
     poisson.tolerance = tolerance
     for key, value in solver_options.items():
         poisson.petsc_options[key] = value
