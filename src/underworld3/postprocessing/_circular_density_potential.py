@@ -182,7 +182,8 @@ def install_circular_sources(*, poisson, radii, volume_density, sheets,
             # Integrate over the complete gravity element, including buffers;
             # split at each physical sheet where grad(Phi_J) jumps.
             limit = radii[-1]+float(np.linalg.norm(vertices[cell], axis=1).max())+1.
-            points, weights = annulus_rule(vertices[cell], (0., *radii, limit), quadrature_order)
+            cuts = sorted(set((*radii,*getattr(potential_lifting,"break_radii",()))))
+            points, weights = annulus_rule(vertices[cell], (0., *cuts, limit), quadrature_order)
             gradient = potential_lifting.gradient(cell, points)
             rhs.setValues(indices, -np.einsum("q,qd,qid->i", weights, gradient,
                 test.basis_gradients(cell, points)), addv=PETSc.InsertMode.ADD_VALUES)
@@ -224,6 +225,8 @@ def install_circular_sources(*, poisson, radii, volume_density, sheets,
         integration="circular", quadrature_order=quadrature_order,
         normal_derivative_jump=potential_lifting is not None,
         lifting_radial_sides=getattr(potential_lifting, "sides", None),
+        lifting_half_widths=getattr(potential_lifting, "widths", None),
+        lifting_break_radii=getattr(potential_lifting, "break_radii", ()),
         potential_representation="regular_plus_jump_lifting" if potential_lifting is not None else "ordinary_fe",
         robin_lifting="native polygonal boundary residual" if potential_lifting is not None else None,
         measured_area_and_lengths=measures.tolist(), expected_area_and_lengths=expected.tolist(),
