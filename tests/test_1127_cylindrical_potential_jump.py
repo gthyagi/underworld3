@@ -1,5 +1,6 @@
 """Normal-jump sign, analytic gradients, and manufactured weak lifting identity."""
 
+from importlib import import_module
 from types import SimpleNamespace
 
 from mpi4py import MPI
@@ -89,3 +90,34 @@ def test_compact_internal_jump_gradient_and_support(mode):
             finite.append((evaluate(*(point+delta))-evaluate(*(point-delta)))/2e-7)
         assert lift.gradient(0,point[None])[0]==pytest.approx(finite,rel=1e-6,abs=1e-7)
     assert lift.break_radii==pytest.approx((1.3,1.7))
+
+
+@pytest.mark.parametrize("extract_internal", [True, False])
+def test_selective_extraction_preserves_internal_mass(monkeypatch, extract_internal):
+    # Selection changes the known representation, never the physical sheet RHS.
+    module=import_module('underworld3.postprocessing.cylindrical_potential')
+    coordinates=CoordSys3D('SelectedJumpCoordinates')
+    mesh=SimpleNamespace(dim=2,N=coordinates)
+    captured={}
+
+    def capture_solve(**arguments):
+        captured.update(arguments)
+        return object(),object()
+
+    monkeypatch.setattr(module,'_solve_density_potential',capture_solve)
+    monkeypatch.setattr(module,'_interface_coefficient',lambda *args: (0.,0.))
+    result=module.solve_cylindrical_spatial_potential(gravity_mesh=mesh,field_name='Selection',
+        radius_inner=1.22,radius_internal=2.,radius_outer=2.22,radius_exterior=2.3,radius_interior=1.1,
+        continuation_wavenumber=2,inner_sheet_density=1.,internal_sheet_density=-3.,outer_sheet_density=2.,
+        volume_density=0.,inner_feedback_density=0.,outer_feedback_density=0.,gravitational_constant=1.,
+        potential_degree=2,tolerance=1e-10,boundary_samples=32,inner_boundary='Lower',internal_boundary='Internal',
+        outer_boundary='Upper',exterior_boundary='Exterior',interior_boundary='Interior',solver_options={},
+        source_integration='circular',source_quadrature=8,normal_derivative_jump=True,
+        jump_lifting_support='buffer',internal_lifting_half_width=0.,extract_internal_jump=extract_internal)
+    sources=captured['circular_sources']
+    assert sources['sheets'][1]==(2.,-3.,0.)
+    assert captured['sheets'][1]==('Internal',-3.,0)
+    lifted=dict(sources['potential_lifting'].sources)
+    assert (2. in lifted)==extract_internal
+    assert set(lifted)==({1.22,2.,2.22}if extract_internal else{1.22,2.22})
+    assert result is not None

@@ -192,7 +192,7 @@ def solve_cylindrical_spatial_potential(
     exterior_boundary: str, interior_boundary: str, solver_options: dict,
     source_integration: str = "mesh", source_quadrature: int = 8,
     normal_derivative_jump: bool = False, jump_lifting_support: str = "global",
-    internal_lifting_half_width: float = 0.,
+    internal_lifting_half_width: float = 0., extract_internal_jump: bool = True,
 ) -> PhysicalPotentialSolve:
     r"""Solve -laplacian(Phi)=4*pi*G*rho using spatial density expressions.
 
@@ -235,6 +235,12 @@ def solve_cylindrical_spatial_potential(
     the weak-load integration. Zero retains the original global internal lift;
     choose w strictly below both distances to the mantle walls. This parameter
     changes only the known lifting representation, not the physical sheet.
+    ``extract_internal_jump=False`` leaves the internal sheet in the ordinary
+    FE field while extracting the selected wall lifts. Its circular mass load
+    remains present. Use this when internal extraction degrades the spatial
+    field; wall and internal extraction need not improve the same norm.
+    The default True preserves existing all-sheet extraction; compact widths
+    apply only when the internal jump is extracted.
 
     Robin continuation uses continuation_wavenumber at the truncations. It is
     exact for that angular mode and an approximation for other modes in a
@@ -263,7 +269,7 @@ def solve_cylindrical_spatial_potential(
         raise ValueError("Buffer-side lifting requires normal_derivative_jump=True")
     if not np.isfinite(internal_lifting_half_width) or internal_lifting_half_width < 0:
         raise ValueError("internal_lifting_half_width must be finite and nonnegative")
-    if internal_lifting_half_width and (not normal_derivative_jump or
+    if internal_lifting_half_width and (not normal_derivative_jump or not extract_internal_jump or
             internal_lifting_half_width >= min(radius_internal-radius_inner,radius_outer-radius_internal)):
         raise ValueError("Compact internal lifting requires jump extraction and a band strictly inside both mantle walls")
     mode = continuation_wavenumber
@@ -293,7 +299,9 @@ def solve_cylindrical_spatial_potential(
         if normal_derivative_jump:
             sides = {radius_inner: -1, radius_internal: 0, radius_outer: 1} if jump_lifting_support == "buffer" else None
             widths = {radius_internal:internal_lifting_half_width} if internal_lifting_half_width else None
-            lifting = NormalDerivativeJump(gravity_mesh, circular_sources["sheets"], gravitational_constant, sides, widths)
+            lifted_sheets = circular_sources["sheets"] if extract_internal_jump else (
+                circular_sources["sheets"][0], circular_sources["sheets"][2])
+            lifting = NormalDerivativeJump(gravity_mesh, lifted_sheets, gravitational_constant, sides, widths)
             circular_sources["potential_lifting"] = lifting
     phi, poisson = _solve_density_potential(gravity_mesh=gravity_mesh,
         field_name=field_name, potential_degree=potential_degree,
