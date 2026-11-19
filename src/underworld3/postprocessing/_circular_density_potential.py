@@ -78,13 +78,15 @@ def _density(expression, mesh, vertices):
         raise ValueError("Circular source densities must use field values, not field derivatives")
     functions = sorted(functions, key=str)
     sources = []
-    symbols = sp.symbols(f"density_0:{len(functions)}")
+    symbols = sp.symbols(f"density_0:{len(functions)}", real=True)
     for function in functions:
         field = function.meshvar()
         if field.mesh is not mesh:
             raise ValueError("Circular density fields must belong to the gravity mesh")
         sources.append((_CellField(field, vertices), function.component))
-    coordinates = sp.symbols("source_x source_y")
+    # Spatial inputs are real. Without this assumption Abs(r-R) gradients
+    # retain unevaluated derivatives of re()/im() and cannot compile to NumPy.
+    coordinates = sp.symbols("source_x source_y", real=True)
     replacements = dict(zip(functions, symbols))
     replacements.update(zip((mesh.N.x, mesh.N.y), coordinates))
     for coordinate, symbol in zip(mesh.X, coordinates):
