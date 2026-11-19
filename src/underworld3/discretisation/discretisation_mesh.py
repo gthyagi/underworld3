@@ -1840,7 +1840,7 @@ class Mesh(Stateful, uw_object):
         # SymPy can then reuse a cached radius/angle containing an earlier
         # mesh's UWCoordinate wrappers. Keep symbolic identity mesh-specific;
         # the explicit petsc_x printers below keep generated kernels unchanged.
-        self._N = CoordSys3D(f"N_{self.instance_number}")
+        self._N = CoordSys3D(f"N_{self.instance}")
 
         # Tidy some of this printing without changing the
         # underlying vector names (as these are part of the code generation system)
