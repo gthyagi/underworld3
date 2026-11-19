@@ -3,7 +3,10 @@
 Assemble b_i=4*pi*G*(int_Omega rho*N_i + sum int_Gamma sigma*N_i)
 using the physical annulus and circles, not polygon tags. The native diffusion
 and Robin operator is unchanged. Feedback adds -4*pi*G*int alpha*N_i*N_j
-on the physical circle. No harmonic representation of a density is required.
+on the physical circle. With Phi=u+L and sigma=sigma0+alpha*Phi,
+the regular-field equation also needs +4*pi*G*int alpha*L*N_i on its RHS.
+Only the prescribed jump is extracted; feedback remains in the linear operator.
+No harmonic representation of a density is required.
 The PDE/sign convention follows Simons (1996), MIT thesis, Appendix B;
 geometry-resolving quadrature follows the principle of Saye (2015),
 doi:10.1137/140966290, using a circle-specific polar clipping construction.
@@ -137,9 +140,9 @@ def install_circular_sources(*, poisson, radii, volume_density, sheets,
     density = _density(volume_density, mesh, vertices)
     sheet_fields = [(radius, _density(sigma, mesh, vertices), float(alpha)) for radius, sigma, alpha in sheets]
     if potential_lifting is not None:
-        if any(alpha for _, _, alpha in sheets):
-            raise ValueError("Normal-derivative lifting currently requires prescribed sheets without feedback")
         potential_lifting.prepare(mesh, vertices)
+    feedback_lift = (_density(potential_lifting.expression, mesh, vertices)
+        if potential_lifting is not None and any(alpha for _, _, alpha in sheets) else None)
     poisson._build(False, False, None)
     mesh.update_lvec()
     poisson.dm.setAuxiliaryVec(mesh.lvec, None)
@@ -194,6 +197,10 @@ def install_circular_sources(*, poisson, radii, volume_density, sheets,
             values, basis = values_at(cell, points), test.basis(cell, points)
             rhs.setValues(indices, scale*(weights*values)@basis, addv=PETSc.InsertMode.ADD_VALUES)
             if alpha:
+                if feedback_lift is not None:
+                    # sigma=sigma0+alpha*(u+L): the known alpha*L belongs on the RHS.
+                    rhs.setValues(indices, scale*alpha*(weights*feedback_lift(cell, points))@basis,
+                                  addv=PETSc.InsertMode.ADD_VALUES)
                 jacobian.setValues(indices, indices, -scale*alpha*(basis.T@(weights[:, None]*basis)),
                                    addv=PETSc.InsertMode.ADD_VALUES)
             measures[k] += weights.sum()

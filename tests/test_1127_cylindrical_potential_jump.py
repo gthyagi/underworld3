@@ -97,7 +97,8 @@ def test_compact_internal_jump_gradient_and_support(mode):
 
 
 @pytest.mark.parametrize("extract_internal", [True, False])
-def test_selective_extraction_preserves_internal_mass(monkeypatch, extract_internal):
+@pytest.mark.parametrize("feedback", [0., .01])
+def test_selective_extraction_preserves_internal_mass(monkeypatch, extract_internal, feedback):
     # Selection changes the known representation, never the physical sheet RHS.
     module=import_module('underworld3.postprocessing.cylindrical_potential')
     coordinates=CoordSys3D('SelectedJumpCoordinates')
@@ -113,7 +114,7 @@ def test_selective_extraction_preserves_internal_mass(monkeypatch, extract_inter
     result=module.solve_cylindrical_spatial_potential(gravity_mesh=mesh,field_name='Selection',
         radius_inner=1.22,radius_internal=2.,radius_outer=2.22,radius_exterior=2.3,radius_interior=1.1,
         continuation_wavenumber=2,inner_sheet_density=1.,internal_sheet_density=-3.,outer_sheet_density=2.,
-        volume_density=0.,inner_feedback_density=0.,outer_feedback_density=0.,gravitational_constant=1.,
+        volume_density=0.,inner_feedback_density=feedback,outer_feedback_density=feedback,gravitational_constant=1.,
         potential_degree=2,tolerance=1e-10,boundary_samples=32,inner_boundary='Lower',internal_boundary='Internal',
         outer_boundary='Upper',exterior_boundary='Exterior',interior_boundary='Interior',solver_options={},
         source_integration='circular',source_quadrature=8,normal_derivative_jump=True,

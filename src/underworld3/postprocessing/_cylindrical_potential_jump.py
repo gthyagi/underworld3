@@ -16,7 +16,13 @@ The given spatial density extends each jump off its circle; it is not a
 harmonic reconstruction or the analytical gravity solution. Solving
  a(Phi_regular,v)=b(v)-a(L,v)
 removes the derivative jump from the unknown. Both volume and Robin parts
-of a(L,v) must be included. Return/evaluate the total field without projecting
+of a(L,v) must be included. For linear interface feedback
+sigma=sigma0+alpha*Phi, construct L from sigma0 alone and solve
+ a(u,v)-4*pi*G*sum int_Gamma alpha*u*v
+   = b0(v)-a(L,v)+4*pi*G*sum int_Gamma alpha*L*v.
+This is an algebraic substitution, not an extraction of the unknown feedback
+jump. The cylindrical feedback convention follows Simons (1996), Appendix B;
+the known-lift feedback RHS here is a UW3 extension. Return/evaluate the total field without projecting
 L into an ordinary polynomial FE space.
 
 Reference: Guzman, Sanchez & Sarkis (2016), Higher-order finite element methods

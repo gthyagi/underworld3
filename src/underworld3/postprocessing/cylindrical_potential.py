@@ -219,7 +219,10 @@ def solve_cylindrical_spatial_potential(
     [d_r Phi]=-4*pi*G*sigma on the physical circles (outside minus inside).
     Both -int grad(L).grad(test) and the native -int beta*L*test Robin load
     enter the right-hand side. This currently supports prescribed sheets on
-    annular gravity meshes, without feedback. potential_field stores the
+    annular gravity meshes. For linear feedback sigma=sigma0+alpha*Phi,
+    only sigma0 is lifted; -4*pi*G*int alpha*u*v stays in the operator and
+    +4*pi*G*int alpha*L*v enters the RHS. The unknown feedback jump remains
+    in the regular FE field. potential_field stores the
     regular remainder; potential_expression includes L and must be used for
     physical evaluation. Never reconstruct the total as a plain nodal FE
     projection. See Guzman, Sanchez & Sarkis (2016), doi:10.1051/m2an/2015093;
@@ -260,9 +263,8 @@ def solve_cylindrical_spatial_potential(
         raise ValueError("source_integration must be 'mesh' or 'circular'")
     if isinstance(source_quadrature, bool) or not isinstance(source_quadrature, int) or source_quadrature < 2:
         raise ValueError("source_quadrature must be an integer >= 2")
-    if normal_derivative_jump and (source_integration != "circular" or radius_interior is None
-                                  or inner_feedback_density != 0 or outer_feedback_density != 0):
-        raise ValueError("Normal-derivative correction requires circular integration, an annular gravity domain and prescribed sheets without feedback")
+    if normal_derivative_jump and (source_integration != "circular" or radius_interior is None):
+        raise ValueError("Normal-derivative correction requires circular integration, an annular gravity domain")
     if jump_lifting_support not in ("global", "buffer"):
         raise ValueError("jump_lifting_support must be 'global' or 'buffer'")
     if not normal_derivative_jump and jump_lifting_support != "global":
