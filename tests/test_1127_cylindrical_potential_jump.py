@@ -44,6 +44,9 @@ def test_prescribed_radial_derivative_jump_and_gradient(side):
 def test_quadratic_harmonic_lifting_preserves_zero_physical_solution():
     # Phi=0, L=1+x+xy: regular Phi=-L lies exactly in P2. This tests the
     # volume-gradient subtraction and nonzero Robin lift on the full box.
+    previous=uw.meshing.UnstructuredSimplexBox(cellSize=.5,regular=True)
+    a,b=previous.X
+    previous_lift=1+a+a*b
     mesh=uw.meshing.UnstructuredSimplexBox(minCoords=(-2.5,-2.5),maxCoords=(2.5,2.5),cellSize=.4,qdegree=4,regular=True)
     x,y=mesh.N.x,mesh.N.y
 
@@ -66,6 +69,7 @@ def test_quadratic_harmonic_lifting_preserves_zero_physical_solution():
     error=float(np.max(abs(np.asarray(field.data)[:,0]+1+points[:,0]+points[:,0]*points[:,1]),initial=0.))
     assert uw.mpi.comm.allreduce(error,op=MPI.MAX)<1e-9
     assert poisson.solve_report.converged
+    assert uw.function.expressions.extract_meshes(previous_lift)=={previous}
 
 
 @pytest.mark.parametrize("mode", [2,32])

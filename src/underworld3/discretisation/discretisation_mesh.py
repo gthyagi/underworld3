@@ -1836,7 +1836,11 @@ class Mesh(Stateful, uw_object):
 
         from sympy.vector import CoordSys3D
 
-        self._N = CoordSys3D(f"N")
+        # Equal CoordSys3D names make their BaseScalars equal across meshes.
+        # SymPy can then reuse a cached radius/angle containing an earlier
+        # mesh's UWCoordinate wrappers. Keep symbolic identity mesh-specific;
+        # the explicit petsc_x printers below keep generated kernels unchanged.
+        self._N = CoordSys3D(f"N_{self.instance_number}")
 
         # Tidy some of this printing without changing the
         # underlying vector names (as these are part of the code generation system)
